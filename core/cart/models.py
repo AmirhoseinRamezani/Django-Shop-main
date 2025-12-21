@@ -1,13 +1,11 @@
 from django.db import models
 
-
 class CartModel(models.Model):
     user = models.OneToOneField(
         "accounts.User",
         on_delete=models.CASCADE,
         related_name="cart"
     )
-
     created_date = models.DateTimeField(auto_now_add=True)
     updated_date = models.DateTimeField(auto_now=True)
 
@@ -26,7 +24,6 @@ class CartItemModel(models.Model):
         on_delete=models.PROTECT
     )
     quantity = models.PositiveIntegerField(default=1)
-
     created_date = models.DateTimeField(auto_now_add=True)
     updated_date = models.DateTimeField(auto_now=True)
 

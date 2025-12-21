@@ -1,31 +1,47 @@
-from order.models import OrderModel, OrderItemModel, SaleType
-from cart.models import CartModel
+from django.db import transaction
+from django.core.exceptions import ValidationError
+from .models import OrderModel, OrderItemModel, SaleType
+from .policies import OrderPolicy
 
 
 class OrderService:
 
     @staticmethod
-    def create_online_order(user, address, cart, coupon=None):
+    @transaction.atomic
+    def create_online_order(*, user, address, cart, coupon=None):
+        OrderPolicy.can_create_order(user)
+
+        if not cart.cart_items.exists():
+            raise ValidationError("سبد خرید خالی است")
+
+        total_price = cart.calculate_total_price()
+
         order = OrderModel.objects.create(
             user=user,
-            full_name=user.get_full_name(),
-            phone=user.phone,
+            sale_type=SaleType.ONLINE,
+            total_price=total_price,
+
+            full_name=user.profile.get_fullname(),
+            phone=user.profile.phone_number,
             email=user.email,
+
             address=address.address,
             city=address.city,
             state=address.state,
             zip_code=address.zip_code,
-            sale_type=SaleType.online,
-            total_price=cart.calculate_total_price(),
+
             coupon=coupon
         )
 
-        for item in cart.cart_items.all():
+        for item in cart.cart_items.select_related("product"):
             OrderItemModel.objects.create(
                 order=order,
                 product=item.product,
                 quantity=item.quantity,
-                price=item.product.get_price()
+                price=item.product.final_price
             )
+
+        if coupon:
+            coupon.used_by.add(user)
 
         return order

@@ -1,11 +1,16 @@
-from payment.models import PaymentModel
-from payment.zarinpal_client import ZarinPalSandbox
+from django.core.exceptions import PermissionDenied
+from .models import PaymentModel
+from .zarinpal_client import ZarinPalSandbox
 
 
 class PaymentService:
 
     @staticmethod
     def start_payment(order):
+
+        if not order.store.allows_online_payment():
+            raise PermissionDenied("This store does not allow online payments")
+
         zarinpal = ZarinPalSandbox()
         response = zarinpal.payment_request(order.get_payable_price())
 
@@ -16,6 +21,6 @@ class PaymentService:
         )
 
         order.payment = payment
-        order.save()
+        order.save(update_fields=["payment"])
 
         return zarinpal.generate_payment_url(payment.authority_id)
