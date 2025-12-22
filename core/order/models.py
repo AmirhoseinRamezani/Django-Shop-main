@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from django.utils import timezone
 from decimal import Decimal
 
 
@@ -14,15 +15,53 @@ class OrderStatusType(models.IntegerChoices):
 
 
 class CouponModel(models.Model):
+    """
+    Coupon model (used only after successful payment)
+    """
+
     code = models.CharField(max_length=50, unique=True)
     discount_percent = models.PositiveSmallIntegerField()
+
+    # Usage control
     max_limit_usage = models.PositiveIntegerField(default=1)
+    used_count = models.PositiveIntegerField(default=0)
+
+    # Optional expiration
     expiration_date = models.DateTimeField(null=True, blank=True)
-    used_by = models.ManyToManyField(
-        settings.AUTH_USER_MODEL,
-        blank=True,
-        related_name="used_coupons"
-    )
+
+    is_active = models.BooleanField(default=True)
+
+    created_date = models.DateTimeField(auto_now_add=True)
+
+    def is_valid(self):
+        """
+        Check if coupon can be used (NO consumption here)
+        """
+        if not self.is_active:
+            return False
+
+        if self.used_count >= self.max_limit_usage:
+            return False
+
+        if self.expiration_date and self.expiration_date < timezone.now():
+            return False
+
+        return True
+
+    def mark_used(self):
+        """
+        Consume coupon AFTER successful payment
+        """
+        self.used_count += 1
+        self.save(update_fields=["used_count"])
+
+    def rollback(self):
+        """
+        Rollback coupon usage if payment failed
+        """
+        if self.used_count > 0:
+            self.used_count -= 1
+            self.save(update_fields=["used_count"])
 
     def __str__(self):
         return self.code

@@ -105,8 +105,8 @@ class OrderCheckOutView(LoginRequiredMixin, HasCustomerAccessPermission, FormVie
 
 class ValidateCouponView(LoginRequiredMixin, HasCustomerAccessPermission, View):
     """
-    فقط برای بررسی و نمایش نتیجه کوپن (AJAX)
-    هیچ تغییری در دیتابیس ایجاد نمی‌کند
+    Only for checking and displaying coupon result (AJAX)
+    Does not make any changes to the database
     """
 
     def post(self, request, *args, **kwargs):

@@ -1,58 +1,80 @@
-from django.views.generic import ListView, DetailView, UpdateView
+from django.views.generic import UpdateView,DeleteView,CreateView,ListView,DetailView
 from django.contrib.auth.mixins import LoginRequiredMixin
 from dashboard.permissions import HasAdminAccessPermission
+
+from dashboard.admin.forms import *
+from django.contrib.messages.views import SuccessMessageMixin
 from django.urls import reverse_lazy
+from django.shortcuts import redirect
+from django.contrib import messages
 from django.core.exceptions import FieldError
-from order.models import OrderModel, OrderStatusType
+from order.models import OrderModel,OrderStatusType
+
+from django.utils.timezone import now
+
 
 
 class AdminOrderListView(LoginRequiredMixin, HasAdminAccessPermission, ListView):
     """
-    نمایش لیست تمام سفارش‌ها برای ادمین
+    Admin view to list and manage all orders.
+    Supports filtering by order status.
     """
-    template_name = "dashboard/admin/orders/order-list.html"
-    paginate_by = 10
 
-    def get_paginate_by(self, queryset):
-        return self.request.GET.get("page_size", self.paginate_by)
+    template_name = "dashboard/admin/orders/list.html"
+    model = OrderModel
+    context_object_name = "orders"
+    paginate_by = 20
+    ordering = ["-created_at"]
 
     def get_queryset(self):
-        queryset = OrderModel.objects.all().select_related("user")
+        queryset = super().get_queryset()
 
-        if search_q := self.request.GET.get("q"):
-            queryset = queryset.filter(id__icontains=search_q)
-
-        if status := self.request.GET.get("status"):
+        # Optional filter by status (via query param)
+        status = self.request.GET.get("status")
+        if status:
             queryset = queryset.filter(status=status)
-
-        if order_by := self.request.GET.get("order_by"):
-            try:
-                queryset = queryset.order_by(order_by)
-            except FieldError:
-                pass
 
         return queryset
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["status_types"] = OrderStatusType.choices
-        context["total_items"] = self.get_queryset().count()
+
+        # Order statistics
+        context["total_orders"] = OrderModel.objects.count()
+        context["successful_orders"] = OrderModel.objects.filter(
+            status=OrderStatusType.success.value
+        ).count()
+
+        # Today's orders
+        today = now().date()
+        context["today_orders"] = OrderModel.objects.filter(
+            created_at__date=today
+        ).count()
+
+        # Order status choices (for filter UI)
+        context["status_choices"] = OrderStatusType.choices
+
         return context
 
-
-class AdminOrderDetailView(LoginRequiredMixin, HasAdminAccessPermission, DetailView):
+class AdminOrderDetailView(LoginRequiredMixin, DetailView):
     """
-    مشاهده جزئیات یک سفارش
+    Admin view to see full order details
     """
-    template_name = "dashboard/admin/orders/order-detail.html"
     model = OrderModel
+    template_name = "dashboard/admin/orders/order_detail.html"
+    context_object_name = "order"
 
-
-class AdminOrderStatusUpdateView(LoginRequiredMixin, HasAdminAccessPermission, UpdateView):
+    def get_queryset(self):
+        return (
+            super()
+            .get_queryset()
+            .select_related("user", "payment", "coupon")
+        )
+        
+class AdminOrderInvoiceView(LoginRequiredMixin, DetailView):
     """
-    تغییر وضعیت سفارش (pending / success / failed)
+    Admin invoice preview for an order
     """
-    template_name = "dashboard/admin/orders/order-status-update.html"
     model = OrderModel
-    fields = ["status"]
-    success_url = reverse_lazy("dashboard:admin:order-list")
+    template_name = "dashboard/admin/orders/order_invoice.html"
+    context_object_name = "order"

@@ -64,3 +64,36 @@ class PaymentVerifyView(View):
             if payment.status == PaymentStatusType.success.value
             else reverse_lazy("order:failed")
         )
+        
+class PaymentSuccessView(View):
+    """
+    Payment successful callback
+    """
+    def get(self, request, *args, **kwargs):
+        order = OrderModel.objects.get(pk=kwargs["order_id"])
+
+        # Mark order as successful
+        order.status = OrderStatusType.success
+        order.save(update_fields=["status"])
+
+        # Consume coupon safely
+        if order.coupon:
+            order.coupon.mark_used()
+
+        return redirect("order:completed")
+
+class PaymentFailedView(View):
+    """
+    Payment failed callback
+    """
+    def get(self, request, *args, **kwargs):
+        order = OrderModel.objects.get(pk=kwargs["order_id"])
+
+        # Rollback coupon usage
+        if order.coupon:
+            order.coupon.rollback_usage()
+
+        order.status = OrderStatusType.failed
+        order.save(update_fields=["status"])
+
+        return redirect("order:failed")

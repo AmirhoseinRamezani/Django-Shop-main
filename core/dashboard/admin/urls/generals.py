@@ -1,8 +1,8 @@
-from django.urls import path
-from ..views.home import AdminDashboardHomeView
+from django.urls import path, include
+from .. import views
 
-app_name = "admin"
 
 urlpatterns = [
-    path("home/", AdminDashboardHomeView.as_view(), name="home"),
+
+    path("home/", views.AdminDashboardHomeView.as_view(), name="home"),
 ]

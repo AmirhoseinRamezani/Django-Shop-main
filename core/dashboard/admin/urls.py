@@ -5,6 +5,7 @@ app_name = "admin"
 
 urlpatterns = [
     path("home/", views.AdminDashboardHomeView.as_view(), name="home"),
+    path("", include("dashboard.admin.urls.generals")),
     path("", include("dashboard.admin.urls.products")),
     path("", include("dashboard.admin.urls.orders")),
     path("", include("dashboard.admin.urls.coupons")),
