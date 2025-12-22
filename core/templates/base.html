@@ -110,7 +110,7 @@
                             </button>
 
                             <div class="dropdown-menu" aria-labelledby="dropdownMenuLink">
-                                <a class="dropdown-item" href="{% url 'dashboard:home' %}">پروفایل</a>
+                                {% comment %} <a class="dropdown-item" href="{% url 'dashboard:home' %}">پروفایل</a> {% endcomment %}
                                 <a class="dropdown-item" href="{% url 'accounts:logout' %}">خروج</a>
                             </div>
 
