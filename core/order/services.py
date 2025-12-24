@@ -13,7 +13,9 @@ class OrderService:
 
         if not cart.cart_items.exists():
             raise ValidationError("سبد خرید خالی است")
-
+        if coupon and not coupon.is_valid():
+            raise ValidationError("کد تخفیف معتبر نیست")
+        
         total_price = cart.calculate_total_price()
 
         order = OrderModel.objects.create(
@@ -41,7 +43,5 @@ class OrderService:
                 price=item.product.final_price
             )
 
-        if coupon:
-            coupon.used_by.add(user)
 
         return order

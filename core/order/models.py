@@ -16,7 +16,9 @@ class OrderStatusType(models.IntegerChoices):
 
 class CouponModel(models.Model):
     """
-    Coupon model (used only after successful payment)
+    Coupon model
+    - Validation is separated from consumption
+    - Consumed ONLY after successful payment
     """
 
     code = models.CharField(max_length=50, unique=True)
@@ -33,9 +35,13 @@ class CouponModel(models.Model):
 
     created_date = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        ordering = ["-created_date"]
+        
     def is_valid(self):
         """
-        Check if coupon can be used (NO consumption here)
+        Check if coupon can be applied (NO consumption here)
+        Used in checkout / validation step
         """
         if not self.is_active:
             return False
@@ -51,13 +57,16 @@ class CouponModel(models.Model):
     def mark_used(self):
         """
         Consume coupon AFTER successful payment
+        Must be called inside transaction
         """
         self.used_count += 1
         self.save(update_fields=["used_count"])
 
     def rollback(self):
         """
-        Rollback coupon usage if payment failed
+        Rollback coupon usage if payment fails
+        (Normally not needed if VerifyView is correct,
+        but kept for safety)
         """
         if self.used_count > 0:
             self.used_count -= 1

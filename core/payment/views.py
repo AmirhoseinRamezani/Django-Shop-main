@@ -10,27 +10,34 @@ from order.models import OrderModel, OrderStatusType
 
 class PaymentVerifyView(View):
     """
-    Verify payment callback from payment gateway.
-    This view is idempotent and transaction-safe.
+    Single source of truth for payment verification.
+    Responsible for:
+    - Verifying payment with gateway
+    - Updating payment & order status
+    - Consuming coupon (if exists)
     """
 
     @transaction.atomic
-    def get(self, request):
+    def get(self, request, *args, **kwargs):
         authority = request.GET.get("Authority")
 
-        # Invalid callback request
+        # Invalid callback
         if not authority:
             return redirect(reverse_lazy("order:failed"))
 
-        # Lock payment row to prevent double verification
+        # Lock payment row
         payment = get_object_or_404(
             PaymentModel.objects.select_for_update(),
             authority_id=authority
         )
 
-        # Payment already processed
+        # Already processed payment (idempotency)
         if payment.status != PaymentStatusType.pending.value:
-            return redirect(reverse_lazy("order:completed"))
+            return redirect(
+                reverse_lazy("order:completed")
+                if payment.status == PaymentStatusType.success
+                else reverse_lazy("order:failed")
+            )
 
         # Lock related order
         order = get_object_or_404(
@@ -44,56 +51,36 @@ class PaymentVerifyView(View):
             payment.authority_id
         )
 
-        # Save raw response for audit/debug
+        # Save raw gateway response
         payment.response_json = response
         payment.response_code = response.get("Status")
 
         if response.get("Status") in (100, 101):
+            # SUCCESS
             payment.status = PaymentStatusType.success.value
             payment.ref_id = response.get("RefID")
+
             order.status = OrderStatusType.success.value
+
+            # Consume coupon AFTER successful payment
+            if order.coupon:
+                order.coupon.mark_used()
+
+            redirect_url = reverse_lazy("order:completed")
+
         else:
+            # FAILED
             payment.status = PaymentStatusType.failed.value
             order.status = OrderStatusType.failed.value
+            redirect_url = reverse_lazy("order:failed")
 
-        payment.save()
-        order.save()
+        payment.save(update_fields=[
+            "status",
+            "ref_id",
+            "response_json",
+            "response_code",
+        ])
+        order.save(update_fields=["status"])
 
-        return redirect(
-            reverse_lazy("order:completed")
-            if payment.status == PaymentStatusType.success.value
-            else reverse_lazy("order:failed")
-        )
+        return redirect(redirect_url)
         
-class PaymentSuccessView(View):
-    """
-    Payment successful callback
-    """
-    def get(self, request, *args, **kwargs):
-        order = OrderModel.objects.get(pk=kwargs["order_id"])
-
-        # Mark order as successful
-        order.status = OrderStatusType.success
-        order.save(update_fields=["status"])
-
-        # Consume coupon safely
-        if order.coupon:
-            order.coupon.mark_used()
-
-        return redirect("order:completed")
-
-class PaymentFailedView(View):
-    """
-    Payment failed callback
-    """
-    def get(self, request, *args, **kwargs):
-        order = OrderModel.objects.get(pk=kwargs["order_id"])
-
-        # Rollback coupon usage
-        if order.coupon:
-            order.coupon.rollback_usage()
-
-        order.status = OrderStatusType.failed
-        order.save(update_fields=["status"])
-
-        return redirect("order:failed")

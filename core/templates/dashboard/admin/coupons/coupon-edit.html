@@ -73,27 +73,21 @@
             <h5 class="card-header-title">لیست استفاده کنندگان</h5>
         </div>
         <div class="card-body">
-            <div class="table-responsive">
-                <table class="table">
-                    <thead class="thead-light">
-                        <tr>
-                            <th scope="col">#</th>
-                            <th scope="col">کاربر</th>
+            <p>
+                Used count:
+                <strong>{{ object.used_count }}</strong>
+                /
+                <strong>{{ object.max_limit_usage }}</strong>
+            </p>
 
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for user in object.used_by.all %}
-                        <tr>
-                            <th scope="row">{{forloop.counter}}</th>
-                            <td>{{user.email}}</td>
-
-                        </tr>
-                        {% endfor %}
-
-                    </tbody>
-                </table>
-            </div>
+            {% if object.expiration_date %}
+                <p>
+                    Expiration date:
+                    <strong>{{ object.expiration_date|date:"Y-m-d H:i" }}</strong>
+                </p>
+            {% else %}
+                <p>No expiration date</p>
+            {% endif %}
         </div>
     </div>
 

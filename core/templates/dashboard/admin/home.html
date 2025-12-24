@@ -25,6 +25,33 @@
     <div class="card-body">
         <div class="row">
 
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-body">
+                        <h6>کل سفارش‌ها</h6>
+                        <strong>{{ total_orders }}</strong>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-body">
+                        <h6>سفارش موفق</h6>
+                        <strong>{{ successful_orders }}</strong>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-body">
+                        <h6>درآمد کل</h6>
+                        <strong class="formatted-price">{{ total_revenue }}</strong>
+                    </div>
+                </div>
+            </div>
+
         </div>
         <!-- End Row -->
 

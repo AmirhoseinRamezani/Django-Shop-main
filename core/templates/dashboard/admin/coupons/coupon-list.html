@@ -88,7 +88,7 @@
                             <td>{{object.code}}</td>      
                             <td>{{object.discount_percent}}%</td>
                             <td>{{object.max_limit_usage}}</td>
-                            <td>{{object.used_by.all.count}}</td>
+                            <td>{{ object.used_count }} / {{ object.max_limit_usage }}</td>
                  
                             <td>{{ object.expiration_date|date:"Y-m-d h:i"}}</td>
                             <td class="d-flex">

@@ -108,26 +108,19 @@ class ValidateCouponView(LoginRequiredMixin, HasCustomerAccessPermission, View):
     Only for checking and displaying coupon result (AJAX)
     Does not make any changes to the database
     """
-
     def post(self, request, *args, **kwargs):
         code = request.POST.get("code")
-        user = request.user
 
         try:
             coupon = CouponModel.objects.get(code=code)
         except CouponModel.DoesNotExist:
-            return JsonResponse({"message": "کد تخفیف یافت نشد"}, status=404)
+            return JsonResponse({"message": "Coupon not found"}, status=404)
 
-        if coupon.expiration_date and coupon.expiration_date < timezone.now():
-            return JsonResponse({"message": "کد تخفیف منقضی شده"}, status=403)
+        # Centralized validation from model
+        if not coupon.is_valid():
+            return JsonResponse({"message": "Coupon is not valid"}, status=403)
 
-        if user in coupon.used_by.all():
-            return JsonResponse({"message": "قبلاً استفاده شده"}, status=403)
-
-        if coupon.used_by.count() >= coupon.max_limit_usage:
-            return JsonResponse({"message": "سقف استفاده پر شده"}, status=403)
-
-        cart = CartModel.objects.get(user=user)
+        cart = CartModel.objects.get(user=request.user)
         total_price = cart.calculate_total_price()
 
         discounted_price = round(

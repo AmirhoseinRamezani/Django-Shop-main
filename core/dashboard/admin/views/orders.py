@@ -1,7 +1,7 @@
-from django.views.generic import UpdateView,DeleteView,CreateView,ListView,DetailView
+from django.views.generic import UpdateView,DeleteView,CreateView,ListView,DetailView,View
 from django.contrib.auth.mixins import LoginRequiredMixin
 from dashboard.permissions import HasAdminAccessPermission
-
+from django.shortcuts import render,get_object_or_404
 from dashboard.admin.forms import *
 from django.contrib.messages.views import SuccessMessageMixin
 from django.urls import reverse_lazy
@@ -14,20 +14,24 @@ from django.utils.timezone import now
 
 
 
-class AdminOrderListView(LoginRequiredMixin, HasAdminAccessPermission, ListView):
+class AdminOrderListView(HasAdminAccessPermission, ListView):
     """
     Admin view to list and manage all orders.
     Supports filtering by order status.
     """
 
-    template_name = "dashboard/admin/orders/list.html"
+    template_name = "dashboard/admin/orders/order-list.html"
     model = OrderModel
     context_object_name = "orders"
     paginate_by = 20
-    ordering = ["-created_at"]
+    ordering = ["-created_date"]
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = (
+            super()
+            .get_queryset()
+            .select_related("user", "payment", "coupon")
+        )
 
         # Optional filter by status (via query param)
         status = self.request.GET.get("status")
@@ -56,25 +60,37 @@ class AdminOrderListView(LoginRequiredMixin, HasAdminAccessPermission, ListView)
 
         return context
 
-class AdminOrderDetailView(LoginRequiredMixin, DetailView):
+class AdminOrderDetailView(HasAdminAccessPermission, DetailView):
     """
     Admin view to see full order details
     """
     model = OrderModel
-    template_name = "dashboard/admin/orders/order_detail.html"
-    context_object_name = "order"
+    template_name = "dashboard/admin/orders/order-detail.html"
 
     def get_queryset(self):
         return (
             super()
             .get_queryset()
             .select_related("user", "payment", "coupon")
+            .prefetch_related("order_items__product")
         )
         
-class AdminOrderInvoiceView(LoginRequiredMixin, DetailView):
+class AdminOrderInvoiceView(HasAdminAccessPermission, View):
     """
     Admin invoice preview for an order
     """
     model = OrderModel
     template_name = "dashboard/admin/orders/order_invoice.html"
-    context_object_name = "order"
+
+    def get(self, request, pk):
+        order = get_object_or_404(
+            OrderModel,
+            pk=pk,
+            status=OrderStatusType.success
+        )
+
+        return render(
+            request,
+            "dashboard/admin/orders/invoice.html",
+            {"object": order}
+        )
