@@ -1,3 +1,4 @@
+from dashboard.permissions import HasAdminAccessPermission
 from django.views.generic import TemplateView
 from django.contrib.auth.mixins import LoginRequiredMixin
 from dashboard.permissions import HasAdminAccessPermission
@@ -5,13 +6,12 @@ from django.utils import timezone
 from django.db.models import Sum, Count
 
 # Import required models
-from order.models import OrderModel, OrderStatusType
+from order.models import OrderModel, OrderStatusType, CouponModel
 from shop.models import ProductModel
 from accounts.models import User
-from order.models import CouponModel
 
 
-class AdminDashboardHomeView(LoginRequiredMixin, HasAdminAccessPermission, TemplateView):
+class AdminDashboardHomeView(HasAdminAccessPermission, LoginRequiredMixin, TemplateView):
     """
     Admin dashboard main page with statistics
     """

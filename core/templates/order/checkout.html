@@ -62,9 +62,11 @@
 
 
                         <div class="input-group border-bottom pb-4 mb-3 ">
-                            <input type="text" class="form-control text-center" name="coupon" placeholder="کد تخفیف"
-                                aria-label="کد تخفیف" form="checkout-form" id="coupon-input">
-                            <button class="btn btn-primary" type="button" onclick="validateCoupon()"> بررسی</button>
+                            <form method="post" action="{% url 'order:apply-coupon' %}">
+                                {% csrf_token %}
+                                <input type="text" name="code" placeholder="کد تخفیف">
+                                <button type="submit">اعمال</button>
+                            </form>
                         </div>
 
                         <div class="border-bottom pb-4 mb-4">
@@ -74,8 +76,8 @@
 
                                 <dl class="row">
                                     <dt class="col-sm-6">هزینه ارسال</dt>
-                                    <dd class="col-sm-12 text-sm-end mb-0">برای تهران و حومه 35000 تومان</dd>
-                                    <dd class="col-sm-12 text-sm-end mb-0">برای شهرستان ها 50000 تومان</dd>
+                                    <dd class="col-sm-12 text-sm-end mb-0">برای مشهد و حومه 80000 تومان</dd>
+                                    <dd class="col-sm-12 text-sm-end mb-0">برای شهرستان ها 150000 تومان</dd>
                                 </dl>
                                 <!-- End Row -->
                             </div>

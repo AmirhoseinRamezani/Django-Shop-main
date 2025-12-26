@@ -6,7 +6,7 @@ from shop.models import WishlistProductModel
 from order.models import UserAddressModel
 
 
-class CustomerDashboardHomeView(LoginRequiredMixin, HasCustomerAccessPermission, TemplateView):
+class CustomerDashboardHomeView( HasCustomerAccessPermission , LoginRequiredMixin, TemplateView):
     template_name = "dashboard/customer/home.html"
 
     def get_context_data(self, **kwargs):

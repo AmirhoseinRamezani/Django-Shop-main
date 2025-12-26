@@ -10,7 +10,7 @@ from django.contrib import messages
 from django.core.exceptions import FieldError
 from order.models import OrderModel,OrderStatusType
 
-class CustomerOrderListView(LoginRequiredMixin, HasCustomerAccessPermission, ListView):
+class CustomerOrderListView( HasCustomerAccessPermission, LoginRequiredMixin, ListView):
     template_name = "dashboard/customer/orders/order-list.html"
     paginate_by = 5
     
@@ -36,13 +36,13 @@ class CustomerOrderListView(LoginRequiredMixin, HasCustomerAccessPermission, Lis
         context["status_types"] = OrderStatusType.choices  
         return context
     
-class CustomerOrderDetailView(LoginRequiredMixin, HasCustomerAccessPermission, DetailView):
+class CustomerOrderDetailView(HasCustomerAccessPermission, LoginRequiredMixin, DetailView):
     template_name = "dashboard/customer/orders/order-detail.html"
 
     def get_queryset(self):
         return OrderModel.objects.filter(user=self.request.user)
     
-class CustomerOrderInvoiceView(LoginRequiredMixin, HasCustomerAccessPermission, DetailView):
+class CustomerOrderInvoiceView( HasCustomerAccessPermission, LoginRequiredMixin, DetailView):
     template_name = "dashboard/customer/orders/order-invoice.html"
 
     def get_queryset(self):

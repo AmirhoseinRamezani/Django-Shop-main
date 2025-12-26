@@ -8,11 +8,34 @@ class CartSession:
     """
 
     SESSION_KEY = "cart"
-
+    COUPON_KEY = "coupon_code"
+    
     def __init__(self, session):
         self.session = session
         self._cart = self.session.setdefault(self.SESSION_KEY, {"items": []})
 
+    # ---------- Coupon operations ----------
+    def set_coupon(self, code: str):
+        self.session[self.COUPON_KEY] = code
+        self.save()
+
+    def remove_coupon(self):
+        self.session.pop(self.COUPON_KEY, None)
+        self.save()
+
+    def get_coupon_code(self):
+        return self.session.get(self.COUPON_KEY)
+
+    def get_coupon(self):
+        from order.services.coupon import CouponService
+        code = self.get_coupon_code()
+        if not code:
+            return None
+        try:
+            return CouponService.get_valid_coupon(code)
+        except Exception:
+            return None
+    
     # ---------- Session operations ----------
     def add_product(self, product_id: int):
         product_id = int(product_id)
@@ -42,6 +65,7 @@ class CartSession:
 
     def clear(self):
         self.session[self.SESSION_KEY] = {"items": []}
+        self.remove_coupon()
         self.save()
 
     # ---------- Read operations ----------
@@ -69,14 +93,24 @@ class CartSession:
         return sum(item["quantity"] for item in self._cart["items"])
 
     def get_total_payment_amount(self):
-        return sum(item["total_price"] for item in self.get_cart_items())
+        total = sum(item["total_price"] for item in self.get_cart_items())
+        coupon = self.get_coupon()
+        if coupon:
+            total = int(total * (100 - coupon.discount_percent) / 100)
+
+        return total
 
     # ---------- DB Sync ----------
     def sync_cart_items_from_db(self, user):
         cart, _ = CartModel.objects.get_or_create(user=user)
+        self.clear()
         for db_item in cart.cart_items.all():
-            self.add_product(db_item.product.id)
-            self.update_product_quantity(db_item.product.id, db_item.quantity)
+            self._cart["items"].append({
+                "product_id": db_item.product.id,
+                "quantity": db_item.quantity
+            })
+
+        self.save()
 
     def merge_session_cart_in_db(self, user):
         cart, _ = CartModel.objects.get_or_create(user=user)

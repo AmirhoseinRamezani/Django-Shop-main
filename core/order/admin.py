@@ -10,6 +10,7 @@ from .models import (
 class OrderItemInline(admin.TabularInline):
     model = OrderItemModel
     extra = 0
+    readonly_fields = ("product", "quantity", "price")
 
 
 @admin.register(OrderModel)
@@ -28,21 +29,30 @@ class OrderAdmin(admin.ModelAdmin):
     readonly_fields = ("created_date",)
     inlines = (OrderItemInline,)
 
+    def final_price(self, obj):
+        return obj.get_price()
+    final_price.short_description = "مبلغ نهایی"
+
+    def has_coupon(self, obj):
+        return bool(obj.coupon_code)
+    has_coupon.boolean = True
+    has_coupon.short_description = "کوپن؟"
 
 @admin.register(CouponModel)
 class CouponAdmin(admin.ModelAdmin):
     list_display = (
         "code",
         "discount_percent",
-        "max_limit_usage",
         "used_count",
+        "max_limit_usage",
+        "is_active",
         "expiration_date",
     )
-
-    def used_count(self, obj):
-        return obj.used_by.count()
+    list_filter = ("is_active",)
+    search_fields = ("code",)
 
 
 @admin.register(UserAddressModel)
 class UserAddressAdmin(admin.ModelAdmin):
     list_display = ("user", "city", "state", "zip_code")
+    search_fields = ("user__username", "city")

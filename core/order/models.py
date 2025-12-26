@@ -2,7 +2,7 @@ from django.db import models
 from django.conf import settings
 from django.utils import timezone
 from decimal import Decimal
-
+from django.core.exceptions import ValidationError
 
 class SaleType(models.TextChoices):
     ONLINE = "ONLINE", "فروش آنلاین"
@@ -12,7 +12,8 @@ class OrderStatusType(models.IntegerChoices):
     pending = 1, "در انتظار پرداخت"
     success = 2, "موفق"
     failed = 3, "ناموفق"
-
+    cancelled = 4, "لغو شده"
+    refunded = 5, "مرجوع شده"
 
 class CouponModel(models.Model):
     """
@@ -126,7 +127,8 @@ class OrderModel(models.Model):
         CouponModel,
         null=True,
         blank=True,
-        on_delete=models.SET_NULL
+        on_delete=models.SET_NULL,
+        related_name="orders",
     )
 
     payment = models.OneToOneField(
@@ -134,17 +136,35 @@ class OrderModel(models.Model):
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
-        related_name="order"
+        related_name="order",
     )
-
+    # ---- Coupon Snapshot ----
+    coupon_code = models.CharField(max_length=50, null=True, blank=True)
+    coupon_discount_percent = models.PositiveIntegerField(null=True, blank=True)
+    
     created_date = models.DateTimeField(auto_now_add=True)
 
+    def can_retry_payment(self) -> bool:
+        """
+        Payment retry rules:
+        - success → NEVER retry
+        - pending / failed → retry allowed
+        """
+        return self.status in {
+            OrderStatusType.pending,
+            OrderStatusType.failed,
+        }
+    def can_refund(self) -> bool:
+        return self.status == OrderStatusType.success
+
     def get_price(self):
-        if self.coupon:
-            return int(
-                self.total_price * (100 - self.coupon.discount_percent) / 100
+        total = self.total_price
+        if self.coupon_discount_percent:
+            return round(
+                total * (100 - self.coupon_discount_percent) / 100
             )
-        return int(self.total_price)
+
+        return total
 
     def __str__(self):
         return f"Order #{self.id}"

@@ -86,13 +86,15 @@
           <dl class="col-md-3 formatted-price">{{object.total_price}}</dl>
  
         </div>
-        {% if object.coupon %}
-        <div class="row mb-3">
-          <dt class="col-md-3">تخفیف</dt>
-          <dl class="col-md-3">{{object.coupon.discount_percent}}%</dl>
-          <dt class="col-md-3">قیمت با اعمال تخفیف</dt>
-          <dl class="col-md-3 formatted-price">{{object.get_price}}</dl>
-        </div>
+        {% if object.coupon_discount_percent %}
+          <dt>کد تخفیف</dt>
+          <dl>{{ object.coupon_code }}</dl>
+
+          <dt>تخفیف</dt>
+          <dl>{{ object.coupon_discount_percent }}%</dl>
+
+          <dt>قیمت با تخفیف</dt>
+          <dl class="formatted-price">{{ object.get_price }}</dl>
         {% endif %}
         <!-- End Row -->
         <div class="row mb-3">

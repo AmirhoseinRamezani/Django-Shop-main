@@ -2,11 +2,14 @@ from django.views import View
 from django.shortcuts import redirect, get_object_or_404
 from django.urls import reverse_lazy
 from django.db import transaction
+from django.core.exceptions import ValidationError
+from django.contrib.auth.mixins import LoginRequiredMixin
 
 from .models import PaymentModel, PaymentStatusType
 from .zarinpal_client import ZarinPalSandbox
 from order.models import OrderModel, OrderStatusType
-
+from cart.cart import CartSession
+from cart.models import CartModel
 
 class PaymentVerifyView(View):
     """
@@ -30,6 +33,11 @@ class PaymentVerifyView(View):
             PaymentModel.objects.select_for_update(),
             authority_id=authority
         )
+         # Lock related order
+        order = get_object_or_404(
+            OrderModel.objects.select_for_update(),
+            payment=payment
+        )
 
         # Already processed payment (idempotency)
         if payment.status != PaymentStatusType.pending.value:
@@ -39,11 +47,13 @@ class PaymentVerifyView(View):
                 else reverse_lazy("order:failed")
             )
 
-        # Lock related order
-        order = get_object_or_404(
-            OrderModel.objects.select_for_update(),
-            payment=payment
-        )
+        # sanity check
+        if payment.amount != order.get_price():
+            payment.status = PaymentStatusType.failed
+            order.status = OrderStatusType.failed
+            payment.save(update_fields=["status"])
+            order.save(update_fields=["status"])
+            return redirect(reverse_lazy("order:failed"))
 
         zarinpal = ZarinPalSandbox()
         response = zarinpal.payment_verify(
@@ -57,17 +67,23 @@ class PaymentVerifyView(View):
 
         if response.get("Status") in (100, 101):
             # SUCCESS
-            payment.status = PaymentStatusType.success.value
+            payment.status = PaymentStatusType.success
             payment.ref_id = response.get("RefID")
 
-            order.status = OrderStatusType.success.value
+            order.status = OrderStatusType.success
 
             # Consume coupon AFTER successful payment
             if order.coupon:
                 order.coupon.mark_used()
-
+            
+            # clear cart (db + session)
+            CartSession(request.session).clear()
+            
+            # clear coupon from session
+            request.session.pop("coupon_id", None)
+            request.session.modified = True
+            
             redirect_url = reverse_lazy("order:completed")
-
         else:
             # FAILED
             payment.status = PaymentStatusType.failed.value
@@ -84,3 +100,46 @@ class PaymentVerifyView(View):
 
         return redirect(redirect_url)
         
+class RetryPaymentView(LoginRequiredMixin, View):
+    """
+    Safely retry payment for an order
+    - Prevents double payment creation
+    - Uses DB locking
+    """
+    @transaction.atomic
+    def post(self, request, order_id):
+        # Lock order row
+        order = get_object_or_404(
+            OrderModel.objects.select_for_update(),
+            id=order_id,
+            user=request.user
+        )
+
+        if not order.can_retry_payment():
+            raise ValidationError("این سفارش قابل پرداخت مجدد نیست")
+
+        # Prevent retry if a pending payment exists
+        if order.payment and order.payment.status == PaymentStatusType.pending:
+            raise ValidationError("پرداختی در حال انجام است")
+        
+        # expire old payment
+        if order.payment:
+            order.payment.status = PaymentStatusType.failed
+            order.payment.save(update_fields=["status"])
+
+        zarinpal = ZarinPalSandbox()
+        response = zarinpal.payment_request(order.get_price())
+
+        payment = PaymentModel.objects.create(
+            authority_id=response["Authority"],
+            amount=order.get_price(),
+            status=PaymentStatusType.pending
+        )
+
+        order.payment = payment
+        order.status = OrderStatusType.pending
+        order.save(update_fields=["payment", "status"])
+
+        return redirect(
+            zarinpal.generate_payment_url(payment.authority_id)
+        )

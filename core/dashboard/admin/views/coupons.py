@@ -1,7 +1,7 @@
 from django.views.generic import ListView, CreateView, UpdateView ,DeleteView
 from django.urls import reverse_lazy
 from dashboard.permissions import HasAdminAccessPermission
-from coupons.models import CouponModel
+from order.models import CouponModel
 from dashboard.admin.forms.coupons import CouponForm
 
 class AdminCouponListView(HasAdminAccessPermission,ListView):

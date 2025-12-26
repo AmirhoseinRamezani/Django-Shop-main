@@ -14,7 +14,14 @@
 
         <div class="mb-5">
             <h1 class="h2">سفارش شما با شکست مواجه شد!</h1>
-            
+            {% if order.can_retry_payment %}
+            <form method="post" action="{% url 'payment:retry' order.id %}">
+                {% csrf_token %}
+                <button class="btn btn-warning btn-lg mt-3">
+                    پرداخت مجدد
+                </button>
+            </form>
+            {% endif %}
         </div>
 
         <a class="btn btn-primary btn-transition rounded-pill px-6" href="{% url 'shop:product-grid' %}">به خرید ادامه دهید</a>

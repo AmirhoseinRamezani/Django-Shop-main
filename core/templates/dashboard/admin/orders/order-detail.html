@@ -60,6 +60,18 @@
                 <td class="formatted-price">{{order_item.price}}</td>
               </tr>
               {% endfor %}
+
+              {% if object.can_refund %}
+              <form method="post"
+                    action="{% url 'dashboard_admin:order-refund' object.id %}"
+                    style="display:inline;">
+                  {% csrf_token %}
+                  <button class="btn btn-danger"
+                          onclick="return confirm('آیا از مرجوع کردن این سفارش مطمئن هستید؟')">
+                      مرجوع کردن سفارش
+                  </button>
+              </form>
+              {% endif %}
             </tbody>
           </table>
         </div>

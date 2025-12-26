@@ -4,17 +4,19 @@ from dashboard.permissions import HasAdminAccessPermission
 from django.shortcuts import render,get_object_or_404
 from dashboard.admin.forms import *
 from django.contrib.messages.views import SuccessMessageMixin
-from django.urls import reverse_lazy
+from django.urls import reverse ,reverse_lazy
 from django.shortcuts import redirect
 from django.contrib import messages
 from django.core.exceptions import FieldError
 from order.models import OrderModel,OrderStatusType
+from django.db import transaction
+from order.services.refund import RefundService
 
 from django.utils.timezone import now
 
 
 
-class AdminOrderListView(HasAdminAccessPermission, ListView):
+class AdminOrderListView(HasAdminAccessPermission, LoginRequiredMixin, ListView):
     """
     Admin view to list and manage all orders.
     Supports filtering by order status.
@@ -93,4 +95,23 @@ class AdminOrderInvoiceView(HasAdminAccessPermission, View):
             request,
             "dashboard/admin/orders/invoice.html",
             {"object": order}
+        )
+        
+class AdminOrderRefundView(
+    HasAdminAccessPermission,
+    LoginRequiredMixin,
+    View
+):
+    @transaction.atomic
+    def post(self, request, pk):
+        order = get_object_or_404(
+            OrderModel.objects.select_for_update(),
+            pk=pk,
+        )
+
+        RefundService.refund_order(order=order, admin_user=request.user)
+
+        messages.success(request, "سفارش با موفقیت مرجوع شد")
+        return redirect(
+            reverse("dashboard_admin:order-detail", kwargs={"pk": pk})
         )
