@@ -1,6 +1,9 @@
 from decimal import Decimal
 from django.db import transaction
 from django.core.exceptions import ValidationError
+from django.db.models import F
+from shop.constants import ProductStatusType
+from shop.models import ProductModel
 
 from order.models import (
     OrderModel,
@@ -29,8 +32,41 @@ class OrderService:
             raise ValidationError("کد تخفیف معتبر نیست")
 
         total_price = Decimal("0")
-        for item in cart.cart_items.select_related("product"):
-            total_price += item.quantity * item.product.final_price
+        
+        cart_items = (
+            cart.cart_items
+            .select_related("product")
+            .select_for_update()
+        )
+        
+        product_ids = [item.product_id for item in cart_items]
+        
+        products = (
+            ProductModel.objects
+            .select_for_update()
+            .filter(id__in=product_ids)
+            .in_bulk()
+        )
+
+        
+        for item in cart_items:
+            product = products[item.product_id]
+
+            # وضعیت فروش
+            if product.status != ProductStatusType.PUBLISH:
+                raise ValidationError(
+                    f"محصول «{product.title}» قابل فروش نیست"
+                )
+
+            # موجودی
+            if product.stock < item.quantity:
+                raise ValidationError(
+                    f"موجودی محصول «{product.title}» کافی نیست"
+                )
+
+            total_price += item.quantity * product.final_price
+        # for item in cart.cart_items.select_related("product"):
+        #     total_price += item.quantity * item.product.final_price
 
         order = OrderModel.objects.create(
             user=user,
@@ -55,15 +91,32 @@ class OrderService:
             coupon_discount_percent=coupon.discount_percent if coupon else None,
         )
 
-        items = [
-            OrderItemModel(
-                order=order,
-                product=item.product,
-                quantity=item.quantity,
-                price=item.product.final_price,
+        # items = [
+        #     OrderItemModel(
+        #         order=order,
+        #         product=item.product,
+        #         quantity=item.quantity,
+        #         price=item.product.final_price,
+        #     )
+        #     for item in cart.cart_items.select_related("product")
+        # ]
+        # OrderItemModel.objects.bulk_create(items)
+        order_items = []
+        for item in cart_items:
+            product = products[item.product_id]
+
+            product.stock = F("stock") - item.quantity
+            product.save(update_fields=["stock"])
+
+            order_items.append(
+                OrderItemModel(
+                    order=order,
+                    product=product,
+                    quantity=item.quantity,
+                    price=product.final_price,
+                )
             )
-            for item in cart.cart_items.select_related("product")
-        ]
-        OrderItemModel.objects.bulk_create(items)
+
+        OrderItemModel.objects.bulk_create(order_items)
 
         return order
