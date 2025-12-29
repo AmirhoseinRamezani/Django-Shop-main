@@ -1,41 +1,51 @@
-# expire_pending_orders.py
+from datetime import timedelta
+
 from django.core.management.base import BaseCommand
 from django.utils import timezone
-from datetime import timedelta
 from django.db import transaction
+from django.db.models import F
 
 from order.models import OrderModel, OrderStatusType
+from shop.models import ProductModel
 
 
 class Command(BaseCommand):
     help = "Expire unpaid pending orders and restore stock"
 
-    @transaction.atomic
     def handle(self, *args, **options):
         threshold = timezone.now() - timedelta(minutes=15)
 
-        orders = (
-            OrderModel.objects
-            .select_for_update()
-            .filter(
-                status=OrderStatusType.pending,
-                created_date__lt=threshold,
+        with transaction.atomic():
+            orders = list(
+                OrderModel.objects
+                .select_for_update()
+                .filter(
+                    status=OrderStatusType.pending,
+                    created_date__lt=threshold,
+                )
             )
-        )
 
-        count = 0
+            if not orders:
+                self.stdout.write("No pending orders to expire")
+                return
 
-        for order in orders:
-            for item in order.items.select_related("product"):
-                product = item.product
-                product.stock += item.quantity
-                product.save(update_fields=["stock"])
+            for order in orders:
+                # 1️⃣ rollback inventory
+                for item in order.order_items.select_related("product"):
+                    ProductModel.objects.filter(
+                        id=item.product_id
+                    ).update(
+                        stock=F("stock") + item.quantity
+                    )
 
-            order.status = OrderStatusType.failed
-            order.save(update_fields=["status"])
+                # 2️⃣ mark order cancelled
+                order.status = OrderStatusType.cancelled
+                order.save(update_fields=["status"])
 
-            count += 1
+                self.stdout.write(
+                    f"Order #{order.id} expired and stock restored"
+                )
 
         self.stdout.write(
-            self.style.SUCCESS(f"{count} سفارش منقضی شد")
+            self.style.SUCCESS("Pending orders cleanup completed")
         )

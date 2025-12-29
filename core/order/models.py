@@ -143,7 +143,8 @@ class OrderModel(models.Model):
     coupon_discount_percent = models.PositiveIntegerField(null=True, blank=True)
     
     created_date = models.DateTimeField(auto_now_add=True)
-
+    expire_at = models.DateTimeField(db_index=True)
+    
     def can_retry_payment(self) -> bool:
         """
         Payment retry rules:
@@ -166,6 +167,9 @@ class OrderModel(models.Model):
 
         return total
 
+    def is_expired(self):
+        return self.expire_at < timezone.now()
+    
     def __str__(self):
         return f"Order #{self.id}"
 
