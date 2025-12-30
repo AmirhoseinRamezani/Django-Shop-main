@@ -1,8 +1,12 @@
 
 from decimal import Decimal
+from datetime import timedelta
+
 from django.db import transaction
 from django.core.exceptions import ValidationError
 from django.db.models import F
+from django.utils import timezone
+
 from shop.constants import ProductStatusType
 from shop.models import ProductModel
 
@@ -68,12 +72,15 @@ class OrderService:
             total_price += item.quantity * product.final_price
         # for item in cart.cart_items.select_related("product"):
         #     total_price += item.quantity * item.product.final_price
-
+        # ⏳ Order expiration window (payment time limit)
+        expire_at = timezone.now() + timedelta(hours=2)
+        
         order = OrderModel.objects.create(
             user=user,
             sale_type=SaleType.ONLINE,
             status=OrderStatusType.pending,
             total_price=total_price,
+            expire_at=expire_at,
 
             # user snapshot
             full_name=user.profile.get_fullname(),

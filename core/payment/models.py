@@ -15,7 +15,12 @@ class PaymentModel(models.Model):
         related_name="payments"
     )
     
-    authority_id = models.CharField(max_length=255)
+    authority_id = models.CharField(
+        max_length=255,      
+        unique=True,
+        help_text="Gateway authority / token"
+    )
+    
     ref_id = models.BigIntegerField(null=True, blank=True)
 
     amount = models.DecimalField(
@@ -27,7 +32,10 @@ class PaymentModel(models.Model):
         default="ZARINPAL"
     )
     
-    response_json = JSONField(default=dict)
+    response_json = JSONField(
+        default=dict,
+        help_text="Raw gateway response"
+    )
     response_code = models.IntegerField(null=True, blank=True)
 
     status = models.IntegerField(
@@ -40,20 +48,40 @@ class PaymentModel(models.Model):
     paid_date = models.DateTimeField(null=True, blank=True)
     
     class Meta:
+        ordering = ("-created_date",)
         indexes = [
             models.Index(fields=["authority_id"]),
             models.Index(fields=["status"]),
+            models.Index(fields=["order", "status"]),
         ]
-
-    def mark_success(self, ref_id):
+        
+    # ---------- Domain methods ----------
+    def mark_success(self, ref_id, response=None):
+        """
+        Mark payment as successful.
+        """
         self.status = PaymentStatusType.success
         self.ref_id = ref_id
         self.paid_date = timezone.now()
-        self.save(update_fields=["status", "ref_id", "paid_date"])
+        if response is not None:
+            self.response_json = response
 
-    def mark_failed(self):
+        self.save(update_fields=[
+            "status",
+            "ref_id",
+            "paid_date",
+            "response_json",
+        ])
+
+    def mark_failed(self, response=None):
+        """
+        Mark payment as failed.
+        """
         self.status = PaymentStatusType.failed
-        self.save(update_fields=["status"])
+        if response is not None:
+            self.response_json = response
+
+        self.save(update_fields=["status", "response_json"])
 
     def __str__(self):
         return f"Payment #{self.id} ({self.get_status_display()})"

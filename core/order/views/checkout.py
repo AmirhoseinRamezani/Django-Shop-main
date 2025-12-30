@@ -11,6 +11,7 @@ from cart.cart import CartSession
 from cart.models import CartModel
 from payment.zarinpal_client import ZarinPalSandbox
 from payment.models import PaymentModel
+from payment.services import PaymentService
 
 
 class OrderCheckOutView(LoginRequiredMixin, HasCustomerAccessPermission, FormView):
@@ -27,6 +28,7 @@ class OrderCheckOutView(LoginRequiredMixin, HasCustomerAccessPermission, FormVie
         return kwargs
 
     def form_valid(self, form):
+        
         user = self.request.user
         address = form.cleaned_data["address_id"]
 
@@ -48,8 +50,9 @@ class OrderCheckOutView(LoginRequiredMixin, HasCustomerAccessPermission, FormVie
         except ValidationError as e:
             form.add_error(None, e.message)
             return self.form_invalid(form)
-
-        return redirect(self._create_payment_url(order))
+        
+        payment_url = PaymentService.start_payment(order)
+        return redirect(payment_url)
 
     def _create_payment_url(self, order):
         """

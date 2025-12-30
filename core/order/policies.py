@@ -1,6 +1,8 @@
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.conf import settings
+from django.utils import timezone
 
+from order.models import OrderStatusType
 
 class OrderPolicy:
     """
@@ -44,5 +46,35 @@ class OrderPolicy:
 
         if not order.is_paid:
             raise PermissionDenied("Only paid orders can be refunded")
+
+        return True
+    
+    @staticmethod
+    def can_pay(order):
+        if order.status != OrderStatusType.pending:
+            raise ValidationError("این سفارش قابل پرداخت نیست")
+
+        if order.is_expired:
+            raise ValidationError("مهلت پرداخت این سفارش به پایان رسیده")
+
+        return True
+
+    @staticmethod
+    def can_expire(order):
+        if order.status != OrderStatusType.pending:
+            return False
+
+        if order.expire_at and order.expire_at <= timezone.now():
+            return True
+
+        return False
+
+    @staticmethod
+    def can_retry_payment(order):
+        if order.status != OrderStatusType.pending:
+            return False
+
+        if order.is_expired:
+            return False
 
         return True

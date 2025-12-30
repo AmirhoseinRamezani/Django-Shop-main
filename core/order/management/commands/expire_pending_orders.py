@@ -6,6 +6,7 @@ from django.db import transaction
 from django.db.models import F
 
 from order.models import OrderModel, OrderStatusType
+from order.policies import OrderPolicy
 from shop.models import ProductModel
 
 
@@ -13,23 +14,31 @@ class Command(BaseCommand):
     help = "Expire unpaid pending orders and restore stock"
 
     def handle(self, *args, **options):
-        threshold = timezone.now() - timedelta(minutes=15)
+        now = timezone.now()
+
+        qs = (
+            OrderModel.objects
+            .select_for_update()
+            .filter(
+                status=OrderStatusType.pending,
+                expire_at__lte=now,
+            )
+        )
+
+        expired_count = 0
 
         with transaction.atomic():
-            orders = list(
-                OrderModel.objects
-                .select_for_update()
-                .filter(
-                    status=OrderStatusType.pending,
-                    created_date__lt=threshold,
-                )
-            )
+            orders = list(qs)
 
             if not orders:
                 self.stdout.write("No pending orders to expire")
                 return
 
             for order in orders:
+                # 🔒 قانون مرکزی
+                if not OrderPolicy.can_expire(order):
+                    continue
+
                 # 1️⃣ rollback inventory
                 for item in order.order_items.select_related("product"):
                     ProductModel.objects.filter(
@@ -38,14 +47,18 @@ class Command(BaseCommand):
                         stock=F("stock") + item.quantity
                     )
 
-                # 2️⃣ mark order cancelled
+                # 2️⃣ expire order
                 order.status = OrderStatusType.cancelled
                 order.save(update_fields=["status"])
 
+                expired_count += 1
+
                 self.stdout.write(
-                    f"Order #{order.id} expired and stock restored"
+                    f"Order #{order.id} expired | stock restored"
                 )
 
         self.stdout.write(
-            self.style.SUCCESS("Pending orders cleanup completed")
+            self.style.SUCCESS(
+                f"{expired_count} order(s) expired successfully"
+            )
         )

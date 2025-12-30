@@ -137,7 +137,18 @@ class OrderModel(models.Model):
     coupon_discount_percent = models.PositiveIntegerField(null=True, blank=True)
     
     created_date = models.DateTimeField(auto_now_add=True)
-    expire_at = models.DateTimeField(db_index=True)
+    expire_at = models.DateTimeField(db_index=True,help_text="Order expiration time for unpaid orders")
+    
+    @property
+    def is_expired(self):
+        return self.expire_at <= timezone.now()
+
+    @property
+    def is_payable(self):
+        return (
+            self.status == OrderStatusType.pending
+            and not self.is_expired
+        )
     
     def can_retry_payment(self) -> bool:
         """
