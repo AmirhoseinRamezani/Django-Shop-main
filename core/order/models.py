@@ -131,13 +131,7 @@ class OrderModel(models.Model):
         related_name="orders",
     )
 
-    payment = models.OneToOneField(
-        "payment.PaymentModel",
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="order",
-    )
+    
     # ---- Coupon Snapshot ----
     coupon_code = models.CharField(max_length=50, null=True, blank=True)
     coupon_discount_percent = models.PositiveIntegerField(null=True, blank=True)
@@ -151,10 +145,13 @@ class OrderModel(models.Model):
         - success → NEVER retry
         - pending / failed → retry allowed
         """
-        return self.status in {
-            OrderStatusType.pending,
-            OrderStatusType.failed,
-        }
+        return (
+            not self.is_expired()
+            and self.status in {
+                OrderStatusType.pending,
+                OrderStatusType.failed,
+            }
+        )
     def can_refund(self) -> bool:
         return self.status == OrderStatusType.success
 
@@ -169,6 +166,27 @@ class OrderModel(models.Model):
 
     def is_expired(self):
         return self.expire_at < timezone.now()
+    
+    def last_payment(self):
+        """
+        Returns latest payment attempt (if any)
+        """
+        return self.payments.order_by("-created_date").first()
+
+    def has_pending_payment(self) -> bool:
+        """
+        Prevent duplicate gateway redirects
+        """
+        return self.payments.filter(
+            status=1  # PaymentStatusType.pending
+        ).exists()
+
+    def mark_failed(self):
+        """
+        Centralized failure handling
+        """
+        self.status = OrderStatusType.failed
+        self.save(update_fields=["status"])
     
     def __str__(self):
         return f"Order #{self.id}"

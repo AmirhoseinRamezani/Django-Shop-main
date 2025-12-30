@@ -63,7 +63,10 @@ class OrderCheckOutView(LoginRequiredMixin, HasCustomerAccessPermission, FormVie
             amount=order.get_price(),
         )
 
-        order.payment = payment
-        order.save(update_fields=["payment"])
+        payment = PaymentModel.objects.create(
+            order=order,
+            authority_id=response["Authority"],
+            amount=order.get_price(),
+        )
 
         return zarinpal.generate_payment_url(payment.authority_id)

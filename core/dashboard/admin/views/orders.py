@@ -11,7 +11,7 @@ from django.core.exceptions import FieldError
 from order.models import OrderModel,OrderStatusType
 from django.db import transaction
 from order.services.refund import RefundService
-
+from order.policies import OrderPolicy
 from django.utils.timezone import now
 
 
@@ -32,7 +32,8 @@ class AdminOrderListView(HasAdminAccessPermission, LoginRequiredMixin, ListView)
         queryset = (
             super()
             .get_queryset()
-            .select_related("user", "payment", "coupon")
+            .select_related("user", "coupon")
+            .prefetch_related("payments")
         )
 
         # Optional filter by status (via query param)
@@ -45,20 +46,22 @@ class AdminOrderListView(HasAdminAccessPermission, LoginRequiredMixin, ListView)
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
 
-        # Order statistics
-        context["total_orders"] = OrderModel.objects.count()
-        context["successful_orders"] = OrderModel.objects.filter(
-            status=OrderStatusType.success.value
-        ).count()
-
         # Today's orders
         today = now().date()
-        context["today_orders"] = OrderModel.objects.filter(
-            created_at__date=today
-        ).count()
+        
+        context.update({
+            # Order statistics
+            "total_orders": OrderModel.objects.count(),
+            "successful_orders": OrderModel.objects.filter(
+                status=OrderStatusType.success
+            ).count(),
+            "today_orders": OrderModel.objects.filter(
+                created_date__date=today
+            ).count(),
+            # Order status choices (for filter UI)
+            "status_choices": OrderStatusType.choices,
+        })
 
-        # Order status choices (for filter UI)
-        context["status_choices"] = OrderStatusType.choices
 
         return context
 
@@ -73,9 +76,13 @@ class AdminOrderDetailView(HasAdminAccessPermission, DetailView):
         return (
             super()
             .get_queryset()
-            .select_related("user", "payment", "coupon")
-            .prefetch_related("order_items__product")
+            .select_related("user", "coupon")
+            .prefetch_related("payments","order_items__product")
         )
+    def get_object(self):
+        order = super().get_object()
+        OrderPolicy.can_view(self.request.user, order)
+        return order
         
 class AdminOrderInvoiceView(HasAdminAccessPermission, View):
     """

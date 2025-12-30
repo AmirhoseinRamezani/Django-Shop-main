@@ -34,11 +34,12 @@ class PaymentVerifyView(View):
             authority_id=authority
         )
          # Lock related order
-        order = get_object_or_404(
-            OrderModel.objects.select_for_update(),
-            payment=payment
-        )
+        order = payment.order
 
+        # already finalized → SAFE EXIT
+        if order.status == OrderStatusType.success:
+            return redirect(reverse_lazy("order:completed"))
+    
         # Already processed payment (idempotency)
         if payment.status != PaymentStatusType.pending.value:
             return redirect(

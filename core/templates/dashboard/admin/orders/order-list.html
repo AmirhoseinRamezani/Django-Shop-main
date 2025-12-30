@@ -113,11 +113,23 @@
                                     <td>{{object.user.user_profile.get_fullname}}</td>
                                     <td class="formatted-price" >{{object.get_price}}</td>
                                     <td>{{object.created_date|date:"Y-m-d h:i"}}</td>
-                                    <td><span class="badge bg-{{object.get_status.title}}">{{object.get_status.label}}</span></td>
+                                    <td>
+                                        <span class="badge bg-{{object.get_status.title}}">
+                                            {{object.get_status.label}}
+                                        </span>
+
+                                        {# Last payment info (admin diagnostic) #}
+                                        {% with last=object.payments.last %}
+                                            {% if last %}
+                                                <div class="small text-muted mt-1">
+                                                    پرداخت: {{ last.get_status_display }}
+                                                </div>
+                                            {% endif %}
+                                        {% endwith %}
+                                    </td>
 
                                 </tr>
                                 {% endfor %}
-
 
                             </tbody>
                         </table>

@@ -1,4 +1,3 @@
-from rest_framework.viewsets import ReadOnlyModelViewSet
 
 from decimal import Decimal
 from django.db import transaction

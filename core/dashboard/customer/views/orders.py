@@ -2,6 +2,8 @@ from django.views.generic import UpdateView,DeleteView,CreateView,ListView,Detai
 from django.contrib.auth.mixins import LoginRequiredMixin
 from dashboard.permissions import HasCustomerAccessPermission
 
+from django.shortcuts import get_object_or_404
+from order.policies import OrderPolicy
 from dashboard.customer.forms import *
 from django.contrib.messages.views import SuccessMessageMixin
 from django.urls import reverse_lazy
@@ -38,9 +40,19 @@ class CustomerOrderListView( HasCustomerAccessPermission, LoginRequiredMixin, Li
     
 class CustomerOrderDetailView(HasCustomerAccessPermission, LoginRequiredMixin, DetailView):
     template_name = "dashboard/customer/orders/order-detail.html"
-
+    
     def get_queryset(self):
         return OrderModel.objects.filter(user=self.request.user)
+    def get_object(self):
+        order = get_object_or_404(
+            OrderModel,
+            pk=self.kwargs["pk"]
+        )
+
+        # Policy check (centralized security)
+        OrderPolicy.can_view(self.request.user, order)
+
+        return order
     
 class CustomerOrderInvoiceView( HasCustomerAccessPermission, LoginRequiredMixin, DetailView):
     template_name = "dashboard/customer/orders/order-invoice.html"
@@ -50,3 +62,13 @@ class CustomerOrderInvoiceView( HasCustomerAccessPermission, LoginRequiredMixin,
             user=self.request.user,
             status=OrderStatusType.success
         )
+        
+    def get_object(self):
+        order = get_object_or_404(
+            OrderModel,
+            pk=self.kwargs["pk"],
+            status=OrderStatusType.success
+        )
+
+        OrderPolicy.can_view(self.request.user, order)
+        return order
