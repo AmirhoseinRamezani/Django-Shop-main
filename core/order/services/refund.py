@@ -2,6 +2,8 @@ from django.db import transaction
 from django.core.exceptions import ValidationError
 from payment.models import PaymentStatusType
 from order.models import OrderStatusType
+from order.events.order_event import OrderEventType
+from order.services.events import record_order_event
 
 class RefundService:
 
@@ -22,6 +24,11 @@ class RefundService:
         payment.save(update_fields=["status"])
         order.save(update_fields=["status"])
 
+        record_order_event(
+            order=order,
+            type=OrderEventType.REFUNDED,
+            actor=admin_user,
+        )
         return order
     
     @property

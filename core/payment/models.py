@@ -46,6 +46,10 @@ class PaymentModel(models.Model):
     created_date = models.DateTimeField(auto_now_add=True)
     updated_date = models.DateTimeField(auto_now=True)
     paid_date = models.DateTimeField(null=True, blank=True)
+    is_consumed = models.BooleanField(
+        default=False,
+        help_text="Used to finalize order (idempotency guard)"
+    )
     
     class Meta:
         ordering = ("-created_date",)

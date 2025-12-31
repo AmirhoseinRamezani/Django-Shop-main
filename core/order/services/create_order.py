@@ -10,6 +10,7 @@ from order.models import OrderModel, OrderItemModel, OrderStatusType
 from shop.models import ProductModel
 
 
+
 RESERVATION_MINUTES = 5
 
 

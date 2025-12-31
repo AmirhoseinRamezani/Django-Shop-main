@@ -83,6 +83,10 @@ class AdminOrderDetailView(HasAdminAccessPermission, DetailView):
         order = super().get_object()
         OrderPolicy.can_view(self.request.user, order)
         return order
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["timeline"] = self.object.events.select_related("actor")
+        return context
         
 class AdminOrderInvoiceView(HasAdminAccessPermission, View):
     """

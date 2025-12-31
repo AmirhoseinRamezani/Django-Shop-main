@@ -10,6 +10,9 @@ from django.utils import timezone
 from shop.constants import ProductStatusType
 from shop.models import ProductModel
 
+from order.events.order_event import OrderEventType
+from order.services.events import record_order_event
+
 from order.models import (
     OrderModel,
     OrderItemModel,
@@ -52,7 +55,6 @@ class OrderService:
             .filter(id__in=product_ids)
             .in_bulk()
         )
-
         
         for item in cart_items:
             product = products[item.product_id]
@@ -109,12 +111,26 @@ class OrderService:
         #     for item in cart.cart_items.select_related("product")
         # ]
         # OrderItemModel.objects.bulk_create(items)
+        
+        #📜 event: order created
+        record_order_event(
+            order=order,
+            type=OrderEventType.CREATED,
+            actor=user,
+            payload={
+                "total_price": str(total_price),
+                "expire_at": expire_at.isoformat(),
+            },
+        )
         order_items = []
         for item in cart_items:
             product = products[item.product_id]
 
-            product.stock = F("stock") - item.quantity
-            product.save(update_fields=["stock"])
+            ProductModel.objects.filter(
+                id=product.id
+            ).update(
+                stock=F("stock") - item.quantity
+            )
 
             order_items.append(
                 OrderItemModel(

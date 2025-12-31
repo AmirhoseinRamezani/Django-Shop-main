@@ -4,31 +4,27 @@ from django.core.exceptions import ValidationError
 from payment.models import PaymentModel, PaymentStatusType
 from order.services.confirm_payment import confirm_order_payment
 
-
-def verify_payment(*, authority, ref_id):
+@transaction.atomic
+def verify_payment(*, authority, ref_id, response=None):
     """
     Idempotent payment verification
     """
 
-    with transaction.atomic():
-        payment = (
-            PaymentModel.objects
-            .select_for_update()
-            .get(authority=authority)
-        )
+    payment = (
+        PaymentModel.objects
+        .select_for_update()
+        .get(authority_id=authority)
+    )
 
-        # If Already Successful, Do Nothing
-        if payment.status == PaymentStatusType.success:
-            return payment
+    if payment.status == PaymentStatusType.failed:
+        raise ValidationError("Payment already failed")
 
-        # Previous Failed Payment → Don't Allow to Continue
-        if payment.status == PaymentStatusType.failed:
-            raise ValidationError("Payment already failed")
+    # Gateway retry (safe)
+    if payment.status == PaymentStatusType.success:
+        return payment
 
-        # Register Payment
-        payment.mark_success(ref_id=ref_id)
+    payment.mark_success(ref_id=ref_id, response=response)
 
-        #  Finalize Order
-        confirm_order_payment(payment.order_id)
+    confirm_order_payment(payment=payment)
 
     return payment

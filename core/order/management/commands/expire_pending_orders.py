@@ -8,7 +8,8 @@ from django.db.models import F
 from order.models import OrderModel, OrderStatusType
 from order.policies import OrderPolicy
 from shop.models import ProductModel
-
+from order.events.order_event import OrderEventType
+from order.services.events import record_order_event
 
 class Command(BaseCommand):
     help = "Expire unpaid pending orders and restore stock"
@@ -61,4 +62,9 @@ class Command(BaseCommand):
             self.style.SUCCESS(
                 f"{expired_count} order(s) expired successfully"
             )
+        )
+        record_order_event(
+            order=order,
+            type=OrderEventType.EXPIRED,
+            payload={"reason": "timeout"}
         )

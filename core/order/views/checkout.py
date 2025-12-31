@@ -51,7 +51,7 @@ class OrderCheckOutView(LoginRequiredMixin, HasCustomerAccessPermission, FormVie
             form.add_error(None, e.message)
             return self.form_invalid(form)
         
-        payment_url = PaymentService.start_payment(order)
+        payment_url = PaymentService.start_payment(order=order)
         return redirect(payment_url)
 
     def _create_payment_url(self, order):
