@@ -4,8 +4,8 @@ from order.models import OrderStatusType
 from django.core.exceptions import ValidationError
 from payment.models import PaymentStatusType
 
-from .models import PaymentModel
-from .zarinpal_client import ZarinPalSandbox
+from payment.models import PaymentModel
+from payment.zarinpal_client import ZarinPalSandbox
 from payment.policies import PaymentPolicy
 from order.events.order_event import OrderEvent
 from order.services.events import record_order_event

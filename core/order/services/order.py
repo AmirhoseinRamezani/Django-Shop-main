@@ -75,7 +75,7 @@ class OrderService:
         # for item in cart.cart_items.select_related("product"):
         #     total_price += item.quantity * item.product.final_price
         # ⏳ Order expiration window (payment time limit)
-        expire_at = timezone.now() + timedelta(hours=2)
+        expire_at = timezone.now() + timedelta(minutes=15)
         
         order = OrderModel.objects.create(
             user=user,

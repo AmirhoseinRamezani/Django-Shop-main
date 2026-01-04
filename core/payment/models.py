@@ -12,7 +12,9 @@ class PaymentModel(models.Model):
     order = models.ForeignKey(
         "order.OrderModel",
         on_delete=models.PROTECT,
-        related_name="payments"
+        related_name="payments",
+        null=True,
+        blank=True,
     )
     
     authority_id = models.CharField(

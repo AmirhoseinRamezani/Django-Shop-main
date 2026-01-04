@@ -25,6 +25,6 @@ def verify_payment(*, authority, ref_id, response=None):
 
     payment.mark_success(ref_id=ref_id, response=response)
 
-    confirm_order_payment(payment=payment)
+    # confirm_order_payment(order_id=payment.order_id)
 
     return payment

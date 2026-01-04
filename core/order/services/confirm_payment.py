@@ -4,43 +4,47 @@ from django.db import transaction
 from django.core.exceptions import ValidationError
 
 from order.models import OrderModel, OrderStatusType
-from payment.models import PaymentStatusType
+from payment.models import PaymentModel, PaymentStatusType
 from order.events.order_event import OrderEventType
 from order.services.events import record_order_event
 
 @transaction.atomic
-def confirm_order_payment(*, payment):
+def confirm_order_payment(order_id: int) -> OrderModel:  #*, payment
     """
     Finalize order after successful payment.
     Atomic & idempotent.
     """
-    payment = (
-        payment.__class__.objects
+    # Lock order
+    order = (
+        OrderModel.objects
         .select_for_update()
-        .select_related("order")
-        .get(id=payment.id)
+        .get(id=order_id)
     )
 
-    order = payment.order
-
-    # Already consumed → SAFE EXIT
-    if payment.is_consumed:
-        return order
-
-    # Payment must be successful
-    if payment.status != PaymentStatusType.success:
-        raise ValidationError("Payment is not successful")
-
-    # Order already finalized → consume payment & exit
-    if order.status == OrderStatusType.success:
-        payment.is_consumed = True
-        payment.save(update_fields=["is_consumed"])
-        return order
-
+    # Order expired
     if order.is_expired():
-        raise ValidationError("Order expired")
+        raise ValueError("Order expired")
 
-    # ---- FINALIZE ----
+    # Find latest successful payment
+    payment = (
+        PaymentModel.objects
+        .select_for_update()
+        .filter(
+            order=order,
+            status=PaymentStatusType.success,
+        )
+        .order_by("-created_date")
+        .first()
+    )
+
+    if not payment:
+        raise ValidationError("No successful payment found")
+
+    # Idempotency
+    if payment.is_consumed:
+        raise ValidationError("Payment already consumed")
+
+    # Finalize
     payment.is_consumed = True
     payment.save(update_fields=["is_consumed"])
 
@@ -54,8 +58,30 @@ def confirm_order_payment(*, payment):
         payload={
             "payment_id": payment.id,
             "ref_id": payment.ref_id,
-            "amount": str(payment.amount),
+            "amount": str(order.get_price()),
         },
     )
 
     return order
+
+# -----------------------------
+# Public API (backward compatible)
+# -----------------------------
+def _confirm_order_payment(order_id: int) -> OrderModel:
+    """
+    Adapter for legacy calls & tests.
+    """
+    payment = (
+        PaymentModel.objects
+        .filter(
+            order_id=order_id,
+            status=PaymentStatusType.success,
+        )
+        .order_by("-created_date")
+        .first()
+    )
+
+    if not payment:
+        raise ValidationError("No successful payment found")
+
+    return confirm_order_payment(payment=payment)

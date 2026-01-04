@@ -107,7 +107,8 @@ class OrderModel(models.Model):
 
     status = models.IntegerField(
         choices=OrderStatusType.choices,
-        default=OrderStatusType.pending
+        default=OrderStatusType.pending,
+        db_index=True,
     )
 
     total_price = models.DecimalField(max_digits=12, decimal_places=0)
@@ -139,12 +140,15 @@ class OrderModel(models.Model):
     created_date = models.DateTimeField(auto_now_add=True)
     expire_at = models.DateTimeField(db_index=True,help_text="Order expiration time for unpaid orders")
     
-    @property
-    def is_expired(self):
+    # ------------------
+    # Domain Logic
+    # ------------------
+    
+    def is_expired(self) -> bool:
         return self.expire_at <= timezone.now()
 
     @property
-    def is_payable(self):
+    def is_payable(self) -> bool:
         return (
             self.status == OrderStatusType.pending
             and not self.is_expired
@@ -167,6 +171,10 @@ class OrderModel(models.Model):
         return self.status == OrderStatusType.success
 
     def get_price(self):
+        """
+        Final payable price after applying coupon.
+        This is the ONLY official pricing method.
+        """
         total = self.total_price
         if self.coupon_discount_percent:
             return round(
@@ -174,10 +182,8 @@ class OrderModel(models.Model):
             )
 
         return total
-
-    def is_expired(self):
-        return self.expire_at < timezone.now()
     
+    # ---- Payments ----
     def last_payment(self):
         """
         Returns latest payment attempt (if any)
@@ -189,7 +195,7 @@ class OrderModel(models.Model):
         Prevent duplicate gateway redirects
         """
         return self.payments.filter(
-            status=1  # PaymentStatusType.pending
+            status=OrderStatusType.pending  # PaymentStatusType.pending
         ).exists()
 
     def mark_failed(self):
