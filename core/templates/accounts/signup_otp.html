@@ -1,0 +1,41 @@
+{% extends 'base.html' %}
+
+{% block title %}ثبت‌نام{% endblock title %}
+
+{% block content %}
+<div class="container content-space-3 content-space-t-lg-4 content-space-b-lg-3">
+    <div class="flex-grow-1 mx-auto" style="max-width: 28rem;">
+
+        <div class="text-center mb-5">
+            <h1 class="h2">ثبت‌نام</h1>
+            <p>کد تایید به ایمیل شما ارسال می‌شود</p>
+        </div>
+
+        <form method="POST" action="{% url 'accounts:signup-otp' %}">
+            {% csrf_token %}
+
+            <div class="mb-4">
+                <label class="form-label">ایمیل</label>
+                <input type="email"
+                       name="email"
+                       class="form-control form-control-lg text-center"
+                       placeholder="email@site.com"
+                       required>
+            </div>
+
+            <div class="d-grid">
+                <button type="submit" class="btn btn-primary btn-lg">
+                    ارسال کد تایید
+                </button>
+            </div>
+
+            <div class="text-center mt-4">
+                <a class="link" href="{% url 'accounts:login' %}">
+                    بازگشت به ورود
+                </a>
+            </div>
+        </form>
+
+    </div>
+</div>
+{% endblock content %}

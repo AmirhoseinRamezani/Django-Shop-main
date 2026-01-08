@@ -23,3 +23,14 @@ class PaymentPolicy:
 
         if active_payment_exists:
             raise ValidationError("پرداخت فعال برای این سفارش وجود دارد")
+        
+    @staticmethod
+    def can_refund(payment):
+        if payment.status != PaymentStatusType.success:
+            raise ValidationError("پرداخت موفق نیست")
+
+        if payment.is_refunded:
+            raise ValidationError("این پرداخت قبلاً بازگشت داده شده")
+
+        return True
+    

@@ -1,0 +1,58 @@
+{% extends 'base.html' %}
+
+{% block title %}تایید کد{% endblock title %}
+
+{% block content %}
+<div class="container content-space-3 content-space-t-lg-4 content-space-b-lg-3">
+    <div class="flex-grow-1 mx-auto" style="max-width: 28rem;">
+
+        <div class="text-center mb-5">
+            <h1 class="h2">تایید کد</h1>
+            <p class="text-muted text-center">کد ارسال‌شده به ایمیل را وارد کنید</p>
+        </div>
+
+        <form method="POST" action="{% url 'accounts:verify-otp' %}">
+            {% csrf_token %}
+
+            {% comment %} <div class="mb-4">
+                <label class="form-label">ایمیل</label>
+                <input type="email"
+                       name="email"
+                       class="form-control form-control-lg text-center"
+                       required>
+            </div> {% endcomment %}
+
+            <div class="mb-4">
+                <label class="form-label">کد تایید</label>
+                <input type="text"
+                       name="code"
+                       maxlength="4"
+                       class="form-control form-control-lg text-center"
+                       placeholder="****"
+                       required>
+            </div>
+
+            <div class="d-grid">
+                <button type="submit" class="btn btn-primary btn-lg">
+                    تایید و ورود
+                </button>
+            </div>
+        </form>
+
+    </div>
+</div>
+{% endblock content %}
+
+{% block extra_js %}
+<script>
+{% if messages %}
+  {% for message in messages %}
+    {% if message.tags == 'success' %}
+      setTimeout(() => {
+        window.location.href = "{% url 'website:index' %}";
+      }, 2000);
+    {% endif %}
+  {% endfor %}
+{% endif %}
+</script>
+{% endblock extra_js %}

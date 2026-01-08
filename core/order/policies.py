@@ -54,7 +54,7 @@ class OrderPolicy:
         if order.status != OrderStatusType.pending:
             raise ValidationError("این سفارش قابل پرداخت نیست")
 
-        if order.is_expired:
+        if order.is_expired():
             raise ValidationError("مهلت پرداخت این سفارش به پایان رسیده")
 
         return True
@@ -74,7 +74,7 @@ class OrderPolicy:
         if order.status != OrderStatusType.pending:
             return False
 
-        if order.is_expired:
+        if order.is_expired():
             return False
 
         return True

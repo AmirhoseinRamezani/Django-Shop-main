@@ -9,7 +9,8 @@ from .models import PaymentModel, PaymentStatusType
 from .zarinpal_client import ZarinPalSandbox
 from order.models import OrderModel, OrderStatusType
 from cart.cart import CartSession
-from payment.services.verify import verify_payment
+from payment.services.payment_flow import handle_successful_payment
+
 
 class PaymentVerifyView(View):
     """
@@ -40,27 +41,18 @@ class PaymentVerifyView(View):
         )
         
         # Save raw gateway response
-        payment.response_json = response
-        payment.response_code = response.get("Status")
+        # payment.response_json = response
+        # payment.response_code = response.get("Status")
 
         status_code = response.get("Status")
 
         if status_code in (100, 101):
-            payment = verify_payment(
+            handle_successful_payment (
                 authority=authority,
                 ref_id=response.get("RefID"),
-                response=response
+                response=response,
+                session=request.session,
             )
-
-            order = payment.order
-
-            if order.coupon:
-                order.coupon.mark_used()
-
-            CartSession(request.session).clear()
-            request.session.pop("coupon_id", None)
-            request.session.modified = True
-
             return redirect(reverse_lazy("order:completed"))
 
         payment.mark_failed(response=response)
