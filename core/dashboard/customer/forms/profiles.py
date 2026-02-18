@@ -1,3 +1,6 @@
+# dashboard/customer/forms/profiles.py
+import dashboard
+
 from django.contrib.auth import forms as auth_forms
 from django import forms
 from django.utils.translation import gettext_lazy as _

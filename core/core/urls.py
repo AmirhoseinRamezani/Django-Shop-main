@@ -30,6 +30,10 @@ urlpatterns = [
     path('order/', include('order.urls')),
     path('payment/', include('payment.urls')),
     path('review/', include('review.urls')),
+    
+    # API (Global)
+    path("api/accounts/", include("accounts.api.urls"))
+
 ]
 
 if settings.DEBUG:
@@ -42,8 +46,8 @@ if settings.SHOW_DEBUGGER_TOOLBAR:
     urlpatterns += [path('__debug__/', include('debug_toolbar.urls')),]
 
 
-
-handler400 = "core.error_views.error_400"  # bad_request
-handler403 = "core.error_views.error_403"  # permission_denied
-handler404 = "core.error_views.error_404"  # page_not_found
-handler500 = "core.error_views.error_500"  # server_error
+# if not settings.DEBUG:
+#     handler400 = "core.error_views.error_400"  # bad_request
+#     handler403 = "core.error_views.error_403"  # permission_denied
+#     handler404 = "core.error_views.error_404"  # page_not_found
+#     handler500 = "core.error_views.error_500"  # server_error

@@ -15,7 +15,7 @@ class Migration(migrations.Migration):
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('email', models.EmailField(db_index=True, max_length=254)),
-                ('code_hash', models.CharField(max_length=4)),
+                ('code_hash', models.CharField(max_length=125)),
                 ('purpose', models.CharField(choices=[('signup', 'Signup'), ('login', 'Login')], db_index=True, default='signup', max_length=20)),
                 ('is_consumed', models.BooleanField(default=False)),
                 ('expire_at', models.DateTimeField()),

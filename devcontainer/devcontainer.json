@@ -1,0 +1,15 @@
+{
+  "name": "Django Shop (Docker)",
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "backend",
+  "workspaceFolder": "/usr/src/app",
+  "settings": {
+    "python.defaultInterpreterPath": "/usr/local/bin/python",
+    "terminal.integrated.defaultProfile.linux": "bash"
+  },
+  "extensions": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "ms-azuretools.vscode-docker"
+  ]
+}

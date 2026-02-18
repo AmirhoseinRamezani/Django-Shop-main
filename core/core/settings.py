@@ -26,6 +26,11 @@ SECRET_KEY = config("SECRET_KEY",default='django-insecure-v!!p07q542ol1a=jzhp^c)
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config("DEBUG",cast=bool,default=True)
 
+TESTING = config("TESTING", default="0") =="1"
+
+if TESTING:
+    DEBUG = False
+
 ALLOWED_HOSTS =  config(
     "ALLOWED_HOSTS",
     cast=lambda v: [s.strip() for s in v.split(",")],
@@ -42,7 +47,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'django.contrib.sites',
-    'pytest_django',
+    # 'pytest_django',
     
     'events',
     'website',
@@ -59,6 +64,9 @@ SITE_ID = 1
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    
+    'accounts.middleware.ip.IPMiddleware',
+    
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -88,6 +96,18 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'core.wsgi.application'
 
+# Django REST Framework
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "accounts.authentication.JWTAuthentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticated",
+    ],
+}
+
+JWT_ACCESS_SECRET = config("JWT_ACCESS_SECRET", default=SECRET_KEY)
+JWT_REFRESH_SECRET = config("JWT_REFRESH_SECRET", default=SECRET_KEY)
 
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
@@ -155,32 +175,41 @@ STATICFILES_DIRS =  [
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
-DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+# settings.py  (یا settings/base.py)
 
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# --------------------
+# EMAIL (safe for Docker + tests)
+# --------------------
 if DEBUG:
     EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
     DEFAULT_FROM_EMAIL = "no-reply@local.dev"
 else:
     EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-    EMAIL_HOST = config("EMAIL_HOST",default="smtp4dev")
-    EMAIL_USE_TLS = config("EMAIL_USE_TLS", cast=bool ,default=False)
-    EMAIL_USE_SSL = config("EMAIL_USE_SSL", cast=bool ,default=False)
-    EMAIL_PORT = config("EMAIL_PORT", cast=int,default=25)
-    EMAIL_HOST_USER = config("EMAIL_HOST_USER",default="")
-    EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD",default="")
+    EMAIL_HOST = config("EMAIL_HOST", default="smtp4dev")
+    EMAIL_PORT = config("EMAIL_PORT", cast=int, default=25)
+    EMAIL_USE_TLS = config("EMAIL_USE_TLS", cast=bool, default=False)
+    EMAIL_USE_SSL = config("EMAIL_USE_SSL", cast=bool, default=False)
+    EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
+    EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
 
-# django debug toolbar for docker usage
-SHOW_DEBUGGER_TOOLBAR = config("SHOW_DEBUGGER_TOOLBAR", cast=bool, default=True)
+# --------------------
+# DEBUG TOOLBAR (Docker-safe + Test-safe)
+# --------------------
+SHOW_DEBUGGER_TOOLBAR = (
+    DEBUG and not config("DISABLE_DEBUG_TOOLBAR", cast=bool, default=False)
+)
+
 if SHOW_DEBUGGER_TOOLBAR:
-    INSTALLED_APPS += [
-        "debug_toolbar",
+    INSTALLED_APPS += ["debug_toolbar"]
+    MIDDLEWARE += ["debug_toolbar.middleware.DebugToolbarMiddleware"]
+
+    INTERNAL_IPS = [
+        "127.0.0.1",
+        "10.0.2.2",
     ]
-    MIDDLEWARE += [
-        "debug_toolbar.middleware.DebugToolbarMiddleware",
-    ]
-    import socket  # only if you haven't already imported this
-    hostname, _, ips = socket.gethostbyname_ex(socket.gethostname())
-    INTERNAL_IPS = [ip[: ip.rfind(".")] + ".1" for ip in ips] + ["127.0.0.1", "10.0.2.2"]
+
     
 # accounts model settings
 AUTH_USER_MODEL = 'accounts.User'

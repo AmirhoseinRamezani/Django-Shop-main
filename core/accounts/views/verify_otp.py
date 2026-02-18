@@ -7,7 +7,6 @@ from django.contrib.auth import login
 
 from accounts.services.otp_service import verify_otp
 
-
 class VerifyOTPView(View):
     template_name = "accounts/verify_otp.html"
 
@@ -17,13 +16,12 @@ class VerifyOTPView(View):
         return render(request, self.template_name)
 
     def post(self, request):
-        email = request.POST.get("email")
-        code = request.POST.get("code").strip()
+        email = request.POST.get("email", "").strip().lower()
+        code = request.POST.get("code", "").strip()
 
-        if not email:
+        if not email or not code:
             messages.error(request, "جریان تایید منقضی شده است.")
             return redirect("accounts:signup-otp")
-        
         
         try:
             user = verify_otp(email=email, code=code)

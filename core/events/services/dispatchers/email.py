@@ -20,7 +20,8 @@ def send_email_event(event):
     
     handler = handlers.get(event.topic)
     if not handler:
-        return  ValueError(f"Unhandled email topic: {event.topic}")# silently ignore unknown email topics
+        return
+    
 
     handler(event.payload)
 

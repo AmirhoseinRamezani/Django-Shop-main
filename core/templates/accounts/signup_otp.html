@@ -11,7 +11,7 @@
             <p>کد تایید به ایمیل شما ارسال می‌شود</p>
         </div>
 
-        <form method="POST" action="{% url 'accounts:signup-otp' %}">
+        <form method="POST" action="{% url 'accounts:signup' %}">
             {% csrf_token %}
 
             <div class="mb-4">

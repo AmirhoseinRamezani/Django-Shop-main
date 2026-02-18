@@ -2,8 +2,12 @@
 from django.db import models
 from django.utils import timezone
 from django.conf import settings
+from datetime import timedelta
 from django.core.exceptions import ValidationError
 from django.contrib.auth.hashers import check_password
+from django.contrib.auth.hashers import make_password
+from events.models import OutboxEvent, OutboxStatus
+from django.contrib.auth.hashers import make_password
 
 class OTPPurpose(models.TextChoices):
     SIGNUP = "signup", "Signup"
@@ -14,8 +18,7 @@ MAX_VERIFY_ATTEMPTS = 5
 
 class EmailOTP(models.Model):
     email = models.EmailField(db_index=True)
-
-    code_hash = models.CharField(max_length=4)
+    code_hash = models.CharField(max_length=125)
 
     purpose = models.CharField(
         max_length=20,
@@ -32,18 +35,64 @@ class EmailOTP(models.Model):
     consumed_date = models.DateTimeField(null=True, blank=True)
     attempts = models.PositiveSmallIntegerField(default=0)
 
+    _raw_code = None
     class Meta:
         indexes = [
             models.Index(fields=["email", "purpose", "is_consumed"]),
         ]
         ordering = ["-created_date"]
         
-    def is_expired(self) -> bool:
+    def save(self, *args, **kwargs):
+        if not self.expire_at:
+            from django.utils import timezone
+            from datetime import timedelta
+            self.expire_at = timezone.now() + timedelta(minutes=2)
+
+        if self._raw_code:
+            from django.contrib.auth.hashers import make_password
+            self.code_hash = make_password(self._raw_code)
+
+        is_new = self.pk is None
+        super().save(*args, **kwargs)
+
+        if is_new and self._raw_code:
+            from events.models import OutboxEvent, OutboxStatus
+            OutboxEvent.objects.create(
+                topic="user.otp",
+                payload={
+                    "email": self.email,
+                    "code": self._raw_code,
+                },
+                status=OutboxStatus.pending,
+            )
+
+    @property
+    def code(self):
+        return self._raw_code
+
+    @code.setter
+    def code(self, value):
+        self._raw_code = value
+
+    @classmethod
+    def create_with_code(cls, *, email, purpose, code):
+        obj = cls(
+            email=email,
+            purpose=purpose,
+        )
+        obj._raw_code = code
+        obj.save()
+        return obj
+
+    def is_expired(self):
         return timezone.now() >= self.expire_at
-    
+
     def verify(self, raw_code: str):
 
         if self.is_expired():
+            self.is_consumed = True
+            self.consumed_date = timezone.now()
+            self.save(update_fields=["is_consumed", "consumed_date"])
             raise ValidationError("OTP expired")
 
         if self.attempts >= MAX_VERIFY_ATTEMPTS:
@@ -53,11 +102,7 @@ class EmailOTP(models.Model):
             self.attempts += 1
             self.save(update_fields=["attempts"])
             raise ValidationError("Invalid code")
-        
-        
+
         self.is_consumed = True
         self.consumed_date = timezone.now()
         self.save(update_fields=["is_consumed", "consumed_date"])
-
-    def __str__(self):
-        return f"{self.email} | {self.purpose} | consumed={self.is_consumed}"

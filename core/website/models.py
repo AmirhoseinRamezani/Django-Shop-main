@@ -8,7 +8,6 @@ class Contact(models.Model):
     This model is intentionally independent from User
     to allow anonymous tickets.
     """
-
     full_name = models.CharField(_("Full name"), max_length=200)
     email = models.EmailField(_("Email address"), blank=True, null=True)
     phone_number = models.CharField(_("Phone number"), max_length=15, blank=True, null=True)
