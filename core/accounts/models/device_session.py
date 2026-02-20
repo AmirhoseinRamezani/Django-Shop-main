@@ -1,3 +1,4 @@
+# accounts/models/device_session.py
 import uuid
 from django.db import models
 from django.conf import settings

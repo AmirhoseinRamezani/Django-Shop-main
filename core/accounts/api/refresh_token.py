@@ -31,13 +31,17 @@ class RefreshTokenAPIView(APIView):
             if payload.get("type") != "refresh":
                 raise ValidationError("Invalid token type")
 
-            token_obj = RefreshToken.objects.select_related("user").get(
-                token=refresh,
-                is_revoked=False,
-            )
-            if token_obj.is_expired():
-                raise ValidationError("Refresh token expired")
+            session_id = payload.get("session_id")
 
+            token_obj = RefreshToken.objects.select_related(
+                "user", "session"
+            ).get(token=refresh)
+
+            if token_obj.is_revoked or token_obj.is_expired():
+                # reuse detection
+                token_obj.session.is_active = False
+                token_obj.session.save(update_fields=["is_active"])
+                raise ValidationError("Token reuse detected")
 
         except Exception:
             return Response(
@@ -45,18 +49,23 @@ class RefreshTokenAPIView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-         # rotate token
-        token_obj.is_revoked = True
-        token_obj.save(update_fields=["is_revoked"])
+        # rotate
+        token_obj.revoke()
+
+        access = create_access_token(
+            user_id=token_obj.user_id,
+            session_id=token_obj.session_id,
+        )
 
         new_refresh = create_and_store_refresh_token(
             user_id=token_obj.user_id,
-            session=session,
+            session=token_obj.session,
         )
 
         return Response(
             {
-                "access": create_access_token(user_id=token_obj.user.id),
+                "access": access,
+                "refresh": new_refresh,
             },
             status=status.HTTP_200_OK,
         )
