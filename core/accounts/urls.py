@@ -1,7 +1,9 @@
 # accounts/urls.py
 from django.urls import path, include
 from accounts.views.signup import SignupRequestOTPView
-from accounts.views.verify_otp import VerifyOTPView
+# from accounts.views.verify_otp import VerifyOTPView
+from accounts.api.verify_otp import VerifyOTPAPIView
+
 from accounts.views.auth import LoginView, LogoutView
 # from . import views
 
@@ -13,8 +15,10 @@ urlpatterns = [
     path("logout/", LogoutView.as_view(), name="logout"),
     
     path("signup/", SignupRequestOTPView.as_view(), name="signup"),
-    path("verify-otp/", VerifyOTPView.as_view(), name="verify-otp"),
-    
+    # path("verify-otp/", VerifyOTPView.as_view(), name="verify-otp"),
+
     # API (REST)
     path("api/", include("accounts.api.urls")),
+    path("otp-verify/", VerifyOTPAPIView.as_view(), name="otp-verify"),
+
 ]

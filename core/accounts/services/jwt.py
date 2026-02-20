@@ -14,34 +14,43 @@ REFRESH_TOKEN_LIFETIME = timedelta(days=7)
 def _now():
     return timezone.now()
 
-def create_and_store_refresh_token(*, user_id: int) -> str:
-    token = create_refresh_token(user_id=user_id)
+def create_and_store_refresh_token(*, user_id: int, session) -> str:
+    token = create_refresh_token(user_id=user_id, session_id=session.id)
 
     RefreshToken.objects.create(
         user_id=user_id,
+        session=session,
         token=token,
         expires_at=timezone.now() + REFRESH_TOKEN_LIFETIME,
     )
 
     return token
 
-def create_access_token(*, user_id: int) -> str:
+def create_access_token(*, user_id: int, session_id: str) -> str:
     payload = {
         "type": "access",
         "user_id": user_id,
         "exp": _now() + ACCESS_TOKEN_LIFETIME,
         "iat": _now(),
     }
+
+    if session_id:
+        payload["session_id"] = str(session_id)
+
     return jwt.encode(payload, settings.JWT_ACCESS_SECRET, algorithm=ALGORITHM)
 
 
-def create_refresh_token(*, user_id: int) -> str:
+def create_refresh_token(*, user_id: int, session_id: str | None = None) -> str:
     payload = {
         "type": "refresh",
         "user_id": user_id,
         "exp": _now() + REFRESH_TOKEN_LIFETIME,
         "iat": _now(),
     }
+
+    if session_id:
+        payload["session_id"] = str(session_id)
+
     return jwt.encode(payload, settings.JWT_REFRESH_SECRET, algorithm=ALGORITHM)
 
 

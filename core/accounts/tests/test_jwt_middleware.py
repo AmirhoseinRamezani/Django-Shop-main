@@ -4,7 +4,7 @@ from django.urls import reverse
 
 from accounts.models import User
 from accounts.services.jwt import create_access_token
-
+from accounts.models.device_session import DeviceSession
 
 @pytest.mark.django_db
 def test_jwt_middleware_authenticates_user(client):
@@ -13,7 +13,16 @@ def test_jwt_middleware_authenticates_user(client):
         password="pass123",
     )
 
-    token = create_access_token(user_id=user.id)
+    session = DeviceSession.objects.create(
+        user=user,
+        device_hash="test-device",
+        ip_address="127.0.0.1",
+        user_agent="pytest",
+    )
+    token = create_access_token(
+        user_id=user.id,
+        session_id=session.id,
+    )
 
     response = client.get(
         "/api/accounts/me/",

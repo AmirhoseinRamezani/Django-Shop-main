@@ -9,34 +9,34 @@ from accounts.services.jwt import decode_token
 
 User = get_user_model()
 
-class JWTMiddleware(MiddlewareMixin):
+# class JWTMiddleware(MiddlewareMixin):
 
-    def process_request(self, request):
-        auth = request.META.get("HTTP_AUTHORIZATION")
+#     def process_request(self, request):
+#         auth = request.META.get("HTTP_AUTHORIZATION")
 
-        if not auth:
-            return None  # مهم: کاری نکن
+#         if not auth:
+#             return None  # مهم: کاری نکن
 
-        if not auth.startswith("Bearer "):
-            return JsonResponse({"detail": "Invalid token"}, status=401)
+#         if not auth.startswith("Bearer "):
+#             return JsonResponse({"detail": "Invalid token"}, status=401)
 
-        token = auth.split(" ")[1]
+#         token = auth.split(" ")[1]
 
-        try:
-            payload = decode_token(token)
-        except Exception:
-            return JsonResponse({"detail": "Invalid token"}, status=401)
+#         try:
+#             payload = decode_token(token)
+#         except Exception:
+#             return JsonResponse({"detail": "Invalid token"}, status=401)
 
-        # فقط access token قبول است
-        if payload.get("type") != "access":
-            return JsonResponse({"detail": "Invalid token type"}, status=401)
+#         # فقط access token قبول است
+#         if payload.get("type") != "access":
+#             return JsonResponse({"detail": "Invalid token type"}, status=401)
 
-        try:
-            user = User.objects.get(id=payload["user_id"])
-        except User.DoesNotExist:
-            return JsonResponse({"detail": "User not found"}, status=401)
+#         try:
+#             user = User.objects.get(id=payload["user_id"])
+#         except User.DoesNotExist:
+#             return JsonResponse({"detail": "User not found"}, status=401)
 
-        request.user = user
+#         request.user = user
         
 class JWTAuthenticationMiddleware:
     """

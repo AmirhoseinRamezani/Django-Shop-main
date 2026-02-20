@@ -50,7 +50,8 @@ class RefreshTokenAPIView(APIView):
         token_obj.save(update_fields=["is_revoked"])
 
         new_refresh = create_and_store_refresh_token(
-            user_id=token_obj.user_id
+            user_id=token_obj.user_id,
+            session=session,
         )
 
         return Response(

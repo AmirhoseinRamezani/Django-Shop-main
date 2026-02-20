@@ -2,6 +2,7 @@
 from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
 from accounts.services.jwt import create_access_token
+from accounts.models.device_session import DeviceSession
 
 User = get_user_model()
 
@@ -14,7 +15,16 @@ class MeAPITest(APITestCase):
             is_active=True,
             is_verified=True,
         )
-        self.token = create_access_token(user_id=self.user.id)
+        self.session = DeviceSession.objects.create(
+            user=self.user,
+            device_hash="test-device",
+            ip_address="127.0.0.1",
+            user_agent="pytest",
+        )
+        self.token = create_access_token(
+            user_id=self.user.id,
+            session_id=self.session.id,
+        )
         self.url = "/accounts/api/me/"
 
     def test_me_requires_auth(self):
