@@ -1,17 +1,21 @@
 # accounts/middleware/jwt.py
-from django.http import JsonResponse
-from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
 from accounts.services.jwt import decode_token
 from accounts.models.device_session import DeviceSession
 
-User = get_user_model()
+# User = get_user_model()
 
 
 class JWTAuthenticationMiddleware:
+    
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
+        
+        if request.path.startswith("/api/"):
+            return self.get_response(request)
+
         header = request.headers.get("Authorization")
 
         if not header or not header.startswith("Bearer "):
@@ -23,30 +27,17 @@ class JWTAuthenticationMiddleware:
             payload = decode_token(token)
 
             if payload.get("type") != "access":
-                raise ValueError("Invalid token type")
-
-            user_id = payload.get("user_id")
-            session_id = payload.get("session_id")
-
-            if not session_id:
-                raise ValueError("Session not bound")
+                return self.get_response(request)
 
             session = DeviceSession.objects.select_related("user").get(
-                id=session_id,
+                id=payload.get("session_id"),
                 is_active=True,
             )
 
-            if session.user_id != user_id:
-                raise ValueError("Session mismatch")
-
             request.user = session.user
-            session.save(update_fields=["last_seen"])
+            request.session_obj = session
 
         except Exception:
-            if request.path.startswith("/api/"):
-                return JsonResponse(
-                    {"detail": "Invalid or expired token"},
-                    status=401,
-                )
+            request.user = AnonymousUser()
 
         return self.get_response(request)

@@ -4,6 +4,7 @@ from datetime import timedelta
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
+from django.db.utils import IntegrityError
 
 
 class RefreshToken(models.Model):
@@ -43,6 +44,19 @@ class RefreshToken(models.Model):
         return timezone.now() >= self.expires_at
            
     def save(self, *args, **kwargs):
-        if not self.expires_at:
-            self.expires_at = timezone.now() + timedelta(days=30)
-        super().save(*args, **kwargs)
+        try:
+            if not self.token:
+                self.token = str(uuid.uuid4())
+            if not self.expires_at:
+                self.expires_at = timezone.now() + timedelta(days=30)
+                
+        
+            super().save(*args, **kwargs)
+        except IntegrityError as e:
+            if "accounts_refreshtoken_token_key" in str(e):
+                self.token = f"{self.token}-{uuid.uuid4()}"
+                super().save(*args, **kwargs)
+            else:
+                raise
+            
+        

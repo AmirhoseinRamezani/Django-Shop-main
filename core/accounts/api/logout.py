@@ -11,13 +11,13 @@ class LogoutAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        session = request.user.devicesession_set.filter(
-            id=request.auth.get("session_id"),
-            is_active=True,
-        ).first()
+        session = getattr(request, "session_obj", None)
 
-        if not session:
-            return Response({"detail": "Invalid session"}, status=400)
+        if not session or not session.is_active:
+            return Response(
+                {"detail": "Invalid session"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         session.is_active = False
         session.save(update_fields=["is_active"])

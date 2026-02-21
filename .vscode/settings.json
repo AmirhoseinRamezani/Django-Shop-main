@@ -5,3 +5,16 @@
   ],
   "python.analysis.autoSearchPaths": true
 }
+
+// {
+//   "pythonInterpreterFavorites.interpreters": [
+//     {
+//       "label": "Project Virtual Environment",
+//       "path": "${workspaceFolder}/.venv/bin/python"
+//     },
+//     {
+//       "label": "Project Conda Environment",
+//       "path": "${userHome}/anaconda3/envs/myproject/bin/python"
+//     }
+//   ]
+// }
