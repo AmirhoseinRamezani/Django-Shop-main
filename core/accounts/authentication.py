@@ -1,6 +1,7 @@
 # accounts/authentication.py
 
 from django.utils import timezone
+from django.conf import settings
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
 from django.contrib.auth import get_user_model
@@ -53,6 +54,14 @@ class JWTAuthentication(BaseAuthentication):
         if not session:
             raise AuthenticationFailed("Invalid session")
 
+        # Idle timeout check
+        if session.last_seen:
+            delta = timezone.now() - session.last_seen
+            if delta.total_seconds() > settings.SESSION_IDLE_TIMEOUT_SECONDS:
+                session.is_active = False
+                session.save(update_fields=["is_active"])
+                raise AuthenticationFailed("Session expired")
+            
         # update last_seen
         session.last_seen = timezone.now()
         session.save(update_fields=["last_seen"])

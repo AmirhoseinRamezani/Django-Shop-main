@@ -2,6 +2,7 @@
 from django.contrib.auth.models import AnonymousUser
 from accounts.services.jwt import decode_token
 from accounts.models.device_session import DeviceSession
+# from django.utils import timezone
 
 # User = get_user_model()
 

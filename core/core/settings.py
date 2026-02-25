@@ -210,6 +210,8 @@ if SHOW_DEBUGGER_TOOLBAR:
         "10.0.2.2",
     ]
 
+SESSION_IDLE_TIMEOUT_SECONDS = 1800  # 30 minutes
+AUTH_LOG_ENABLED = True
     
 # accounts model settings
 AUTH_USER_MODEL = 'accounts.User'
