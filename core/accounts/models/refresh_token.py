@@ -27,7 +27,8 @@ class RefreshToken(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
     revoked_at = models.DateTimeField(null=True, blank=True)
-
+    family_id = models.UUIDField(default=uuid.uuid4, db_index=True)
+    
     class Meta:
         indexes = [
             models.Index(fields=["token"]),

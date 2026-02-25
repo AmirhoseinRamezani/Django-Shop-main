@@ -1,5 +1,6 @@
 # accounts/services/jwt.py
 import jwt
+import uuid 
 from django.utils import timezone
 from datetime import  timedelta
 from django.conf import settings
@@ -21,6 +22,7 @@ def _now():
 
 def create_access_token(*, user_id: int, session_id: str) -> str:
     payload = {
+        "jti": str(uuid.uuid4()),
         "type": "access",
         "user_id": str(user_id),
         "session_id": str(session_id),
@@ -53,7 +55,10 @@ def create_refresh_token(*, user_id: int, session_id: str | None = None) -> str:
         algorithm=ALGORITHM,
     )
 
-def create_and_store_refresh_token(*, user_id: int, session) -> str:
+def create_and_store_refresh_token(*, user_id: int, session, family_id=None) -> str:
+    if family_id is None:
+        family_id = uuid.uuid4()
+
     token = create_refresh_token(
         user_id=user_id,
         session_id=session.id,
@@ -63,6 +68,7 @@ def create_and_store_refresh_token(*, user_id: int, session) -> str:
         user_id=user_id,
         session=session,
         token=token,
+        family_id=family_id,
         expires_at=_now() + REFRESH_TOKEN_LIFETIME,
     )
 

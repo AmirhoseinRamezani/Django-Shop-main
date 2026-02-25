@@ -2,7 +2,10 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+import uuid
 from django.core.exceptions import ValidationError
+from django.db import transaction
+from django.utils import timezone
 
 from accounts.services.jwt import (
     decode_token,
@@ -16,6 +19,7 @@ class RefreshTokenAPIView(APIView):
     authentication_classes = []
     permission_classes = []
 
+    @transaction.atomic
     def post(self, request):
         refresh = request.data.get("refresh")
 
@@ -30,17 +34,34 @@ class RefreshTokenAPIView(APIView):
 
             if payload.get("type") != "refresh":
                 raise ValidationError("Invalid token type")
-
+            
             session_id = payload.get("session_id")
-
-            token_obj = RefreshToken.objects.select_related(
+            
+            token_obj = RefreshToken.objects.select_for_update().select_related(
                 "user", "session"
             ).get(token=refresh)
-
+            
+            if str(token_obj.session_id) != str(session_id):
+                raise ValidationError("Token session mismatch")
+            
             if token_obj.is_revoked or token_obj.is_expired():
-                # reuse detection
-                token_obj.session.is_active = False
-                token_obj.session.save(update_fields=["is_active"])
+                now = timezone.now()
+
+                # kill whole token family
+                RefreshToken.objects.filter(
+                    session=token_obj.session,
+                    is_revoked=False,
+                ).update(
+                    is_revoked=True,
+                    revoked_at=now,
+                )
+
+                # deactivate device session
+                session = token_obj.session
+                session.is_active = False
+                session.revoked_at = now
+                session.save(update_fields=["is_active", "revoked_at"])
+                
                 raise ValidationError("Token reuse detected")
 
         except Exception:
@@ -57,9 +78,12 @@ class RefreshTokenAPIView(APIView):
             session_id=token_obj.session_id,
         )
 
+        # family_id = uuid.uuid4()
+        family_id = token_obj.family_id
         new_refresh = create_and_store_refresh_token(
             user_id=token_obj.user_id,
             session=token_obj.session,
+            family_id=family_id,
         )
 
         return Response(

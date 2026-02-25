@@ -13,8 +13,8 @@ class JWTAuthenticationMiddleware:
 
     def __call__(self, request):
         
-        if request.path.startswith("/api/"):
-            return self.get_response(request)
+        # if request.path.startswith("/api/"):
+        #     return self.get_response(request)
 
         header = request.headers.get("Authorization")
 
