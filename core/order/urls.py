@@ -1,3 +1,4 @@
+# order/urls.py
 from django.urls import path
 from order.views.result import OrderCompletedView ,OrderFailedView  
 from order.views.coupon import ApplyCouponView, ValidateCouponView

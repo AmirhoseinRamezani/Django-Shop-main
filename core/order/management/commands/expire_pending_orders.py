@@ -4,6 +4,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 from django.db import transaction
 from django.db.models import F
+from order.services.state_machine import OrderStateMachine
 
 from order.models import OrderModel, OrderStatusType
 from order.policies import OrderPolicy
@@ -41,16 +42,20 @@ class Command(BaseCommand):
                     continue
 
                 # 1️⃣ rollback inventory
-                for item in order.order_items.select_related("product"):
-                    ProductModel.objects.filter(
-                        id=item.product_id
-                    ).update(
-                        stock=F("stock") + item.quantity
-                    )
+                # for item in order.order_items.select_related("product"):
+                #     ProductModel.objects.filter(
+                #         id=item.product_id
+                #     ).update(
+                #         stock=F("stock") + item.quantity
+                #     )
 
                 # 2️⃣ expire order
-                order.status = OrderStatusType.cancelled
-                order.save(update_fields=["status"])
+                
+                OrderStateMachine.transition(
+                    order=order,
+                    to_status=OrderStatusType.cancelled,
+                    payload={"reason": "timeout"}
+                )
 
                 expired_count += 1
 
@@ -63,8 +68,4 @@ class Command(BaseCommand):
                 f"{expired_count} order(s) expired successfully"
             )
         )
-        record_order_event(
-            order=order,
-            type=OrderEventType.EXPIRED,
-            payload={"reason": "timeout"}
-        )
+        

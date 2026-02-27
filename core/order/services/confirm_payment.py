@@ -1,8 +1,8 @@
 # order/services/confirm_payment.py
-
 from django.db import transaction
 from django.core.exceptions import ValidationError
 
+from order.services.state_machine import OrderStateMachine
 from order.models import OrderModel, OrderStatusType
 from payment.models import PaymentModel, PaymentStatusType
 from order.events.order_event import OrderEventType
@@ -48,19 +48,28 @@ def confirm_order_payment(order_id: int) -> OrderModel:  #*, payment
     payment.is_consumed = True
     payment.save(update_fields=["is_consumed"])
 
-    order.status = OrderStatusType.success
-    order.save(update_fields=["status"])
 
-    record_order_event(
+    OrderStateMachine.transition(
         order=order,
-        type=OrderEventType.PAID,
+        to_status=OrderStatusType.success,
         actor=order.user,
         payload={
             "payment_id": payment.id,
             "ref_id": payment.ref_id,
             "amount": str(order.get_price()),
-        },
+        }
     )
+
+    # record_order_event(
+    #     order=order,
+    #     type=OrderEventType.PAID,
+    #     actor=order.user,
+    #     payload={
+    #         "payment_id": payment.id,
+    #         "ref_id": payment.ref_id,
+    #         "amount": str(order.get_price()),
+    #     },
+    # )
 
     return order
 
@@ -84,4 +93,4 @@ def _confirm_order_payment(order_id: int) -> OrderModel:
     if not payment:
         raise ValidationError("No successful payment found")
 
-    return confirm_order_payment(payment=payment)
+    return confirm_order_payment(order_id=order_id)

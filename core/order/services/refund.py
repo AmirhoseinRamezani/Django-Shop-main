@@ -1,9 +1,11 @@
+# order/services/refund.py
 from django.db import transaction
 from django.core.exceptions import ValidationError
 from payment.models import PaymentStatusType
 from order.models import OrderStatusType
 from order.events.order_event import OrderEventType
-from order.services.events import record_order_event
+# from order.services.events import record_order_event
+from order.services.state_machine import OrderStateMachine
 
 class RefundService:
 
@@ -19,16 +21,22 @@ class RefundService:
         
         # In real gateway: call refund API here
         payment.status = PaymentStatusType.failed
-        order.status = OrderStatusType.refunded
+        # order.status = OrderStatusType.refunded
 
         payment.save(update_fields=["status"])
-        order.save(update_fields=["status"])
+        # order.save(update_fields=["status"])
 
-        record_order_event(
+        OrderStateMachine.transition(
             order=order,
-            type=OrderEventType.REFUNDED,
+            to_status=OrderStatusType.refunded,
             actor=admin_user,
         )
+
+        # record_order_event(
+        #     order=order,
+        #     type=OrderEventType.REFUNDED,
+        #     actor=admin_user,
+        # )
         return order
     
     @property

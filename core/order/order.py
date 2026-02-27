@@ -1,5 +1,4 @@
-# order/views/order.py
-
+# order/order.py
 from rest_framework.viewsets import ReadOnlyModelViewSet
 from order.models import OrderModel
 from order.serializers import OrderSerializer
