@@ -4,7 +4,6 @@ from rest_framework.views import APIView
 # from accounts.authentication import JWTAuthentication
 from rest_framework.response import Response
 
-
 class MeAPIView(APIView):
     # authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]

@@ -13,7 +13,6 @@ from payment.zarinpal_client import ZarinPalSandbox
 from payment.models import PaymentModel
 from payment.services import PaymentService
 
-
 class OrderCheckOutView(LoginRequiredMixin, HasCustomerAccessPermission, FormView):
     """
     Creates order draft and redirects user to payment gateway.

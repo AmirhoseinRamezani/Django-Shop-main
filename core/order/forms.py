@@ -1,7 +1,9 @@
 from django import forms
 from django.utils import timezone
 from .models import UserAddressModel, CouponModel
+from django.core.exceptions import ValidationError
 
+from django.utils.translation import gettext_lazy as _
 
 class CheckOutForm(forms.Form):
     address_id = forms.IntegerField()
@@ -19,7 +21,7 @@ class CheckOutForm(forms.Form):
                 user=self.request.user
             )
         except UserAddressModel.DoesNotExist:
-            raise forms.ValidationError("آدرس معتبر نیست")
+            raise forms.ValidationError(_("Invalid address"))
 
     def clean_coupon(self):
         code = self.cleaned_data.get("coupon")
@@ -29,15 +31,15 @@ class CheckOutForm(forms.Form):
         try:
             coupon = CouponModel.objects.get(code=code)
         except CouponModel.DoesNotExist:
-            raise forms.ValidationError("کد تخفیف نامعتبر است")
+            raise forms.ValidationError(_("Invalid discount code"))
 
         if coupon.expiration_date and coupon.expiration_date < timezone.now():
-            raise forms.ValidationError("کد تخفیف منقضی شده است")
+            raise forms.ValidationError(_("Discount code expired"))
 
         if coupon.used_by.filter(id=self.request.user.id).exists():
-            raise forms.ValidationError("این کد قبلاً استفاده شده")
+            raise forms.ValidationError(_("This code has already been used"))
 
         if coupon.used_by.count() >= coupon.max_limit_usage:
-            raise forms.ValidationError("سقف استفاده از کد پر شده")
+            raise forms.ValidationError(_("Code usage limit reached"))
 
         return coupon

@@ -6,6 +6,8 @@ from order.models import OrderStatusType
 from order.events.order_event import OrderEventType
 # from order.services.events import record_order_event
 from order.services.state_machine import OrderStateMachine
+from django.utils.translation import gettext as _
+
 
 class RefundService:
 
@@ -13,11 +15,11 @@ class RefundService:
     @transaction.atomic
     def refund_order(order, *, admin_user):
         if not order.can_refund():
-            raise ValidationError("این سفارش قابل بازگشت وجه نیست")
+            raise ValidationError(_("This order is non-refundable"))
 
         payment = order.payment
         if not payment:
-            raise ValidationError("پرداختی برای این سفارش وجود ندارد")
+            raise ValidationError(_("There is no payment for this order"))
         
         # In real gateway: call refund API here
         payment.status = PaymentStatusType.failed

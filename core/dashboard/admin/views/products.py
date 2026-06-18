@@ -22,7 +22,7 @@ from django.shortcuts import redirect
 from django.contrib import messages
 from shop.models import ProductModel, ProductCategoryModel, ProductStatusType
 from django.core.exceptions import FieldError
-
+from django.utils.translation import gettext_lazy as _
 
 class AdminProductListView(HasAdminAccessPermission, LoginRequiredMixin, ListView):
     template_name = "dashboard/admin/products/product-list.html"
@@ -112,13 +112,13 @@ class AdminProductAddImageView( HasAdminAccessPermission, LoginRequiredMixin, Cr
             pk=self.kwargs.get('pk'))
         # handle successful form submission
         messages.success(
-            self.request, 'تصویر مورد نظر با موفقیت ثبت شد')
+            self.request, _('The desired image was successfully saved.'))
         return super().form_valid(form)
 
     def form_invalid(self, form):
         # handle unsuccessful form submission
         messages.error(
-            self.request, 'اشکالی در ارسال تصویر رخ داد لطفا مجدد امتحان نمایید')
+            self.request, _('There was an error sending the image. Please try again'))
         return redirect(reverse_lazy('dashboard:admin:product-edit', kwargs={'pk': self.kwargs.get('pk')}))
 
 
@@ -137,5 +137,5 @@ class AdminProductRemoveImageView( HasAdminAccessPermission, LoginRequiredMixin,
 
     def form_invalid(self, form):
         messages.error(
-            self.request, 'اشکالی در حذف تصویر رخ داد لطفا مجدد امتحان نمایید')
+            self.request, _('There was an error deleting the image, please try again'))
         return redirect(reverse_lazy('dashboard:admin:product-edit', kwargs={'pk': self.kwargs.get('pk')}))

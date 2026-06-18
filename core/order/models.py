@@ -1,19 +1,36 @@
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
+from datetime import timedelta
 from decimal import Decimal
-from django.core.exceptions import ValidationError
+from django.utils.translation import gettext_lazy as _
+
 
 class SaleType(models.TextChoices):
-    ONLINE = "ONLINE", "فروش آنلاین"
+    ONLINE = "ONLINE", _("Online")
 
 
 class OrderStatusType(models.IntegerChoices):
-    pending = 1, "در انتظار پرداخت"
-    success = 2, "موفق"
-    failed = 3, "ناموفق"
-    cancelled = 4, "لغو شده"
-    refunded = 5, "مرجوع شده"
+
+    # ---- Payment Phase ----
+    pending = 1, _("Pending Payment")
+    failed = 2, _("Payment Failed")
+
+    # ---- Paid & Processing ----
+    paid = 3, _("Paid")
+    processing = 4, _("Processing")
+
+    # ---- Logistics ----
+    shipped = 5, _("Shipped")
+    delivered = 6, _("Delivered")
+
+    # ---- Return Flow ----
+    return_requested = 7, _("Return Requested")
+    returned = 8, _("Returned")
+    refunded = 9, _("Refunded")
+
+    # ---- Terminal ----
+    cancelled = 10, _("Cancelled")
 
 class CouponModel(models.Model):
     """
@@ -140,6 +157,27 @@ class OrderModel(models.Model):
     created_date = models.DateTimeField(auto_now_add=True)
     expire_at = models.DateTimeField(db_index=True,help_text="Order expiration time for unpaid orders")
     
+    
+
+    # ----- Aging Helpers -----
+
+    def age(self):
+        return timezone.now() - self.created_date
+
+    def hours_since_creation(self):
+        return self.age().total_seconds() / 3600
+
+    def is_stuck_in_processing(self, max_hours=24):
+        return (
+            self.status == OrderStatusType.processing
+            and self.hours_since_creation() > max_hours
+        )
+
+    def is_shipment_delayed(self, max_hours=48):
+        return (
+            self.status == OrderStatusType.paid
+            and self.hours_since_creation() > max_hours
+        )
     # ------------------
     # Domain Logic
     # ------------------
@@ -168,7 +206,10 @@ class OrderModel(models.Model):
             }
         )
     def can_refund(self) -> bool:
-        return self.status == OrderStatusType.success
+        return self.status in {
+            OrderStatusType.paid,
+            OrderStatusType.returned,
+        }
 
     def get_price(self):
         """
@@ -208,6 +249,17 @@ class OrderModel(models.Model):
     def __str__(self):
         return f"Order #{self.id}"
 
+    @property
+    def is_paid(self) -> bool:
+        return self.status == OrderStatusType.paid
+
+    @property
+    def is_completed(self) -> bool:
+        return self.status in {
+            OrderStatusType.delivered,
+            OrderStatusType.refunded,
+            OrderStatusType.cancelled,
+        }
 
 class OrderItemModel(models.Model):
     order = models.ForeignKey(

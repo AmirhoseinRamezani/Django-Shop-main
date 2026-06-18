@@ -3,7 +3,7 @@ from django.contrib import messages
 from django.shortcuts import redirect
 
 from .forms import ContactForm, NewsletterForm
-
+from django.utils.translation import gettext_lazy as _
 
 class IndexView(TemplateView):
     """
@@ -39,14 +39,14 @@ class SendContactView(CreateView):
         form.save()
         messages.success(
             self.request,
-            "پیام شما با موفقیت ثبت شد و به‌زودی بررسی می‌شود.",
+            _("Your message has been successfully submitted and will be reviewed shortly."),
         )
         return redirect(self.request.META.get("HTTP_REFERER", "/"))
 
     def form_invalid(self, form):
         messages.error(
             self.request,
-            "ارسال پیام با خطا مواجه شد. لطفاً ورودی‌ها را بررسی کنید.",
+            _("An error occurred while sending the message. Please check your entries."),
         )
         return redirect(self.request.META.get("HTTP_REFERER", "/"))
 
@@ -63,13 +63,13 @@ class NewsletterView(CreateView):
         form.save()
         messages.success(
             self.request,
-            "عضویت شما در خبرنامه با موفقیت انجام شد 🎉",
+            _("Your subscription to the newsletter has been successful.🎉"),
         )
         return redirect("website:index")
 
     def form_invalid(self, form):
         messages.error(
             self.request,
-            "درخواست نامعتبر شناسایی شد.",
+            _("Invalid request detected."),
         )
         return redirect("website:index")

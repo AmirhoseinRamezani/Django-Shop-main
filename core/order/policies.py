@@ -4,7 +4,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from order.models import OrderStatusType
-
+from django.utils.translation import gettext_lazy as _
 class OrderPolicy:
     """
     Centralized order access rules.
@@ -53,10 +53,10 @@ class OrderPolicy:
     @staticmethod
     def can_pay(order):
         if order.status != OrderStatusType.pending:
-            raise ValidationError("این سفارش قابل پرداخت نیست")
+            raise ValidationError(_("This order is not payable"))
 
         if order.is_expired():
-            raise ValidationError("مهلت پرداخت این سفارش به پایان رسیده")
+            raise ValidationError(_("The payment deadline for this order has passed"))
 
         return True
 

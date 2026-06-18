@@ -96,11 +96,15 @@ class VerifyOTPAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        otp = EmailOTP.objects.filter(
+        otp = (EmailOTP.objects.filter(
             email=email,
             purpose=purpose_enum,
             is_consumed=False,
-        ).first()
+            expire_at__gt=timezone.now(),
+        )
+        .order_by("-created_date")
+        .first()
+        )
 
         if not otp:
             return Response({"detail": "Invalid OTP"}, status=400)

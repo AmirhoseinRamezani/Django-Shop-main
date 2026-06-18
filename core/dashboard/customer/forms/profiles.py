@@ -6,13 +6,12 @@ from django import forms
 from django.utils.translation import gettext_lazy as _
 from accounts.models import Profile
 
-
 class CustomerPasswordChangeForm(auth_forms.PasswordChangeForm):
     error_messages = {
         "password_incorrect": _(
-            "پسورد قبلی شما اشتباه وارد شده است، لطفا تصحیح نمایید."
+            "Your previous password was entered incorrectly, please correct it."
         ),
-        "password_mismatch": _("دو پسورد ورودی با همدیگر مطابقت ندارند"),
+        "password_mismatch": _("The two passwords entered do not match."),
     }
     
 

@@ -1,7 +1,7 @@
 # accounts/validators.py
 import re
 from django.core.exceptions import ValidationError
-
+from django.utils.translation import gettext_lazy as _
 
 def validate_iranian_cellphone_number(value: str):
     """
@@ -16,6 +16,6 @@ def validate_iranian_cellphone_number(value: str):
 
     if not re.match(pattern, value):
         raise ValidationError(
-            "شماره موبایل وارد شده معتبر نیست.",
+            _("The mobile number entered is not valid."),
             code="invalid_phone_number"
         )

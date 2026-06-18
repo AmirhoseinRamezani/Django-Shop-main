@@ -6,7 +6,6 @@ from accounts.models.device_session import DeviceSession
 
 # User = get_user_model()
 
-
 class JWTAuthenticationMiddleware:
     
     def __init__(self, get_response):

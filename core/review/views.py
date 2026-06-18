@@ -6,6 +6,7 @@ from django.contrib import messages
 from .forms import SubmitReviewForm
 from .models import ReviewModel
 
+from django.utils.translation import gettext_lazy as _
 
 class SubmitReviewView(LoginRequiredMixin, CreateView):
     http_method_names = ["post"]
@@ -22,7 +23,7 @@ class SubmitReviewView(LoginRequiredMixin, CreateView):
         review = form.save()
         messages.success(
             self.request,
-            "دیدگاه شما ثبت شد و پس از تایید نمایش داده خواهد شد"
+            _("Your comment has been submitted and will be displayed after approval")
         )
         return redirect(
             reverse_lazy(

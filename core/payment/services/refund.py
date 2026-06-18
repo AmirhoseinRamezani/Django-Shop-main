@@ -1,5 +1,4 @@
 from django.db import transaction
-from django.core.exceptions import ValidationError
 
 from payment.models import PaymentModel, PaymentStatusType
 from payment.policies import PaymentPolicy

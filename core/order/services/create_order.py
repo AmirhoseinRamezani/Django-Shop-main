@@ -7,6 +7,7 @@ from django.db.models import F
 
 from order.models import OrderModel, OrderItemModel, OrderStatusType
 from shop.models import ProductModel
+from django.utils.translation import gettext as _
 
 
 
@@ -37,7 +38,7 @@ def create_order(user, product_id, quantity=1):
         )
 
         if not product:
-            raise OrderCreationError("Product is no longer available")
+            raise OrderCreationError(_("Product is no longer available"))
 
         # 1️⃣ کسر موجودی (رزرو)
         product.stock = F("stock") - quantity

@@ -7,6 +7,7 @@ from order.models import OrderModel, OrderStatusType
 from payment.models import PaymentModel, PaymentStatusType
 from order.events.order_event import OrderEventType
 from order.services.events import record_order_event
+from django.utils.translation import gettext as _
 
 @transaction.atomic
 def confirm_order_payment(order_id: int) -> OrderModel:  #*, payment
@@ -38,11 +39,11 @@ def confirm_order_payment(order_id: int) -> OrderModel:  #*, payment
     )
 
     if not payment:
-        raise ValidationError("No successful payment found")
+        raise ValidationError(_("No successful payment found"))
 
     # Idempotency
     if payment.is_consumed:
-        raise ValidationError("Payment already consumed")
+        raise ValidationError(_("Payment already consumed"))
 
     # Finalize
     payment.is_consumed = True
@@ -91,6 +92,6 @@ def _confirm_order_payment(order_id: int) -> OrderModel:
     )
 
     if not payment:
-        raise ValidationError("No successful payment found")
+        raise ValidationError(_("No successful payment found"))
 
     return confirm_order_payment(order_id=order_id)

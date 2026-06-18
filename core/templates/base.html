@@ -1,6 +1,10 @@
 {% load static %}
+{% load i18n %}
+{% get_current_language as LANGUAGE_CODE %}
+
 <!DOCTYPE html>
-<html lang="fa" dir="rtl">
+<html lang="{{ LANGUAGE_CODE }}"
+    dir="{% if LANGUAGE_CODE == 'fa' %}rtl{% else %}ltr{% endif %}">
 
 <head>
     <!-- Required Meta Tags Always Come First -->
@@ -25,7 +29,7 @@
     <link rel="stylesheet" href="{% static 'vendor/toastify/toastify.css' %}">
     <link rel="stylesheet" href="{% static 'css/styles.css' %}">
     {% block extra_css %} {% endblock extra_css %}
-
+    
     {% block extra_css_no_compress %} {% endblock extra_css_no_compress %}
 </head>
 
@@ -37,6 +41,34 @@
         "fixMoment": 500,
         "fixEffect": "slide"
       }'>
+        <form action="{% url 'set_language' %}" method="post">
+            {% csrf_token %}
+
+            <input
+                type="hidden"
+                name="next"
+                value="{{ request.path }}">
+
+            <select name="language">
+                <option
+                    value="fa"
+                    {% if LANGUAGE_CODE == 'fa' %}selected{% endif %}
+                >
+                    فارسی
+                </option>
+
+                <option
+                    value="en"
+                    {% if LANGUAGE_CODE == 'en' %}selected{% endif %}
+                >
+                    English
+                </option>
+            </select>
+
+            <button type="submit">
+                {% trans "Change Language" %}
+            </button>
+        </form>
         <div class="container">
             <nav class="js-mega-menu navbar-nav-wrap">
                 <!-- Default Logo -->
@@ -62,18 +94,18 @@
                 <div class="collapse navbar-collapse" id="navbarNavDropdown">
                     <ul class="navbar-nav">
                         <li class="nav-item">
-                            <a class="nav-link  {% if request.resolver_match.view_name  == 'website:index' %} active {% endif %}" href="{% url 'website:index' %}">صفحه اصلی</a>
+                            <a class="nav-link  {% if request.resolver_match.view_name  == 'website:index' %} active {% endif %}" href="{% url 'website:index' %}">{% trans "Home" %}</a>
                         </li>
 
 
                         <li class="nav-item">
-                            <a class="nav-link {% if request.resolver_match.view_name  == 'shop:product-grid' %} active {% endif %}" href="{% url 'shop:product-grid' %}">لیست محصولات</a>
+                            <a class="nav-link {% if request.resolver_match.view_name  == 'shop:product-grid' %} active {% endif %}" href="{% url 'shop:product-grid' %}">{% trans "Product List" %}</a>
                         </li>
                         <li class="nav-item">
-                            <a class="nav-link {% if request.resolver_match.view_name  == 'website:about' %} active {% endif %}" href="{% url 'website:about' %}">درباره ما</a>
+                            <a class="nav-link {% if request.resolver_match.view_name  == 'website:about' %} active {% endif %}" href="{% url 'website:about' %}">{% trans "About Us" %}</a>
                         </li>
                         <li class="nav-item">
-                            <a class="nav-link {% if request.resolver_match.view_name  == 'website:contact' %} active {% endif %}" href="{% url 'website:contact' %}">ارتباط با ما</a>
+                            <a class="nav-link {% if request.resolver_match.view_name  == 'website:contact' %} active {% endif %}" href="{% url 'website:contact' %}">{% trans "Contact Us" %}</a>
                         </li>
 
 
@@ -104,18 +136,18 @@
                             <button class="btn btn-ghost-secondary btn-icon" id="dropdownMenuLink"
                                 data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
                                 <span class="avatar avatar-sm avatar-circle">
-                                    <img class="avatar-img" src="{{request.user.user_profile.image.url}}"
+                                    <img class="avatar-img" src="{{request.user.profile.image.url}}"
                                         alt="Image Description">
                                 </span>
                             </button>
 
                             <div class="dropdown-menu" aria-labelledby="dropdownMenuLink">
                                 {% comment %} <a class="dropdown-item" href="{% url 'dashboard:home' %}">پروفایل</a> {% endcomment %}
-                                <a class="dropdown-item" href="{% url 'accounts:logout' %}">خروج</a>
+                                <a class="dropdown-item" href="{% url 'accounts:logout' %}">{% trans "Exit" %}</a>
                             </div>
 
                             {% else %}
-                            <a class="btn btn-primary btn-transition" href="{% url 'accounts:login' %}">ورود</a>
+                            <a class="btn btn-primary btn-transition" href="{% url 'accounts:login' %}">{% trans "Login" %}</a>
                             {% endif %}
                         </li>
                     </ul>
@@ -143,87 +175,93 @@
                         </a>
                         <!-- End Logo -->
 
-                        <p class="text-muted small mb-0">&copy; Maryam Farajian 2023 Front RTL</p>
+                        <p class="text-muted small mb-0">&copy; AmirHosein Ramezani 2026 Front RTL</p>
                     </div>
                 </div>
 
                 <div class="col-6 col-md-4 col-lg-3 ms-lg-auto mb-5 mb-lg-0">
-                    <h5>حساب</h5>
+                    <h5>{% trans "Account" %}</h5>
 
                     <!-- List -->
                     <ul class="list-unstyled list-py-1">
-                        <li><a class="link-sm text-secondary" href="#">سفارش دادن</a></li>
-                        <li><a class="link-sm text-secondary" href="#">گزینه های حمل و نقل</a></li>
-                        <li><a class="link-sm text-secondary" href="#">پیگیری یک بسته</a></li>
-                        <li><a class="link-sm text-secondary" href="#">در دسترس بودن کشور</a></li>
+                        <li><a class="link-sm text-secondary" href="#">{% trans "Ordering" %}</a></li>
+                        <li><a class="link-sm text-secondary" href="#">{% trans "Shipping options" %}</a></li>
+                        <li><a class="link-sm text-secondary" href="#">{% trans "Track a Package" %}</a></li>
+                        <li><a class="link-sm text-secondary" href="#">{% trans "Country Availability" %}</a></li>
                     </ul>
                     <!-- End List -->
                 </div>
                 <!-- End Col -->
 
                 <div class="col-6 col-md-4 col-lg-3 mb-5 mb-lg-0">
-                    <h5>شرکت</h5>
+                    <h5>{% trans "Company" %}</h5>
 
                     <!-- List -->
                     <ul class="list-unstyled list-py-1">
-                        <li><a class="link-sm text-secondary" href="#">تامین مالی</a></li>
-                        <li><a class="link-sm text-secondary" href="#">بازیافت</a></li>
-                        <li><a class="link-sm text-secondary" href="#">سیاست بازگشت</a></li>
+                        <li><a class="link-sm text-secondary" href="#">{% trans "Financing" %}</a></li>
+                        <li><a class="link-sm text-secondary" href="#">{% trans "Recycling" %}</a></li>
+                        <li><a class="link-sm text-secondary" href="#">{% trans "Return Policy" %}</a></li>
                     </ul>
                     <!-- End List -->
                 </div>
                 <!-- End Col -->
 
                 <div class="col-md-4 col-lg-2 mb-5 mb-lg-0">
-                    <h5 class="mb-3">منابع</h5>
+                    <h5 class="mb-3">{% trans "Resources" %}</h5>
 
                     <!-- List -->
                     <ul class="list-unstyled list-py-1">
                         <li><a class="link-sm link-secondary" href="#"><i class="bi-question-circle-fill me-1"></i>
-                                کمک</a></li>
-                        <li><a class="link-sm link-secondary" href="#"><i class="bi-person-circle me-1"></i> حساب
-                                شما</a></li>
+                                {% trans "Help" %}</a></li>
+                        <li><a class="link-sm link-secondary" href="#"><i class="bi-person-circle me-1"></i>{% trans "Your Account" %}</a></li>
                     </ul>
                     <!-- End List -->
 
                     <!-- Button Group -->
-                    <div class="btn-group">
-                        <button type="button" class="btn btn-white btn-sm dropdown-toggle" id="footerSelectLanguage"
-                            data-bs-toggle="dropdown" aria-expanded="false" data-bs-dropdown-animation>
-                            <span class="d-flex align-items-center">
-                                <img class="avatar avatar-xss avatar-circle ms-2"
-                                    src="{% static 'vendor/flag-icon-css/flags/1x1/us.svg' %}" alt="Image description"
-                                    width="16" />
-                                <span>انگلیسی (US)</span>
-                            </span>
-                        </button>
+                    <div class="dropdown-menu"
+                        aria-labelledby="footerSelectLanguage">
 
-                        <div class="dropdown-menu" aria-labelledby="footerSelectLanguage">
-                            <a class="dropdown-item d-flex align-items-center active" href="#">
-                                <img class="avatar avatar-xss avatar-circle ms-2"
-                                    src="{% static 'vendor/flag-icon-css/flags/1x1/us.svg' %}" alt="Image description"
-                                    width="16" />
-                                <span>انگلیسی</span>
-                            </a>
-                            <a class="dropdown-item d-flex align-items-center" href="#">
-                                <img class="avatar avatar-xss avatar-circle ms-2"
-                                    src="{% static 'vendor/flag-icon-css/flags/1x1/de.svg' %}" alt="Image description"
-                                    width="16" />
-                                <span>آلمانی</span>
-                            </a>
-                            <a class="dropdown-item d-flex align-items-center" href="#">
-                                <img class="avatar avatar-xss avatar-circle ms-2"
-                                    src="{% static 'vendor/flag-icon-css/flags/1x1/es.svg' %}" alt="Image description"
-                                    width="16" />
-                                <span>اسپانیایی</span>
-                            </a>
-                            <a class="dropdown-item d-flex align-items-center" href="#">
-                                <img class="avatar avatar-xss avatar-circle ms-2"
-                                    src="{% static 'vendor/flag-icon-css/flags/1x1/cn.svg' %}" alt="Image description"
-                                    width="16" />
-                                <span>چینی</span>
-                            </a>
-                        </div>
+                        <form action="{% url 'set_language' %}"
+                            method="post">
+
+                            {% csrf_token %}
+
+                            <input type="hidden"
+                                name="next"
+                                value="{{ request.get_full_path }}">
+
+                            <button
+                                type="submit"
+                                name="language"
+                                value="en"
+                                class="dropdown-item d-flex align-items-center {% if LANGUAGE_CODE == 'en' %}active{% endif %}">
+                                
+                                <img
+                                    class="avatar avatar-xss avatar-circle ms-2"
+                                    src="{% static 'vendor/flag-icon-css/flags/1x1/us.svg' %}"
+                                    width="16">
+
+                                <span>English</span>
+
+                            </button>
+
+                            <button
+                                type="submit"
+                                name="language"
+                                value="fa"
+                                class="dropdown-item d-flex align-items-center {% if LANGUAGE_CODE == 'fa' %}active{% endif %}">
+                                
+                                <img
+                                    class="avatar avatar-xss avatar-circle ms-2"
+                                    src="{% static 'vendor/flag-icon-css/flags/1x1/ir.svg' %}"
+                                    width="16">
+
+                                <span>فارسی</span>
+
+                            </button>
+
+                        </form>
+
                     </div>
                     <!-- End Button Group -->
                 </div>
@@ -268,13 +306,13 @@
                     <!-- List -->
                     <ul class="list-inline list-separator">
                         <li class="list-inline-item">
-                            <a class="link-sm link-secondary" href="/page-privacy.html">حریم خصوصی و خط مشی</a>
+                            <a class="link-sm link-secondary" href="/page-privacy.html">{% trans "Privacy & Policies" %}</a>
                         </li>
                         <li class="list-inline-item">
-                            <a class="link-sm link-secondary" href="/page-terms.html">مقررات و شرایط</a>
+                            <a class="link-sm link-secondary" href="/page-terms.html">{% trans "Terms & Conditions" %}</a>
                         </li>
                         <li class="list-inline-item">
-                            <a class="link-sm link-secondary" href="/#">مشاغل</a>
+                            <a class="link-sm link-secondary" href="/#">{% trans "Careers" %}</a>
                         </li>
                     </ul>
                     <!-- End List -->
@@ -324,7 +362,7 @@
                                     <input type="text" class="form-control form-control-lg" placeholder="جستجو محصولات"
                                         name="q" aria-label="جستجو محصولات">
                                 </div>
-                                <button type="submit" class="btn btn-primary btn-lg">جستجو کردن</button>
+                                <button type="submit" class="btn btn-primary btn-lg">{% trans "Search" %}</button>
                             </div>
                             <!-- End Input Card -->
                         </form>
@@ -363,7 +401,7 @@
                             <div class="d-grid py-3">
                                 <div class="text-body py-1">
                                     <div class="d-flex justify-content-start align-items-center">
-                                        <span class="h6">تعداد:</span>
+                                        <span class="h6">{% trans "Quantity:" %}</span>
                                         <div class="quantity">
                                             <div class="input-group input-group-sm quantity-selector px-5">
                                                 <button type="button" class="btn btn-sm btn-icon btn-outline-primary">
@@ -380,7 +418,7 @@
                                 </div>
                                 <div class="text-body py-1">
                                     <div class="d-flex justify-content-start  align-items-center">
-                                        <span class="h6">قیمت:</span>
+                                        <span class="h6">{% trans "Price:" %}</span>
                                         <span class="px-5">150000 تومان</span>
                                     </div>
                                 </div>
@@ -389,7 +427,7 @@
                     </div>
                 </div>
                 <!-- End Product -->
-                <!-- Product -->
+                {% comment %} <!-- Product -->
                 <div class="border-bottom  mb-4">
                     <div class="d-flex">
                         <div class="flex-shrink-0">
@@ -430,13 +468,13 @@
                         </div>
                     </div>
                 </div>
-                <!-- End Product -->
+                <!-- End Product --> {% endcomment %}
 
             </div>
 
             <div class="d-grid">
                 <p class="text-center">قیمت نهایی: 35000 تومان</p>
-                <a class="btn btn-primary btn-lg" href="/cart.html">سبد خرید</a>
+                <a class="btn btn-primary btn-lg" href="/cart.html">{% trans "Shopping Cart" %}</a>
             </div>
 
         </div>

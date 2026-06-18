@@ -20,6 +20,7 @@ from order.models import (
     OrderStatusType,
 )
 from order.policies import OrderPolicy
+from django.utils.translation import gettext as _
 
 
 class OrderService:
@@ -34,10 +35,10 @@ class OrderService:
         OrderPolicy.can_create_order(user)
 
         if not cart.cart_items.exists():
-            raise ValidationError("سبد خرید خالی است")
+            raise ValidationError(_("Your shopping cart is empty"))
 
         if coupon and not coupon.is_valid():
-            raise ValidationError("کد تخفیف معتبر نیست")
+            raise ValidationError(_("Discount code is not valid"))
 
         total_price = Decimal("0")
         
@@ -61,15 +62,15 @@ class OrderService:
 
             # وضعیت فروش
             if product.status != ProductStatusType.PUBLISH:
-                raise ValidationError(
-                    f"محصول «{product.title}» قابل فروش نیست"
-                )
+                raise ValidationError(_(
+                    f"Product «{product.title}» is not for sale"
+                ))
 
             # موجودی
             if product.stock < item.quantity:
-                raise ValidationError(
-                    f"موجودی محصول «{product.title}» کافی نیست"
-                )
+                raise ValidationError(_(
+                    f"Insufficient inventory for product «{product.title}»"
+                ))
 
             total_price += item.quantity * product.final_price
         # for item in cart.cart_items.select_related("product"):

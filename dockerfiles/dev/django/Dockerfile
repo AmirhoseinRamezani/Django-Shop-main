@@ -15,6 +15,7 @@ RUN apt-get update \
         curl \
         build-essential \
         libpq-dev \
+        gettext\
     && rm -rf /var/lib/apt/lists/*
 
 # --- pip network reliability config ---

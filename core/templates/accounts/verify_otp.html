@@ -1,14 +1,15 @@
 {% extends 'base.html' %}
+{% load i18n %}
 
-{% block title %}تایید کد{% endblock title %}
+{% block title %}{% trans "Code verification" %}{% endblock title %}
 
 {% block content %}
 <div class="container content-space-3 content-space-t-lg-4 content-space-b-lg-3">
     <div class="flex-grow-1 mx-auto" style="max-width: 28rem;">
 
         <div class="text-center mb-5">
-            <h1 class="h2">تایید کد</h1>
-            <p class="text-muted text-center">کد ارسال‌شده به ایمیل را وارد کنید</p>
+            <h1 class="h2">{% trans "Code verification" %}</h1>
+            <p class="text-muted text-center">{% trans "Enter the code sent to your email." %}</p>
         </div>
 
         <form method="POST" action="{% url 'accounts:verify-otp' %}">
@@ -23,7 +24,7 @@
             </div> {% endcomment %}
 
             <div class="mb-4">
-                <label class="form-label">کد تایید</label>
+                <label class="form-label">{% trans "Verification code" %}</label>
                 <input type="text"
                        name="code"
                        maxlength="4"
@@ -34,7 +35,7 @@
 
             <div class="d-grid">
                 <button type="submit" class="btn btn-primary btn-lg">
-                    تایید و ورود
+                    {% trans "Confirmation and login" %}
                 </button>
             </div>
         </form>

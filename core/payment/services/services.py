@@ -10,6 +10,8 @@ from payment.policies import PaymentPolicy
 from order.events.order_event import OrderEvent
 from order.services.events import record_order_event
 
+from django.utils.translation import gettext_lazy as _
+
 class PaymentService:
 
     @staticmethod
@@ -27,7 +29,7 @@ class PaymentService:
 
         # prevent duplicate pending payments
         if order.payments.filter(status=PaymentStatusType.pending).exists():
-            raise ValidationError("Pending payment already exists")
+            raise ValidationError(_("Pending payment already exists"))
 
         zarinpal = ZarinPalSandbox()
         response = zarinpal.payment_request(order.get_price())

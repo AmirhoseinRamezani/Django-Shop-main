@@ -6,7 +6,7 @@ from datetime import  timedelta
 from django.conf import settings
 from accounts.models.refresh_token import RefreshToken
 from django.core.exceptions import ValidationError
-
+from django.utils.translation import gettext_lazy as _
 ALGORITHM = "HS256"
 ACCESS_TOKEN_LIFETIME = timedelta(minutes=15)
 REFRESH_TOKEN_LIFETIME = timedelta(days=7)
@@ -94,7 +94,7 @@ def decode_token(token: str) -> dict:
         elif token_type == "refresh":
             secret = settings.JWT_REFRESH_SECRET
         else:
-            raise ValidationError("Invalid token type")
+            raise ValidationError(_("Invalid token type"))
 
         return jwt.decode(
             token,
@@ -103,10 +103,10 @@ def decode_token(token: str) -> dict:
         )
 
     except jwt.ExpiredSignatureError:
-        raise ValidationError("Token expired")
+        raise ValidationError(_("Token expired"))
 
     except jwt.InvalidTokenError:
-        raise ValidationError("Invalid token")
+        raise ValidationError(_("Invalid token"))
 
 
 # ------------------------

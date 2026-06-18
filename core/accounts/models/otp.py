@@ -7,7 +7,6 @@ from django.core.exceptions import ValidationError
 from django.contrib.auth.hashers import check_password
 from django.contrib.auth.hashers import make_password
 from events.models import OutboxEvent, OutboxStatus
-from django.contrib.auth.hashers import make_password
 
 class OTPPurpose(models.TextChoices):
     SIGNUP = "signup", "Signup"
@@ -44,12 +43,12 @@ class EmailOTP(models.Model):
         
     def save(self, *args, **kwargs):
         if not self.expire_at:
-            from django.utils import timezone
-            from datetime import timedelta
+            # from django.utils import timezone
+            # from datetime import timedelta
             self.expire_at = timezone.now() + timedelta(minutes=2)
 
         if self._raw_code:
-            from django.contrib.auth.hashers import make_password
+            # from django.contrib.auth.hashers import make_password
             self.code_hash = make_password(self._raw_code)
 
         is_new = self.pk is None

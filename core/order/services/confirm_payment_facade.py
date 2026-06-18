@@ -3,7 +3,7 @@ from django.core.exceptions import ValidationError
 from payment.models import PaymentModel
 
 from .confirm_payment import confirm_order_payment
-
+from django.utils.translation import gettext as _
 
 def confirm_order_payment_by_order_id(order_id: int):
     try:
@@ -13,7 +13,7 @@ def confirm_order_payment_by_order_id(order_id: int):
             .latest("created_date")
         )
     except PaymentModel.DoesNotExist:
-        raise ValueError("No payment found for this order")
+        raise ValueError(_("No payment found for this order"))
 
     try:
         return confirm_order_payment(payment=payment)

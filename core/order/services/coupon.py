@@ -1,7 +1,7 @@
 # order/services/coupon.py
 from django.core.exceptions import ValidationError
 from order.models import CouponModel
-
+from django.utils.translation import gettext as _
 
 class CouponService:
     """
@@ -13,9 +13,9 @@ class CouponService:
         try:
             coupon = CouponModel.objects.get(code__iexact=code.strip())
         except CouponModel.DoesNotExist:
-            raise ValidationError("کد تخفیف معتبر نیست")
+            raise ValidationError(_("Discount code is not valid"))
 
         if not coupon.is_valid():
-            raise ValidationError("کد تخفیف منقضی یا غیر فعال است")
+            raise ValidationError(_("The discount code is expired or inactive"))
 
         return coupon

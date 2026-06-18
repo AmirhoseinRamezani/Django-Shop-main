@@ -13,6 +13,7 @@ from accounts.services.otp_service import generate_or_reuse_otp
 
 from accounts.api.serializers import RequestOTPSerializer
 from accounts.exceptions import OTPThrottleException
+
 # from accounts.services.throttle import (
 #     check_and_increment_otp_throttle,
 #     OTPThrottleException,
@@ -49,6 +50,6 @@ class RequestOTPAPIView (APIView):
             )
         
         return Response(
-            {"detail": "اگر ایمیل معتبر باشد، کد ارسال خواهد شد."},
+            {"detail": "If the email is valid, the code will be sent."},
             status=status.HTTP_200_OK,
         )

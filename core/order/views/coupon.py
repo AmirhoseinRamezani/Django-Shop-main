@@ -11,7 +11,7 @@ from order.services.coupon import CouponService
 from cart.cart import CartSession
 from cart.models import CartModel
 
-
+from django.utils.translation import gettext_lazy as _
 class ApplyCouponView(View):
     """
     Validate coupon and store it in session (NO consumption here)
@@ -22,7 +22,7 @@ class ApplyCouponView(View):
 
         if not code:
             return JsonResponse(
-                {"message": "کد تخفیف وارد نشده است"},
+                {"message": _("Discount code not entered")},
                 status=400
             )
 
@@ -50,7 +50,7 @@ class ApplyCouponView(View):
         total_tax = int(discounted_price * 0.09)
 
         return JsonResponse({
-            "message": "کد تخفیف اعمال شد",
+            "message": _("Discount code applied"),
             "total_price": discounted_price,
             "total_tax": total_tax
         })

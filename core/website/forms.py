@@ -1,6 +1,8 @@
 from django import forms
 from .models import Contact, Newsletter
+from django.core.exceptions import ValidationError
 
+from django.utils.translation import gettext_lazy as _
 
 class ContactForm(forms.ModelForm):
     """
@@ -13,13 +15,13 @@ class ContactForm(forms.ModelForm):
 
         error_messages = {
             "full_name": {
-                "required": "نام و نام خانوادگی الزامی است",
+                "required": _("First and last name are required"),
             },
             "email": {
-                "invalid": "ایمیل وارد شده معتبر نیست",
+                "invalid": _("The email entered is not valid"),
             },
             "content": {
-                "required": "متن پیام نمی‌تواند خالی باشد",
+                "required": _("Message text cannot be empty"),
             },
         }
 
@@ -42,7 +44,7 @@ class NewsletterForm(forms.ModelForm):
         If this field is filled, it's almost certainly a bot.
         """
         if self.cleaned_data.get("first_name"):
-            raise forms.ValidationError("Invalid request.")
+            raise forms.ValidationError(_("Invalid request."))
         return self.cleaned_data["first_name"]
 
     def save(self, commit=True):

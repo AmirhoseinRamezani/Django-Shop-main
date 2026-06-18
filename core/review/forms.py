@@ -1,6 +1,9 @@
 from django import forms
 from .models import ReviewModel
 from shop.models import ProductModel, ProductStatusType
+from django.core.exceptions import ValidationError
+from django.utils.translation import gettext_lazy as _
+
 
 
 class SubmitReviewForm(forms.ModelForm):
@@ -22,9 +25,9 @@ class SubmitReviewForm(forms.ModelForm):
             id=product.id,
             status=ProductStatusType.publish.value
         ).exists():
-            raise forms.ValidationError("این محصول قابل ثبت نظر نیست")
+            raise forms.ValidationError(_("This product cannot be commented on"))
 
         if ReviewModel.objects.filter(user=user, product=product).exists():
-            raise forms.ValidationError("شما قبلاً برای این محصول نظر ثبت کرده‌اید")
+            raise forms.ValidationError(_("You have already commented on this product"))
 
         return cleaned_data

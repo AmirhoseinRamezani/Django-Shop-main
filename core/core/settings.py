@@ -69,6 +69,7 @@ MIDDLEWARE = [
     
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
+    'django.middleware.locale.LocaleMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
@@ -149,13 +150,25 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 # https://docs.djangoproject.com/en/4.2/topics/i18n/
 
-LANGUAGE_CODE = 'en-us'
+
+LANGUAGE_CODE = 'fa'
+
+USE_I18N = True
+# USE_I10N = True
+USE_TZ = True
+
+LANGUAGES = [
+    ("fa", "Persian"),
+    ("en", "English"),
+]
+
+LOCALE_PATHS = [
+    BASE_DIR / "locale",
+]
 
 TIME_ZONE = config("TIME_ZONE",default="UTC")
 
-USE_I18N = True
 
-USE_TZ = True
 
 
 # Static files (CSS, JavaScript, Images)
@@ -210,7 +223,12 @@ if SHOW_DEBUGGER_TOOLBAR:
         "10.0.2.2",
     ]
 
-SESSION_IDLE_TIMEOUT_SECONDS = 1800  # 30 minutes
+# SESSION_IDLE_TIMEOUT_SECONDS = 1800  # 30 minutes
+SESSION_IDLE_TIMEOUT_SECONDS = config(
+    "SESSION_IDLE_TIMEOUT_SECONDS",
+    cast=int,
+    default=1800
+)
 AUTH_LOG_ENABLED = True
     
 # accounts model settings

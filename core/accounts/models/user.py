@@ -102,7 +102,7 @@ class Profile(models.Model):
 
     def get_fullname(self):
         full_name = f"{self.first_name} {self.last_name}".strip()
-        return full_name or _("کاربر جدید")
+        return full_name or _("New User")
 
     def __str__(self):
         return self.get_fullname()

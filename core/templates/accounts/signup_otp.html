@@ -1,21 +1,22 @@
 {% extends 'base.html' %}
+{% load i18n %}
 
-{% block title %}ثبت‌نام{% endblock title %}
+{% block title %}{% trans "Register" %}{% endblock title %}
 
 {% block content %}
 <div class="container content-space-3 content-space-t-lg-4 content-space-b-lg-3">
     <div class="flex-grow-1 mx-auto" style="max-width: 28rem;">
 
         <div class="text-center mb-5">
-            <h1 class="h2">ثبت‌نام</h1>
-            <p>کد تایید به ایمیل شما ارسال می‌شود</p>
+            <h1 class="h2">{% trans "Register" %}</h1>
+            <p>{% trans "A verification code will be sent to your email." %}</p>
         </div>
 
         <form method="POST" action="{% url 'accounts:signup' %}">
             {% csrf_token %}
 
             <div class="mb-4">
-                <label class="form-label">ایمیل</label>
+                <label class="form-label">{% trans "Email" %}</label>
                 <input type="email"
                        name="email"
                        class="form-control form-control-lg text-center"
@@ -25,13 +26,13 @@
 
             <div class="d-grid">
                 <button type="submit" class="btn btn-primary btn-lg">
-                    ارسال کد تایید
+                    {% trans "Send verification code" %}
                 </button>
             </div>
 
             <div class="text-center mt-4">
                 <a class="link" href="{% url 'accounts:login' %}">
-                    بازگشت به ورود
+                    {% trans "Return to login" %}
                 </a>
             </div>
         </form>

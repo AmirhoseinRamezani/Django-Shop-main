@@ -6,9 +6,9 @@ from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-
 from accounts.services.jwt import decode_token
 from accounts.models.device_session import DeviceSession
+from django.utils.translation import gettext_lazy as _
 
 User = get_user_model()
 
@@ -22,23 +22,23 @@ class JWTAuthentication(BaseAuthentication):
             return None
 
         if not header.startswith("Bearer "):
-            raise AuthenticationFailed("Invalid authorization header")
+            raise AuthenticationFailed(_("Invalid authorization header"))
 
         token = header.split(" ", 1)[1]
 
         try:
             payload = decode_token(token)
         except ValidationError:
-            raise AuthenticationFailed("Invalid or expired token")
+            raise AuthenticationFailed(_("Invalid or expired token"))
 
         if payload.get("type") != "access":
-            raise AuthenticationFailed("Invalid token type")
+            raise AuthenticationFailed(_("Invalid token type"))
 
         user_id = payload.get("user_id")
         session_id = payload.get("session_id")
 
         if not user_id or not session_id:
-            raise AuthenticationFailed("Invalid token payload")
+            raise AuthenticationFailed(_("Invalid token payload"))
 
         session = (
             DeviceSession.objects
@@ -52,7 +52,7 @@ class JWTAuthentication(BaseAuthentication):
         )
 
         if not session:
-            raise AuthenticationFailed("Invalid session")
+            raise AuthenticationFailed(_("Invalid session"))
 
         # Idle timeout check
         if session.last_seen:
@@ -60,7 +60,7 @@ class JWTAuthentication(BaseAuthentication):
             if delta.total_seconds() > settings.SESSION_IDLE_TIMEOUT_SECONDS:
                 session.is_active = False
                 session.save(update_fields=["is_active"])
-                raise AuthenticationFailed("Session expired")
+                raise AuthenticationFailed(_("Session expired"))
             
         # update last_seen
         session.last_seen = timezone.now()

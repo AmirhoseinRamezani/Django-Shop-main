@@ -14,6 +14,7 @@ from order.services.refund import RefundService
 from order.policies import OrderPolicy
 from django.utils.timezone import now
 
+from django.utils.translation import gettext_lazy as _
 
 
 class AdminOrderListView(HasAdminAccessPermission, LoginRequiredMixin, ListView):
@@ -122,7 +123,7 @@ class AdminOrderRefundView(
 
         RefundService.refund_order(order=order, admin_user=request.user)
 
-        messages.success(request, "سفارش با موفقیت مرجوع شد")
+        messages.success(request, _("Order successfully returned."))
         return redirect(
             reverse("dashboard_admin:order-detail", kwargs={"pk": pk})
         )

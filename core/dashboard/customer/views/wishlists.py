@@ -12,7 +12,7 @@ from django.contrib import messages
 from django.core.exceptions import FieldError
 from shop.models import WishlistProductModel
 
-
+from django.utils.translation import gettext_lazy as _
 class CustomerWishlistListView(LoginRequiredMixin, HasCustomerAccessPermission, ListView):
     template_name = "dashboard/customer/wishlists/wishlist-list.html"
     paginate_by = 5
@@ -40,7 +40,7 @@ class CustomerWishlistListView(LoginRequiredMixin, HasCustomerAccessPermission, 
 class CustomerWishlistDeleteView(LoginRequiredMixin, HasCustomerAccessPermission, SuccessMessageMixin, DeleteView):
     http_method_names = ["post"]
     success_url = reverse_lazy('dashboard:customer:wishlist-list')
-    success_message = "محصول با موفقیت از لیست حذف شد"
+    success_message = _("Product successfully removed from list")
 
     def get_queryset(self):
         return WishlistProductModel.objects.filter(user=self.request.user)

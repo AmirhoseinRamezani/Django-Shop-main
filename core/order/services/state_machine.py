@@ -2,53 +2,83 @@
 from django.db import transaction
 from django.core.exceptions import ValidationError
 from django.db.models import F
-from django.utils import timezone
 
 from order.models import OrderStatusType
 from order.events.order_event import OrderEventType
 from order.services.events import record_order_event
 from shop.models import ProductModel
+from django.utils.translation import gettext as _
 
 
 class OrderStateMachine:
 
     TRANSITIONS = {
+
+        # Payment phase
         OrderStatusType.pending: {
-            OrderStatusType.success,
+            OrderStatusType.paid,
             OrderStatusType.failed,
             OrderStatusType.cancelled,
         },
+
         OrderStatusType.failed: {
             OrderStatusType.pending,
             OrderStatusType.cancelled,
         },
-        OrderStatusType.success: {
+
+        # Paid flow
+        OrderStatusType.paid: {
+            OrderStatusType.processing,
             OrderStatusType.refunded,
         },
-        OrderStatusType.cancelled: set(),
+
+        OrderStatusType.processing: {
+            OrderStatusType.shipped,
+            OrderStatusType.cancelled,
+        },
+
+        # Shipping
+        OrderStatusType.shipped: {
+            OrderStatusType.delivered,
+            OrderStatusType.return_requested,
+        },
+
+        OrderStatusType.delivered: {
+            OrderStatusType.return_requested,
+        },
+
+        # Return
+        OrderStatusType.return_requested: {
+            OrderStatusType.returned,
+        },
+
+        OrderStatusType.returned: {
+            OrderStatusType.refunded,
+        },
+
+        # Terminal
         OrderStatusType.refunded: set(),
+        OrderStatusType.cancelled: set(),
     }
 
     @classmethod
     @transaction.atomic
     def transition(cls, *, order, to_status, actor=None, payload=None):
 
-        # 🔒 lock row
         order = (
-            order.__class__
-            .objects
+            order.__class__.objects
             .select_for_update()
             .get(id=order.id)
         )
 
         from_status = order.status
 
-        if to_status not in cls.TRANSITIONS.get(from_status, set()):
-            raise ValidationError(
+        allowed = cls.TRANSITIONS.get(from_status, set())
+        if to_status not in allowed:
+            raise ValidationError(_(
                 f"Illegal transition from {from_status} to {to_status}"
-            )
+            ))
 
-        # 🔥 Domain-specific side effects
         cls._handle_side_effects(order, from_status, to_status)
 
         order.status = to_status
@@ -66,12 +96,15 @@ class OrderStateMachine:
     @staticmethod
     def _handle_side_effects(order, from_status, to_status):
 
-        # restore stock when cancelling unpaid order
+        # restore stock if cancel before shipping
         if (
-            from_status == OrderStatusType.pending
-            and to_status == OrderStatusType.cancelled
+            to_status == OrderStatusType.cancelled
+            and from_status in {
+                OrderStatusType.pending,
+                OrderStatusType.processing,
+            }
         ):
-            for item in order.order_items.select_related("product"):
+            for item in order.order_items.all():
                 ProductModel.objects.filter(
                     id=item.product_id
                 ).update(
@@ -81,12 +114,18 @@ class OrderStateMachine:
     @staticmethod
     def _map_status_to_event(status, payload=None):
 
+        mapping = {
+            OrderStatusType.paid: OrderEventType.PAID,
+            OrderStatusType.shipped: OrderEventType.SHIPPED,
+            OrderStatusType.delivered: OrderEventType.DELIVERED,
+            OrderStatusType.return_requested: OrderEventType.RETURN_REQUESTED,
+            OrderStatusType.returned: OrderEventType.RETURNED,
+            OrderStatusType.refunded: OrderEventType.REFUNDED,
+        }
+
         if status == OrderStatusType.cancelled:
             if payload and payload.get("reason") == "timeout":
                 return OrderEventType.EXPIRED
             return OrderEventType.CANCELLED
 
-        return {
-            OrderStatusType.success: OrderEventType.PAID,
-            OrderStatusType.refunded: OrderEventType.REFUNDED,
-        }.get(status, OrderEventType.ADMIN_NOTE)
+        return mapping.get(status, OrderEventType.ADMIN_NOTE)

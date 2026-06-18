@@ -7,7 +7,7 @@ from django.utils import timezone
 from django.core.exceptions import ValidationError
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import make_password
-
+from django.utils.translation import gettext_lazy as _
 from accounts.models import EmailOTP, OTPPurpose
 from events.models.outbox import OutboxEvent
 from accounts.services.throttle import check_and_increment_otp_throttle
@@ -92,7 +92,7 @@ def verify_login_otp(*, email: str, code: str):
     try:
         user = User.objects.get(email=email)
     except User.DoesNotExist:
-        raise ValidationError("کاربری با این ایمیل یافت نشد")
+        raise ValidationError(_("User with this email address was not found."))
 
     verify_otp(email=email, code=code, purpose=OTPPurpose.LOGIN)
 
@@ -120,7 +120,7 @@ def _rate_limit_check(email: str) -> None:
     if last_otp:
         delta = (now - last_otp.created_date).total_seconds()
         if delta < OTP_MIN_INTERVAL_SECONDS:
-            raise ValidationError("لطفاً کمی صبر کنید")
+            raise ValidationError(_("Please wait a moment."))
 
     last_10_min = now - timedelta(minutes=10)
     count = EmailOTP.objects.filter(
@@ -129,7 +129,7 @@ def _rate_limit_check(email: str) -> None:
     ).count()
 
     if count >= OTP_MAX_PER_10_MIN:
-        raise ValidationError("تعداد درخواست بیش از حد مجاز")
+        raise ValidationError(_("The number of requests exceeds the allowed limit."))
 
 
 def _get_valid_otp(*, email: str, purpose: OTPPurpose) -> EmailOTP:
@@ -146,6 +146,6 @@ def _get_valid_otp(*, email: str, purpose: OTPPurpose) -> EmailOTP:
     )
 
     if not otp:
-        raise ValidationError("کد نامعتبر یا منقضی شده")
+        raise ValidationError(_("Invalid or expired code"))
 
     return otp

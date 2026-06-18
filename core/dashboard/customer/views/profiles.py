@@ -11,18 +11,20 @@ from django.shortcuts import redirect
 from django.contrib import messages
 
 
+from django.utils.translation import gettext_lazy as _
+
 class CustomerSecurityEditView(LoginRequiredMixin, HasCustomerAccessPermission,SuccessMessageMixin, auth_views.PasswordChangeView):
     template_name = "dashboard/customer/profile/security-edit.html"
     form_class = CustomerPasswordChangeForm
     success_url = reverse_lazy("dashboard:customer:security-edit")
-    success_message = "بروز رسانی پسورد با موفقیت انجام شد"
+    success_message = _("Password update successful")
 
 
 class CustomerProfileEditView(LoginRequiredMixin, HasCustomerAccessPermission,SuccessMessageMixin,UpdateView):
     template_name = "dashboard/customer/profile/profile-edit.html"
     form_class = CustomerProfileEditForm
     success_url = reverse_lazy("dashboard:customer:profile-edit")
-    success_message = "بروز رسانی پروفایل با موفقیت انجام شد"
+    success_message = _("Profile update completed successfully.")
     
     def get_object(self, queryset=None):
         return Profile.objects.get(user=self.request.user)
@@ -34,11 +36,11 @@ class CustomerProfileImageEditView(LoginRequiredMixin, HasCustomerAccessPermissi
         "image"
     ]
     success_url = reverse_lazy("dashboard:customer:profile-edit")
-    success_message = "بروز رسانی تصویر پروفایل با موفقیت انجام شد"
+    success_message = _("Profile picture update successfully completed")
     
     def get_object(self, queryset=None):
         return Profile.objects.get(user=self.request.user)
     
     def form_invalid(self, form):
-        messages.error(self.request,"ارسال تصویر با مشکل مواجه شده لطف مجدد بررسی و تلاش نمایید")
+        messages.error(self.request,_("There was a problem sending the image. Please check and try again."))
         return redirect(self.success_url)
