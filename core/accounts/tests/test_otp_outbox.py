@@ -1,28 +1,22 @@
 # accounts/test/test_otp_outbox.py
 import pytest
 
-from accounts.models import EmailOTP
 from accounts.models import OTPPurpose
 from accounts.models import User
 from events.models import OutboxEvent, OutboxStatus
-from django.contrib.auth.hashers import make_password
-
+from accounts.services.otp_service import generate_or_reuse_otp
 
 @pytest.mark.django_db
 def test_otp_creates_outbox_event():
     # Creating OTP must create a pending outbox event
 
-    otp = EmailOTP.objects.create(
+    generate_or_reuse_otp(
         email="user@test.com",
-        code="123456",
+        purpose=OTPPurpose.LOGIN,
     )
 
     event = OutboxEvent.objects.get(topic="user.otp")
 
     assert event.status == OutboxStatus.pending
-    assert event.payload["email"] == otp.email
-    assert event.payload["code"] == otp.code
-
-@property
-def code(self):
-    return None  # raw code is never stored after hashing
+    assert event.payload["email"] == "user@test.com"
+    assert "code" in event.payload

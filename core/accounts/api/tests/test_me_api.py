@@ -25,8 +25,8 @@ class MeAPITest(APITestCase):
             user_id=self.user.id,
             session_id=self.session.id,
         )
-        self.url = "/accounts/api/me/"
-
+        self.url = "/api/accounts/me/"
+                    
     def test_me_requires_auth(self):
         res = self.client.get(self.url)
         self.assertEqual(res.status_code, 401)

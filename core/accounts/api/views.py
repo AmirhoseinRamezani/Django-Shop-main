@@ -1,23 +1,17 @@
 # accounts/api/views.py
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.exceptions import Throttled
 
 from rest_framework import status
 from accounts.models import OTPPurpose
 from django.core.exceptions import ValidationError
-from accounts.authentication import JWTAuthentication
 from rest_framework.permissions import AllowAny
-
+from accounts.services.audit import AuditService
 from accounts.services.otp_service import generate_or_reuse_otp
 
 from accounts.api.serializers import RequestOTPSerializer
 from accounts.exceptions import OTPThrottleException
-
-# from accounts.services.throttle import (
-#     check_and_increment_otp_throttle,
-#     OTPThrottleException,
-# )
 
 class RequestOTPAPIView (APIView):
     authentication_classes = []
@@ -36,6 +30,14 @@ class RequestOTPAPIView (APIView):
                 email=email,
                 purpose=purpose,
                 request=request,
+            )
+            AuditService.log(
+                action="otp_requested",
+                request=request,
+                metadata={
+                    "email": email,
+                    "purpose": purpose,
+                }
             )
             
         except OTPThrottleException as e:

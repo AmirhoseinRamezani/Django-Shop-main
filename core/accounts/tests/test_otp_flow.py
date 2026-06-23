@@ -7,8 +7,8 @@ from events.models import OutboxEvent, OutboxStatus
 
 @pytest.mark.django_db
 def test_request_otp_creates_emailotp_and_outbox(client, email):
-    url = reverse("accounts-api:login")
-    response = client.post(url, {"email": email})
+    url = reverse("accounts-api:otp-request")
+    response = client.post(url, {"email": email,"purpose": "login"})
 
     assert response.status_code == 200
     assert EmailOTP.objects.filter(email=email).exists()

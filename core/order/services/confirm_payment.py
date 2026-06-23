@@ -52,7 +52,7 @@ def confirm_order_payment(order_id: int) -> OrderModel:  #*, payment
 
     OrderStateMachine.transition(
         order=order,
-        to_status=OrderStatusType.success,
+        to_status=OrderStatusType.paid,
         actor=order.user,
         payload={
             "payment_id": payment.id,

@@ -4,7 +4,7 @@ from django.utils import timezone
 from datetime import timedelta
 from decimal import Decimal
 from django.utils.translation import gettext_lazy as _
-
+from payment.models import PaymentStatusType
 
 class SaleType(models.TextChoices):
     ONLINE = "ONLINE", _("Online")
@@ -236,7 +236,7 @@ class OrderModel(models.Model):
         Prevent duplicate gateway redirects
         """
         return self.payments.filter(
-            status=OrderStatusType.pending  # PaymentStatusType.pending
+            status = PaymentStatusType.pending  # OrderStatusType.pending
         ).exists()
 
     def mark_failed(self):

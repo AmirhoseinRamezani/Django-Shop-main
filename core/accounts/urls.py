@@ -18,7 +18,9 @@ urlpatterns = [
     # path("verify-otp/", VerifyOTPView.as_view(), name="verify-otp"),
 
     # API (REST)
-    path("api/", include("accounts.api.urls")),
+    # Legacy API
+    # path("api/", include("accounts.api.urls")),
+    
     path("otp-verify/", VerifyOTPAPIView.as_view(), name="otp-verify"),
 
 ]

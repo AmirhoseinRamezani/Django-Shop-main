@@ -73,7 +73,7 @@ class CartSession:
         product_ids = [item["product_id"] for item in self._cart["items"]]
         products = ProductModel.objects.filter(
             id__in=product_ids,
-            status=ProductStatusType.publish.value
+            status=ProductStatusType.PUBLISH.value
         )
         product_map = {p.id: p for p in products}
         valid_items = []
@@ -118,7 +118,7 @@ class CartSession:
         for item in self._cart["items"]:
             product = ProductModel.objects.filter(
                 id=item["product_id"],
-                status=ProductStatusType.publish.value
+                status=ProductStatusType.PUBLISH.value
             ).first()
             if not product:
                 continue

@@ -1,9 +1,7 @@
 # payment/tests/test_verify_payment.py
-
 import pytest
 from payment.services.verify import verify_payment
 from payment.models import PaymentStatusType
-
 
 @pytest.mark.django_db
 def test_verify_payment_success(payment):
@@ -16,4 +14,4 @@ def test_verify_payment_success(payment):
 
     assert result.status == PaymentStatusType.success
     assert result.ref_id == 123456789
-    assert result.is_consumed is False
+    assert result.is_consumed is True

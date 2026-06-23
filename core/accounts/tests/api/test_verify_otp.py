@@ -1,6 +1,7 @@
 # accounts/tests/api/test_verify_otp.py
 import pytest
 from django.urls import reverse
+from datetime import timedelta
 from django.utils import timezone
 from accounts.models import EmailOTP, OTPPurpose
 from accounts.models.device_session import DeviceSession
@@ -16,7 +17,7 @@ def test_session_created_on_verify(client):
         email=email,
         code_hash=make_password(code),
         purpose=OTPPurpose.LOGIN,
-        expire_at=timezone.now() + timezone.timedelta(minutes=5),
+        expire_at=timezone.now() + timedelta(minutes=5),
     )
 
     response = client.post(

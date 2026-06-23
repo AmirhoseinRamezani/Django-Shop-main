@@ -1,5 +1,4 @@
 # accounts/api/sessions.py
-
 from django.db import transaction
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -8,6 +7,7 @@ from rest_framework import status
 
 from accounts.models.refresh_token import RefreshToken
 from accounts.models.device_session import DeviceSession
+from accounts.services.session_service import SessionService
 
 
 class SessionListAPIView(APIView):
@@ -70,34 +70,11 @@ class LogoutOtherSessionsAPIView(APIView):
                 {"detail": "Session not found"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        other_sessions = list(
-            DeviceSession.objects
-            .select_for_update()
-            .filter(
-                user=request.user,
-                is_active=True,
-            )
-            .exclude(id=current_session.id)
+        SessionService.logout_others(
+            user=request.user,
+            current_session=current_session,
         )
-
-        if not other_sessions:
-            return Response(
-                {"detail": "No other active sessions"},
-                status=status.HTTP_200_OK,
-            )
-
-        session_ids = [s.id for s in other_sessions]
-
-        DeviceSession.objects.filter(
-            id__in=session_ids
-        ).update(is_active=False)
-
-        RefreshToken.objects.filter(
-            session__id__in=session_ids,
-            is_revoked=False,
-        ).update(is_revoked=True)
-
+        
         return Response(
             {"detail": "Logged out from other devices"},
             status=status.HTTP_200_OK,

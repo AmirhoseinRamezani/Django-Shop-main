@@ -1,13 +1,11 @@
 # accounts/api/tests/test_otp_throttle.py
 from rest_framework.test import APITestCase
-from django.utils import timezone
-from accounts.models import OTPPurpose
 
 class OTPThrottleTest(APITestCase):
 
     def test_otp_throttle_blocks_spam(self):
-        url = "/accounts/api/otp/request/"
-
+        url = "/api/accounts/otp/request/"
+            
         payload = {
             "email": "spam@test.com",
             "purpose": "signup",

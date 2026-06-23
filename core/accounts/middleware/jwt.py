@@ -2,9 +2,6 @@
 from django.contrib.auth.models import AnonymousUser
 from accounts.services.jwt import decode_token
 from accounts.models.device_session import DeviceSession
-# from django.utils import timezone
-
-# User = get_user_model()
 
 class JWTAuthenticationMiddleware:
     
@@ -13,9 +10,6 @@ class JWTAuthenticationMiddleware:
 
     def __call__(self, request):
         
-        # if request.path.startswith("/api/"):
-        #     return self.get_response(request)
-
         header = request.headers.get("Authorization")
 
         if not header or not header.startswith("Bearer "):

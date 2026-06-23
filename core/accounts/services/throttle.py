@@ -1,6 +1,5 @@
 # accounts/services/throttle.py
 from django.core.cache import cache
-from django.conf import settings
 from rest_framework.exceptions import Throttled
 from accounts.exceptions import OTPThrottleException
 

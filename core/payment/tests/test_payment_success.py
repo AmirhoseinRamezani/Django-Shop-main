@@ -11,5 +11,5 @@ def test_confirm_order_payment_success(
     order.refresh_from_db()
     successful_payment.refresh_from_db()
 
-    assert order.status == OrderStatusType.success
+    assert order.status == OrderStatusType.paid
     assert successful_payment.is_consumed is True

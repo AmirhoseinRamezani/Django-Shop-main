@@ -1,4 +1,5 @@
 # accounts/api/permissons.py
+
 from rest_framework.permissions import BasePermission
 
 class IsAPIAuthenticated(BasePermission):

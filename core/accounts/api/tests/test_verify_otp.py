@@ -1,6 +1,5 @@
 # accounts/api/tests/test_verify_otp.py
 from rest_framework.test import APITestCase
-from django.urls import reverse
 from django.contrib.auth import get_user_model
 
 from accounts.models.otp import EmailOTP, OTPPurpose
@@ -13,7 +12,8 @@ User = get_user_model()
 class VerifyOTPAPITest(APITestCase):
 
     def setUp(self):
-        self.url = "/accounts/api/otp/verify/"
+                    
+        self.url = "/api/accounts/otp/verify/"
         self.email = "x@test.com"
         self.code = "1234"
 

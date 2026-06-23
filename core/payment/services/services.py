@@ -1,3 +1,4 @@
+# payment/services/services.py
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from order.models import OrderStatusType
@@ -37,14 +38,14 @@ class PaymentService:
         payment = PaymentModel.objects.create(
             order=order,
             authority_id=response["Authority"],
-            amount=order.get_payable_price(),
+            amount=order.get_price(),
             response_json=response
         )
         record_order_event(
             order=order,
             type=OrderEvent.PAYMENT_STARTED,
             actor=order.user,
-            payload={"amount": str(order.get_payable_price())}
+            payload={"amount": str(order.get_price())}
         )
 
         order.status = OrderStatusType.pending

@@ -1,3 +1,4 @@
+# payment/services/verify.py
 from django.db import transaction
 from django.core.exceptions import ValidationError
 
@@ -26,6 +27,6 @@ def verify_payment(*, authority, ref_id, response=None):
 
     payment.mark_success(ref_id=ref_id, response=response)
 
-    # confirm_order_payment(order_id=payment.order_id)
+    confirm_order_payment(order_id=payment.order_id)
 
     return payment

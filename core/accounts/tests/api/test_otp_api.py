@@ -1,7 +1,7 @@
 # accounts/tests/api/test_otp_api.py
 import pytest
+from django.conf import settings
 from django.core import mail
-from django.urls import reverse
 
 
 @pytest.mark.django_db

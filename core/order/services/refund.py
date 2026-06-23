@@ -17,7 +17,14 @@ class RefundService:
         if not order.can_refund():
             raise ValidationError(_("This order is non-refundable"))
 
-        payment = order.payment
+        payment = (
+            order.payments
+            .filter(
+                status=PaymentStatusType.success
+            )
+            .order_by("-created_date")
+            .first()
+        )
         if not payment:
             raise ValidationError(_("There is no payment for this order"))
         

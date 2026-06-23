@@ -36,12 +36,13 @@ def create_access_token(*, user_id: int, session_id: str) -> str:
         algorithm=ALGORITHM,
     )
 
-
-def create_refresh_token(*, user_id: int, session_id: str | None = None) -> str:
+def create_refresh_token(*, user_id: int, session_id: str | None = None,family_id: str | None = None,) -> str:
     payload = {
+        "jti": str(uuid.uuid4()),
         "type": "refresh",
         "user_id": str(user_id),
         "session_id": str(session_id),
+        "family_id": str(family_id) if family_id else None,
         "iat": _now(),
         "exp": _now() + REFRESH_TOKEN_LIFETIME,
     }
@@ -62,6 +63,7 @@ def create_and_store_refresh_token(*, user_id: int, session, family_id=None) -> 
     token = create_refresh_token(
         user_id=user_id,
         session_id=session.id,
+        family_id=family_id,
     )
 
     RefreshToken.objects.create(
@@ -107,7 +109,6 @@ def decode_token(token: str) -> dict:
 
     except jwt.InvalidTokenError:
         raise ValidationError(_("Invalid token"))
-
 
 # ------------------------
 # Facade Class (for tests & future)
