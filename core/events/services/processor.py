@@ -4,7 +4,7 @@ from django.utils import timezone
 from django.db import transaction
 
 from events.models.outbox import OutboxEvent, OutboxStatus
-from events.services.dispatchers import dispatch
+from events.dispatchers import dispatch
 
 
 @transaction.atomic

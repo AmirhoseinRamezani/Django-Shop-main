@@ -9,57 +9,57 @@ class OrderEventType(models.TextChoices):
 
     PAYMENT_STARTED = (
         "PAYMENT_STARTED",
-        "Payment Started"
+        _("Payment Started")
     )
 
     PAID = (
         "PAID",
-        "Payment Successful"
+        _("Payment Successful")
     )
 
     PROCESSING = (
         "PROCESSING",
-        "Order Processing"
+        _("Order Processing")
     )
 
     SHIPPED = (
         "SHIPPED",
-        "Order Shipped"
+        _("Order Shipped")
     )
 
     DELIVERED = (
         "DELIVERED",
-        "Order Delivered"
+        _("Order Delivered")
     )
 
     RETURN_REQUESTED = (
         "RETURN_REQUESTED",
-        "Return Requested"
+        _("Return Requested")
     )
 
     RETURNED = (
         "RETURNED",
-        "Returned"
+        _("Returned")
     )
 
     EXPIRED = (
         "EXPIRED",
-        "Order Expired"
+        _("Order Expired")
     )
 
     CANCELLED = (
         "CANCELLED",
-        "Order Cancelled"
+        _("Order Cancelled")
     )
 
     REFUNDED = (
         "REFUNDED",
-        "Order Refunded"
+        _("Order Refunded")
     )
 
     ADMIN_NOTE = (
         "ADMIN_NOTE",
-        "Admin Note"
+        _("Admin Note")
     )
 
 
@@ -92,32 +92,32 @@ class OrderEvent(models.Model):
     def __str__(self):
         return f"{self.order_id} | {self.type}"
     
-@property
-def title(self):
-    return {
-        OrderEventType.CREATED:
-            _("Order Created"),
-        OrderEventType.PAYMENT_STARTED:
-            _("Payment Started"),
-        OrderEventType.PAID:
-            _("Payment Successful"),
-        OrderEventType.PROCESSING:
-            _("Order Processing"),
-        OrderEventType.SHIPPED:
-            _("Order Shipped"),
-        OrderEventType.DELIVERED:
-            _("Order Delivered"),
-        OrderEventType.RETURN_REQUESTED:
-            _("Return Requested"),
-        OrderEventType.RETURNED:
-            _("Returned"),
-        OrderEventType.CANCELLED:
-            _("Cancelled"),
-        OrderEventType.EXPIRED:
-            _("Expired"),
-        OrderEventType.REFUNDED:
-            _("Refunded"),
-    }.get(
-        self.type,
-        _("Unknown Event")
-    )
+    @property
+    def title(self):
+        return {
+            OrderEventType.CREATED:
+                _("Order Created"),
+            OrderEventType.PAYMENT_STARTED:
+                _("Payment Started"),
+            OrderEventType.PAID:
+                _("Payment Successful"),
+            OrderEventType.PROCESSING:
+                _("Order Processing"),
+            OrderEventType.SHIPPED:
+                _("Order Shipped"),
+            OrderEventType.DELIVERED:
+                _("Order Delivered"),
+            OrderEventType.RETURN_REQUESTED:
+                _("Return Requested"),
+            OrderEventType.RETURNED:
+                _("Returned"),
+            OrderEventType.CANCELLED:
+                _("Cancelled"),
+            OrderEventType.EXPIRED:
+                _("Expired"),
+            OrderEventType.REFUNDED:
+                _("Refunded"),
+        }.get(
+            self.type,
+            _("Unknown Event")
+        )

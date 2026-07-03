@@ -16,6 +16,6 @@ def confirm_order_payment_by_order_id(order_id: int):
         raise ValueError(_("No payment found for this order"))
 
     try:
-        return confirm_order_payment(payment=payment)
+        return confirm_order_payment(order_id=payment.order_id)
     except ValidationError as e:
         raise ValueError(str(e))

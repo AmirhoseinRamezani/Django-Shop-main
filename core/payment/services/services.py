@@ -8,7 +8,7 @@ from payment.models import PaymentStatusType
 from payment.models import PaymentModel
 from payment.zarinpal_client import ZarinPalSandbox
 from payment.policies import PaymentPolicy
-from order.events.order_event import OrderEvent
+from order.events.order_event import OrderEvent,OrderEventType
 from order.services.events import record_order_event
 
 from django.utils.translation import gettext_lazy as _
@@ -25,8 +25,8 @@ class PaymentService:
 
         PaymentPolicy.can_start_payment(order)
         
-        if not order.can_retry_payment():
-            raise PermissionDenied("Payment is not allowed for this order")
+        # if not order.can_retry_payment():
+        #     raise PermissionDenied(_("Payment is not allowed for this order"))
 
         # prevent duplicate pending payments
         if order.payments.filter(status=PaymentStatusType.pending).exists():
@@ -43,7 +43,7 @@ class PaymentService:
         )
         record_order_event(
             order=order,
-            type=OrderEvent.PAYMENT_STARTED,
+            type=OrderEventType.PAYMENT_STARTED,
             actor=order.user,
             payload={"amount": str(order.get_price())}
         )

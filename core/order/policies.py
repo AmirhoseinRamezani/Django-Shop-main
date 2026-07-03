@@ -3,6 +3,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.conf import settings
 from django.utils import timezone
 
+from shop.constants import SiteSaleType
 from order.models import OrderStatusType
 from django.utils.translation import gettext_lazy as _
 class OrderPolicy:
@@ -17,8 +18,8 @@ class OrderPolicy:
             raise PermissionDenied("Authentication required")
 
         # Check global sale mode
-        if settings.SITE_SALE_TYPE != "ONLINE":
-            raise PermissionDenied("Online sales are disabled")
+        if settings.SITE_SALE_TYPE != SiteSaleType.ONLINE:
+            raise PermissionDenied(_("Online sales are disabled"))
 
         return True
 
@@ -30,12 +31,12 @@ class OrderPolicy:
         - or owner of the order
         """
         if not user or not user.is_authenticated:
-            raise PermissionDenied("Authentication required")
+            raise PermissionDenied(_("Authentication required"))
 
         if user.is_staff or order.user_id == user.id:
             return True
 
-        raise PermissionDenied("Access denied")
+        raise PermissionDenied(_("Access denied"))
 
     @staticmethod
     def can_refund(user, order):
@@ -43,10 +44,10 @@ class OrderPolicy:
         Only staff can refund paid orders.
         """
         if not user.is_staff:
-            raise PermissionDenied("Admin access required")
+            raise PermissionDenied(_("Admin access required"))
 
         if not order.is_paid:
-            raise PermissionDenied("Only paid orders can be refunded")
+            raise PermissionDenied(_("Only paid orders can be refunded"))
 
         return True
     
@@ -72,10 +73,11 @@ class OrderPolicy:
 
     @staticmethod
     def can_retry_payment(order):
-        if order.status != OrderStatusType.pending:
-            return False
-
-        if order.is_expired():
-            return False
-
-        return True
+        
+        return (
+            not order.is_expired()
+            and order.status in {
+                OrderStatusType.pending,
+                OrderStatusType.failed,
+            }
+        )

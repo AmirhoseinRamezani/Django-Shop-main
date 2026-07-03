@@ -1,3 +1,4 @@
+# payment/tests/conftest.py
 import pytest
 from decimal import Decimal
 from django.utils import timezone
@@ -11,12 +12,12 @@ from payment.models import PaymentModel, PaymentStatusType
 User = get_user_model()
 
 
-@pytest.fixture
-def user(db):
-    return User.objects.create_user(
-        email="test@gmail.com",
-        password="123456"
-    )
+# @pytest.fixture
+# def user(db):
+#     return User.objects.create_user(
+#         email="test@gmail.com",
+#         password="123456"
+#     )
 
 
 @pytest.fixture
@@ -37,21 +38,21 @@ def pending_order(db, user):
     )
 
 
-@pytest.fixture
-def successful_payment(db, pending_order):
-    return PaymentModel.objects.create(
-        order=pending_order,
-        authority_id="AUTH123",
-        amount=pending_order.get_price(),
-        status=PaymentStatusType.success,
-        ref_id=999,
-    )
+# @pytest.fixture
+# def successful_payment(db, pending_order):
+#     return PaymentModel.objects.create(
+#         order=pending_order,
+#         authority_id="AUTH123",
+#         amount=pending_order.get_price(),
+#         status=PaymentStatusType.success,
+#         ref_id=999,
+#     )
 
-@pytest.fixture
-def payment(pending_order):
-    return PaymentModel.objects.create(
-        order=pending_order,
-        authority_id="TEST_AUTH_123",
-        amount=pending_order.get_price(),
-        status=PaymentStatusType.pending
-    )
+# @pytest.fixture
+# def payment(pending_order):
+#     return PaymentModel.objects.create(
+#         order=pending_order,
+#         authority_id="TEST_AUTH_123",
+#         amount=pending_order.get_price(),
+#         status=PaymentStatusType.pending
+#     )

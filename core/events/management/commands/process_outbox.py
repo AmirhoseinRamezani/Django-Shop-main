@@ -1,7 +1,7 @@
 # events/management/commands/process_outbox.py
 
 from django.core.management.base import BaseCommand
-from events.services.processor import process_outbox
+from events.processor import process_outbox
 
 
 class Command(BaseCommand):

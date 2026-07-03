@@ -3,7 +3,7 @@ import pytest
 from django.core import mail
 
 from events.models.outbox import OutboxEvent
-from events.services.dispatchers.email import send_email_event
+from events.dispatchers.email import send_email_event
 
 
 @pytest.mark.django_db

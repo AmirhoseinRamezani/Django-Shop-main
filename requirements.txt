@@ -3,7 +3,10 @@ certifi==2025.11.12
 charset-normalizer==3.4.4
 Django==5.2.7
 django-debug-toolbar==6.1.0
+django-factory-boy==1.0.0
 djangorestframework==3.16.1
+factory_boy==3.3.3
+Faker==40.23.0
 idna==3.11
 iniconfig==2.3.0
 packaging==25.0
@@ -15,8 +18,8 @@ PyJWT==2.11.0
 pytest==9.0.2
 pytest-django==4.11.1
 python-decouple==3.8
+python-gettext==5.0
 requests==2.32.5
 sqlparse==0.5.4
 typing_extensions==4.15.0
 urllib3==2.6.2
-python-gettext==5.0

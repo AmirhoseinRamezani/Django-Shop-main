@@ -48,6 +48,6 @@ class RefundService:
         # )
         return order
     
-    @property
-    def can_refund(self):
-        return self.status == OrderStatusType.success
+    # @property
+    # def can_refund(self):
+    #     return self.status == OrderStatusType.success

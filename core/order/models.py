@@ -1,3 +1,4 @@
+# order/models.py
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
@@ -189,22 +190,22 @@ class OrderModel(models.Model):
     def is_payable(self) -> bool:
         return (
             self.status == OrderStatusType.pending
-            and not self.is_expired
+            and not self.is_expired()
         )
     
-    def can_retry_payment(self) -> bool:
-        """
-        Payment retry rules:
-        - success → NEVER retry
-        - pending / failed → retry allowed
-        """
-        return (
-            not self.is_expired()
-            and self.status in {
-                OrderStatusType.pending,
-                OrderStatusType.failed,
-            }
-        )
+    # def can_retry_payment(self) -> bool:
+    #     """
+    #     Payment retry rules:
+    #     - success → NEVER retry
+    #     - pending / failed → retry allowed
+    #     """
+    #     return (
+    #         not self.is_expired()
+    #         and self.status in {
+    #             OrderStatusType.pending,
+    #             OrderStatusType.failed,
+    #         }
+    #     )
     def can_refund(self) -> bool:
         return self.status in {
             OrderStatusType.paid,
@@ -249,6 +250,15 @@ class OrderModel(models.Model):
     def __str__(self):
         return f"Order #{self.id}"
 
+    # def can_start_payment(self):
+    #     return (
+    #         not self.is_expired()
+    #         and self.status in {
+    #             OrderStatusType.pending,
+    #             OrderStatusType.failed,
+    #         }
+    #     )
+    
     @property
     def is_paid(self) -> bool:
         return self.status == OrderStatusType.paid
