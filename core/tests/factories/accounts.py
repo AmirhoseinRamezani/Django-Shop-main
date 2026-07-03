@@ -1,6 +1,8 @@
 # tests/factories/accounts.py
 import factory
 
+from django.contrib.auth import get_user_model
+
 from accounts.models import (
     User,
     Profile,
@@ -10,6 +12,7 @@ from accounts.models import (
 
 from tests.base import BaseFactory
 
+User = get_user_model()
 
 class UserFactory(BaseFactory):
 
@@ -17,12 +20,23 @@ class UserFactory(BaseFactory):
         model = User
 
     email = factory.Sequence(
-        lambda n: f"user{n}@example.com"
+        lambda n: f"user{n}@test.com"
     )
+    # username = factory.Sequence(
+    #     lambda n: f"user{n}"
+    # )
+
+    # email = factory.LazyAttribute(
+    #     lambda o: f"{o.username}@test.com"
+    # )
+
+    # phone = factory.Sequence(
+    #     lambda n: f"0912000{n:04}"
+    # )
 
     password = factory.PostGenerationMethodCall(
         "set_password",
-        "password123"
+        "password123",
     )
 
     is_active = True
@@ -46,8 +60,7 @@ class UserFactory(BaseFactory):
         unverified = factory.Trait(
             is_verified=False,
         )
-
-
+        
 class ProfileFactory(BaseFactory):
 
     class Meta:
@@ -89,3 +102,4 @@ class RefreshTokenFactory(BaseFactory):
     
 # UserFactory
 # ProfileFactory    
+# import factory

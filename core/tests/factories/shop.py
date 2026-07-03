@@ -26,8 +26,6 @@ class ProductFactory(BaseFactory):
     class Meta:
         model = ProductModel
 
-    # category = factory.SubFactory(CategoryFactory)
-
     title = factory.Sequence(
         lambda n: f"Product {n}"
     )

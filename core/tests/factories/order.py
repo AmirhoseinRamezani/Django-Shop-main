@@ -3,7 +3,6 @@ from datetime import timedelta
 
 import factory
 from factory import fuzzy
-from factory.django import DjangoModelFactory
 from django.utils import timezone
 
 from tests.base import BaseFactory
@@ -23,7 +22,7 @@ from tests.factories.shop import (
 )
 
 
-class OrderFactory(DjangoModelFactory):
+class OrderFactory(BaseFactory):
 
     class Meta:
         model = OrderModel
@@ -36,13 +35,9 @@ class OrderFactory(DjangoModelFactory):
 
     total_price = fuzzy.FuzzyInteger(100000, 5000000)
 
-    full_name = factory.LazyAttribute(
-        lambda o: o.user.profile.get_fullname()
-    )
+    full_name = factory.Faker("name")
 
-    phone = factory.LazyAttribute(
-        lambda o: o.user.profile.phone_number
-    )
+    phone = "09123456789"
 
     email = factory.LazyAttribute(
         lambda o: o.user.email
@@ -129,7 +124,7 @@ class OrderFactory(DjangoModelFactory):
         )
 
 
-class OrderItemFactory(DjangoModelFactory):
+class OrderItemFactory(BaseFactory):
 
     class Meta:
         model = OrderItemModel

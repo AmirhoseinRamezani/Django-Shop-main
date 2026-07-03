@@ -1,6 +1,9 @@
 # tests/base.py
 
 import pytest
+
+from factory.django import DjangoModelFactory
+
 from tests.assertions import (
     refresh,
     assert_order_created,
@@ -75,11 +78,9 @@ class BaseTestCase:
             "events.bus.publish_event"
         )
         
-class BaseFactory:
-    """
-    Parent class for test builders/factories.
-    """
-    pass
+class BaseFactory(DjangoModelFactory):
+    class Meta:
+        abstract = True
 
 
 class BaseBuilder:

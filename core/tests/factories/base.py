@@ -1,10 +1,10 @@
-# # base.py
-# class BaseFactory(factory.django.DjangoModelFactory):
+# tests/factories/base.py
+import factory
 
-#     class Meta:
-#         abstract = True
+from factory.django import DjangoModelFactory
 
-#     @classmethod
-#     def build_batch_dict(cls, size):
 
-#         return [obj.__dict__ for obj in cls.build_batch(size)]
+class BaseFactory(DjangoModelFactory):
+
+    class Meta:
+        abstract = True
