@@ -1,25 +1,14 @@
+# tests/fixtures/products.py
 import pytest
-
-# from decimal import Decimal
-
-# from shop.models import (
-#     ProductModel,
-#     ProductCategoryModel,
-# )
-
-# @pytest.fixture
-# def category():
-
-#     return ProductCategoryModel.objects.create(
-#         title="Laptop",
-#         slug="laptop",
-#     )
 
 from tests.factories.shop import (
     ProductFactory,
     CouponFactory,
     AddressFactory,
 )
+@pytest.fixture
+def product_factory():
+    return ProductFactory
 
 @pytest.fixture
 def product(db):

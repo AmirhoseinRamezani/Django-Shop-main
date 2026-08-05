@@ -1,3 +1,4 @@
+# shop/selectors.py
 from .models import ProductModel, WishlistProductModel
 from .constants import ProductStatusType
 

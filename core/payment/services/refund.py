@@ -1,52 +1,90 @@
-# from django.db import transaction
+# payment/services/refund.py
+from django.db import transaction
 
-# from payment.models import PaymentModel, PaymentStatusType
-# from payment.policies import PaymentPolicy
-# from order.models import OrderStatusType
-# from order.events.order_event import OrderEventType
-# from order.services.events import record_order_event
+from payment.models import PaymentModel
+from payment.services.gateway_service import GatewayService
 
-# @transaction.atomic
-# def refund_payment(*, payment_id: int, actor) -> PaymentModel:
+from order.policies.refund import RefundPolicy
+from payment.policies import PaymentPolicy
 
-#     payment = (
-#         PaymentModel.objects
-#         .select_for_update()
-#         .get(id=payment_id)
-#     )
+from order.models import (
+    OrderStatusType,
+)
 
-#     PaymentPolicy.can_refund(payment)
+from order.services.state_machine import (
+    OrderStateMachine,
+)
 
-#     # --- Refund ---
-#     payment.status = PaymentStatusType.refunded
-#     payment.is_refunded = True
-#     payment.save(update_fields=["status", "is_refunded"])
+# from order.services.coupon import (
+#     CouponService,
+# )
 
-#     order = payment.order
 
-#     order.status = OrderStatusType.refunded
-#     order.save(update_fields=["status"])
+class RefundService:
 
-#     record_order_event(
-#         order=order,
-#         type=OrderEventType.REFUNDED,
-#         actor=actor,
-#         payload={
-#             "payment_id": payment.id,
-#             "amount": str(payment.amount),
-#         },
-#     )
+    @staticmethod
+    @transaction.atomic
+    def refund(
+        *,
+        payment_id: int,
+        actor,
+    ):
 
-#     return payment
+        payment = (
+            PaymentModel.objects
+            .select_for_update()
+            .select_related(
+                "order",
+            )
+            .get(
+                id=payment_id,
+            )
+        )
 
-#     """
-#          نکته‌های ظریف این کد:
+        PaymentPolicy.can_refund(payment)
 
-#         atomic
+        order = payment.order
 
-#         idempotency با Policy
+        # -----------------------------
+        # Gateway Refund
+        # -----------------------------
+        #
+        # Future:
+        #
+        # gateway.refund(
+        #     payment.ref_id
+        # )
+        # gateway = GatewayService()
 
-#         هیچ gateway اینجا نیست
+        # gateway.refund(payment)
+        # -----------------------------
+        
+        # payment.mark_refunded()
+        result = GatewayService.refund(payment)
+        
+        payment.mark_refunded(
+            refund_ref_id=result.get("ref_id"),
+            refunded_by=actor,
+            response=result,
+        )
+        
+        # if order.coupon:
+        #     CouponService.rollback(order.coupon)
+        RefundPolicy.rollback_coupon(
+            order,
+        )
+        OrderStateMachine.transition(
 
-#         order فقط update می‌شود، نه «تصمیم‌گیر»
-#     """
+            order=order,
+            to_status=OrderStatusType.refunded,
+            actor=actor,
+
+            payload={
+                "payment_id": payment.id,
+                "amount": str(payment.amount),
+                "ref_id": payment.ref_id,
+            }
+        )
+
+        return payment
+    

@@ -1,5 +1,4 @@
 # events/payloads/coupon.py
-
 from dataclasses import dataclass
 
 

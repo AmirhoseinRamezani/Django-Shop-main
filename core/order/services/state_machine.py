@@ -1,4 +1,5 @@
 # order/services/state_machine.py
+from PIL.Image import ImagePointTransform
 from django.db import transaction
 from django.core.exceptions import ValidationError
 from django.db.models import F
@@ -8,7 +9,7 @@ from order.models import OrderStatusType
 from order.events.order_event import OrderEventType
 from order.services.events import record_order_event
 from shop.models import ProductModel
-
+from order.services.inventory import InventoryService
 
 class OrderStateMachine:
 
@@ -92,12 +93,13 @@ class OrderStateMachine:
             from_status == OrderStatusType.pending
             and to_status == OrderStatusType.cancelled
         ):
-            for item in order.order_items.select_related("product"):
-                ProductModel.objects.filter(
-                    id=item.product_id
-                ).update(
-                    stock=F("stock") + item.quantity
-                )
+            InventoryService.restore(order)
+            # for item in order.order_items.select_related("product"):
+            #     ProductModel.objects.filter(
+            #         id=item.product_id
+            #     ).update(
+            #         stock=F("stock") + item.quantity
+            #     )
 
     @staticmethod
     def _map_status_to_event(status, payload=None):
@@ -111,3 +113,21 @@ class OrderStateMachine:
             OrderStatusType.paid: OrderEventType.PAID,
             OrderStatusType.refunded: OrderEventType.REFUNDED,
         }.get(status, OrderEventType.ADMIN_NOTE)
+        
+    
+    
+    # if (
+    #     from_status == OrderStatusType.paid
+    #     and
+    #     to_status == OrderStatusType.refunded
+    # ):
+    #     """
+    #     Accounting
+    #     Wallet
+    #     Invoice
+    #     Webhook
+    #     Email
+    #     Notification
+    #     ERP
+    #     """
+    #     pass

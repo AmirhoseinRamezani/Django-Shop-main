@@ -1,3 +1,4 @@
+# cart/cart.py
 from shop.models import ProductModel, ProductStatusType
 from .models import CartModel, CartItemModel
 
@@ -81,7 +82,7 @@ class CartSession:
             product = product_map.get(item["product_id"])
             if not product:
                 continue
-            total_price = item["quantity"] * product.get_price()
+            total_price = item["quantity"] * product.final_price
             valid_items.append({
                 "product": product,
                 "quantity": item["quantity"],

@@ -13,12 +13,16 @@ from shop.models import ProductModel
 from order.events.order_event import OrderEventType
 from order.services.events import record_order_event
 
+from order.services.inventory import InventoryService
+
 from order.models import (
     OrderModel,
     OrderItemModel,
     SaleType,
     OrderStatusType,
 )
+from order.services.pricing import OrderPricingService
+
 from order.policies import OrderPolicy
 from django.utils.translation import gettext as _
 
@@ -40,13 +44,15 @@ class OrderService:
         if coupon and not coupon.is_valid():
             raise ValidationError(_("Discount code is not valid"))
 
-        total_price = Decimal("0")
         
-        cart_items = (
+        cart_items = list(
             cart.cart_items
             .select_related("product")
             .select_for_update()
         )
+
+        if not cart_items:
+            raise ValidationError(_("Your shopping cart is empty"))
         
         product_ids = [item.product_id for item in cart_items]
         
@@ -55,6 +61,11 @@ class OrderService:
             .select_for_update()
             .filter(id__in=product_ids)
             .in_bulk()
+        )
+        # total_price = Decimal("0")
+        total_price = OrderPricingService.calculate(
+            cart_items,
+            products,
         )
         
         for item in cart_items:
@@ -72,10 +83,12 @@ class OrderService:
                     f"Insufficient inventory for product «{product.title}»"
                 ))
 
-            total_price += item.quantity * product.final_price
+            # total_price += item.quantity * product.final_price
+            
         # for item in cart.cart_items.select_related("product"):
         #     total_price += item.quantity * item.product.final_price
         # ⏳ Order expiration window (payment time limit)
+        
         expire_at = timezone.now() + timedelta(minutes=15)
         
         order = OrderModel.objects.create(
@@ -127,12 +140,15 @@ class OrderService:
         for item in cart_items:
             product = products[item.product_id]
 
-            ProductModel.objects.filter(
-                id=product.id
-            ).update(
-                stock=F("stock") - item.quantity
+            # ProductModel.objects.filter(
+            #     id=product.id
+            # ).update(
+            #     stock=F("stock") - item.quantity
+            # )
+            InventoryService.decrease(
+                product,
+                item.quantity,
             )
-
             order_items.append(
                 OrderItemModel(
                     order=order,

@@ -24,7 +24,7 @@ class TestPaymentFlow:
 
         order = handle_successful_payment(
             authority=payment.authority_id,
-            ref_id="111",
+            ref_id=111,
             response={},
             session=session,
         )
@@ -54,7 +54,7 @@ class TestPaymentFlow:
 
         handle_successful_payment(
             authority="A",
-            ref_id="1",
+            ref_id=111,
             response={},
             session=session,
         )
@@ -81,7 +81,7 @@ class TestPaymentFlow:
 
         handle_successful_payment(
             authority="A",
-            ref_id="1",
+            ref_id=1,
             response={},
             session=session,
         )

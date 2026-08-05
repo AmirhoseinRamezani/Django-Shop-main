@@ -27,7 +27,7 @@ def send_email_event(event):
         handler(event.payload)
 
 
-def send_otp(payload):
+def send_otp_email(payload):
 
     email = payload.get("email")
 
@@ -61,7 +61,7 @@ def send_order_created(payload):
     )
 
 
-def send_order_paid(payload):
+def send_order_paid_email(payload):
 
     EmailClient.send(
 
@@ -74,7 +74,7 @@ def send_order_paid(payload):
     )
 
 
-def send_coupon_used(payload):
+def send_coupon_email(payload):
 
     EmailClient.send(
 

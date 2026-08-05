@@ -6,6 +6,7 @@ from django.utils import timezone
 from shop.constants import SiteSaleType
 from order.models import OrderStatusType
 from django.utils.translation import gettext_lazy as _
+
 class OrderPolicy:
     """
     Centralized order access rules.
@@ -81,3 +82,4 @@ class OrderPolicy:
                 OrderStatusType.failed,
             }
         )
+        

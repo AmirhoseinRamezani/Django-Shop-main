@@ -14,8 +14,8 @@ def handle_successful_payment(*, authority, ref_id, response, session):
 
     order = payment.order
 
-    if order.coupon:
-        order.coupon.mark_used()
+    # if order.coupon:
+    #     order.coupon.mark_used()
 
     CartSession(session).clear()
     session.pop("coupon_id", None)

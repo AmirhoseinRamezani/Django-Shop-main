@@ -31,6 +31,6 @@ class TestVerifyQueries:
             5,
             verify_payment,
             authority=payment.authority_id,
-            ref_id="123456",
+            ref_id=123456,
             response={},
         )

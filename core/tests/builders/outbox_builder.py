@@ -1,12 +1,12 @@
 # tests/builders/outbox.py
-from tests.builders.base import Builder
+from tests.builders.base import BaseBuilder
 
 from tests.factories.events import (
     OutboxEventFactory,
 )
 
 
-class OutboxBuilder(Builder):
+class OutboxBuilder(BaseBuilder):
 
     def topic(self, topic):
 

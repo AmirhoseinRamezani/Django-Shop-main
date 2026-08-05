@@ -3,6 +3,7 @@ from django.db import models
 from decimal import Decimal
 from django.core.validators import MinValueValidator, MaxValueValidator
 from .constants import ProductStatusType
+from django.utils.translation import gettext_lazy as _
 
 
 class ProductCategoryModel(models.Model):
@@ -63,17 +64,86 @@ class ProductModel(models.Model):
 
     created_date = models.DateTimeField(auto_now_add=True)
     updated_date = models.DateTimeField(auto_now=True)
+    
+    # Product Identity
+    # -----------------------------------------
+
+    sku = models.CharField(
+        max_length=100,
+        unique=True,
+        db_index=True,
+        help_text=_("Unique stock keeping unit."),
+    )
+
+    barcode = models.CharField(
+        max_length=64,
+        unique=True,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text=_("Optional unique product barcode."),
+    )
+
+    # -----------------------------------------
+    # Inventory
+    # -----------------------------------------
+
+    reserved_stock = models.PositiveIntegerField(
+        default=0,
+        help_text=_(
+            "Quantity reserved by active orders "
+            "and not yet finalized."
+        ),
+    )
 
     class Meta:
         ordering = ("-created_date",)
         indexes = [
             models.Index(fields=["status"]),
             models.Index(fields=["slug"]),
+            models.Index(fields=["sku"]),
+            models.Index(fields=["barcode"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(stock__gte=0)
+                ),
+                name="product_stock_non_negative",
+            ),
+
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        reserved_stock__gte=0
+                    )
+                ),
+                name="product_reserved_stock_non_negative",
+            ),
+
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        reserved_stock__lte=models.F(
+                            "stock"
+                        )
+                    )
+                ),
+                name="product_reserved_stock_lte_stock",
+            ),
         ]
 
     def __str__(self):
         return self.title
 
+    @property
+    def available_stock(self):
+        return max(
+            self.stock
+            - self.reserved_stock,
+            0,
+        )
+        
     @property
     def final_price(self) -> int:
         if not self.discount_percent:

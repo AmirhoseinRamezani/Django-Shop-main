@@ -34,9 +34,14 @@ class RefreshToken(models.Model):
             models.Index(fields=["token"]),
             models.Index(fields=["user", "is_revoked"]),
             models.Index(fields=["session"]),
+            models.Index(fields=["family_id","is_revoked"]),
+            models.Index(fields=["expires_at"]),
         ]
     
     def revoke(self):
+        if self.is_revoked:
+            return
+
         self.is_revoked = True
         self.revoked_at = timezone.now()
         self.save(update_fields=["is_revoked", "revoked_at"])

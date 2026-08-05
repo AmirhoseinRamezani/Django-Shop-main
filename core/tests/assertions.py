@@ -123,3 +123,51 @@ def assert_failed(event):
     refresh(event)
 
     assert event.status == OutboxStatus.failed
+
+
+
+# from events.models import OutboxStatus
+def assert_event_pending(event):
+
+    event.refresh_from_db()
+
+    assert (
+        event.status ==
+        OutboxStatus.pending
+    )
+
+
+
+def assert_event_processed(event):
+
+    event.refresh_from_db()
+
+    assert (
+        event.status ==
+        OutboxStatus.processed
+    )
+
+
+
+def assert_event_failed(event):
+
+    event.refresh_from_db()
+
+    assert (
+        event.status ==
+        OutboxStatus.failed
+    )
+
+
+
+def assert_event_retry_count(
+        event,
+        expected
+):
+
+    event.refresh_from_db()
+
+    assert (
+        event.retry_count ==
+        expected
+    )

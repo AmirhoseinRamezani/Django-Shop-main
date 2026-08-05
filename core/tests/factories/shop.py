@@ -1,6 +1,7 @@
 # tests/factories/shop.py
 import factory
 from decimal import Decimal
+
 from django.utils import timezone
 from datetime import timedelta
 
@@ -8,6 +9,8 @@ from tests.base import BaseFactory
 
 from shop.models import (
     ProductModel,
+    ProductCategoryModel,
+
 )
 
 from shop.constants import (
@@ -18,14 +21,30 @@ from order.models import (
     CouponModel,
     UserAddressModel,
 )
+
 from tests.factories.accounts import UserFactory
 
+# from tests.factories.shop import ProductCategoryFactory
+# from tests.factories.shop import (
+#     ProductFactory,
+#     CouponFactory,
+#     AddressFactory,
+#     ProductCategoryFactory
+# )
+class ProductCategoryFactory(BaseFactory):
+    class Meta:
+        model = ProductCategoryModel
+
+    title = factory.Sequence(lambda n: f"Category {n}")
+    slug = factory.Sequence(lambda n: f"category-{n}")
 
 class ProductFactory(BaseFactory):
 
     class Meta:
         model = ProductModel
 
+    user = factory.SubFactory(UserFactory)
+    
     title = factory.Sequence(
         lambda n: f"Product {n}"
     )
@@ -42,7 +61,7 @@ class ProductFactory(BaseFactory):
 
     status = ProductStatusType.PUBLISH
 
-    is_active = True
+    # is_active = True
 
     class Params:
 
@@ -50,6 +69,10 @@ class ProductFactory(BaseFactory):
             status=ProductStatusType.DRAFT,
         )
 
+        unpublished = factory.Trait(
+            status=ProductStatusType.DRAFT,
+        )
+        
         out_of_stock = factory.Trait(
             stock=0,
         )
@@ -57,7 +80,18 @@ class ProductFactory(BaseFactory):
         discounted = factory.Trait(
             discount_percent=20,
         )
+    @factory.post_generation
+    def category(self, create, extracted, **kwargs):
 
+        if not create:
+            return
+
+        if extracted:
+            for cat in extracted:
+                self.category.add(cat)
+
+        else:
+            self.category.add(ProductCategoryFactory())
 
 class CouponFactory(BaseFactory):
 
@@ -103,15 +137,28 @@ class AddressFactory(BaseFactory):
     class Meta:
         model = UserAddressModel
 
+    
     user = factory.SubFactory(UserFactory)
 
-    address = factory.Faker("address")
+    # full_name = factory.Faker("name")
 
-    city = "Tehran"
+    # phone = "09123456789"
 
-    state = "Tehran"
+    # email = factory.Sequence(
+    #     lambda n: f"user{n}@test.com"
+    # )
 
-    zip_code = "1111111111"
+    state = "Khorasan"
+
+    city = "Mashhad"
+
+    address = "Some Street"
+
+    zip_code = "9187654321"
+
+    # postal_code = "9187654321"
+
+    # is_default = True
     
 # CategoryFactory
 # ProductFactory

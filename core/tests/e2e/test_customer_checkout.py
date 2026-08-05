@@ -56,7 +56,7 @@ class TestCustomerCheckout:
 
         handle_successful_payment(
             authority=payment.authority_id,
-            ref_id="REF-100",
+            ref_id=1122,
             response={},
             session=DummySession(),
         )

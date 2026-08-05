@@ -1,5 +1,4 @@
 # tests/base.py
-
 import pytest
 
 from factory.django import DjangoModelFactory

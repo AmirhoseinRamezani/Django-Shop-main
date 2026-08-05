@@ -38,9 +38,7 @@ class SessionService:
         user,
     ):
         ip = cls.get_client_ip(request)
-
         user_agent = cls.get_user_agent(request)
-
         device_hash = generate_device_hash(
             ip,
             user_agent,

@@ -1,16 +1,14 @@
 # payment/services/services.py
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
-from order.models import OrderStatusType
 from django.core.exceptions import ValidationError
-from payment.models import PaymentStatusType
+from payment.repositories.payment_repository import PaymentRepository
+from payment.services.gateway_service import GatewayService
 
-from payment.models import PaymentModel
-from payment.zarinpal_client import ZarinPalSandbox
 from payment.policies import PaymentPolicy
-from order.events.order_event import OrderEvent,OrderEventType
+from order.events.order_event import OrderEventType
 from order.services.events import record_order_event
-
+from payment.services.factory import PaymentFactory
 from django.utils.translation import gettext_lazy as _
 
 class PaymentService:
@@ -24,31 +22,37 @@ class PaymentService:
         """
 
         PaymentPolicy.can_start_payment(order)
+        PaymentRepository.close_pending(order)
         
         # if not order.can_retry_payment():
         #     raise PermissionDenied(_("Payment is not allowed for this order"))
 
         # prevent duplicate pending payments
-        if order.payments.filter(status=PaymentStatusType.pending).exists():
-            raise ValidationError(_("Pending payment already exists"))
+        # if order.payments.filter(status=PaymentStatusType.pending).exists():
+        #     raise ValidationError(_("Pending payment already exists"))
 
-        zarinpal = ZarinPalSandbox()
-        response = zarinpal.payment_request(order.get_price())
+        # zarinpal = ZarinPalSandbox()
+        # response = zarinpal.payment_request(order.final_price)
+        response = GatewayService.payment_request(order.final_price)
 
-        payment = PaymentModel.objects.create(
+        payment = PaymentFactory.create(
             order=order,
             authority_id=response["Authority"],
-            amount=order.get_price(),
-            response_json=response
+            amount=order.final_price,
+            request_payload=response,
+            # response_json=response
         )
         record_order_event(
             order=order,
             type=OrderEventType.PAYMENT_STARTED,
             actor=order.user,
-            payload={"amount": str(order.get_price())}
+            payload={"amount": str(order.final_price)}
         )
 
-        order.status = OrderStatusType.pending
-        order.save(update_fields=[ "status"])
+        # order.status = OrderStatusType.pending
+        # order.save(update_fields=[ "status"])
 
-        return zarinpal.generate_payment_url(payment.authority_id)
+        # return zarinpal.generate_payment_url(payment.authority_id)
+        return GatewayService.payment_url(
+            response["Authority"],
+        )

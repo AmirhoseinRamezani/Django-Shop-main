@@ -17,7 +17,7 @@ class TestPaymentRetry:
     ):
         verify_payment(
             authority=payment.authority_id,
-            ref_id="REF-1",
+            ref_id=11,
             response={},
         )
 
@@ -25,6 +25,6 @@ class TestPaymentRetry:
 
             verify_payment(
                 authority=payment.authority_id,
-                ref_id="REF-2",
+                ref_id=11,
                 response={},
             )

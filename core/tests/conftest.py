@@ -1,4 +1,5 @@
 # tests/conftest.py
+
 pytest_plugins = (
     "tests.fixtures.users",
     "tests.fixtures.products",

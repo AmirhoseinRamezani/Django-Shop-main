@@ -22,14 +22,14 @@ class TestPaymentModel:
     ):
 
         payment.mark_success(
-            ref_id="123456"
+            ref_id=123456
         )
 
         payment.refresh_from_db()
 
         assert payment.status == PaymentStatusType.success
 
-        assert payment.ref_id == "123456"
+        assert payment.ref_id == 123456
 
     def test_mark_failed(
         self,

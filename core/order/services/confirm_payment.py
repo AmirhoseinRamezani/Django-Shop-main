@@ -3,11 +3,13 @@ from django.db import transaction
 from django.core.exceptions import ValidationError
 
 from order.services.state_machine import OrderStateMachine
-from order.models import OrderModel, OrderStatusType
-from payment.models import PaymentModel, PaymentStatusType
+from order.models import OrderModel, OrderStatusType,CouponModel
+from payment.models import PaymentModel
+from payment.enums import PaymentStatusType
 from order.events.order_event import OrderEventType
 from order.services.events import record_order_event
 from django.utils.translation import gettext as _
+from django.db.models import F
 
 @transaction.atomic
 def confirm_order_payment(order_id: int) -> OrderModel:  #*, payment
@@ -24,7 +26,7 @@ def confirm_order_payment(order_id: int) -> OrderModel:  #*, payment
 
     # Order expired
     if order.is_expired():
-        raise ValueError("Order expired")
+        raise ValidationError(_("Order expired"))
 
     # Find latest successful payment
     payment = (
@@ -32,7 +34,7 @@ def confirm_order_payment(order_id: int) -> OrderModel:  #*, payment
         .select_for_update()
         .filter(
             order=order,
-            status=PaymentStatusType.success,
+            status=PaymentStatusType.SUCCESS,
         )
         .order_by("-created_date")
         .first()
@@ -46,8 +48,9 @@ def confirm_order_payment(order_id: int) -> OrderModel:  #*, payment
         raise ValidationError(_("Payment already consumed"))
 
     # Finalize
-    payment.is_consumed = True
-    payment.save(update_fields=["is_consumed"])
+    # payment.is_consumed = True
+    payment.consume()
+    # payment.save(update_fields=["is_consumed"])
 
 
     OrderStateMachine.transition(
@@ -57,10 +60,23 @@ def confirm_order_payment(order_id: int) -> OrderModel:  #*, payment
         payload={
             "payment_id": payment.id,
             "ref_id": payment.ref_id,
-            "amount": str(order.get_price()),
+            "amount": str(order.final_price),
         }
     )
-
+    
+    
+    # CouponService.consume_coupon()
+    
+    # CouponModel.objects.filter(
+    #     pk=order.coupon_id
+    # ).update(
+    #     used_count=F("used_count")+1
+    # )
+    
+    if order.coupon:
+        CouponService.consume(order.coupon)
+    
+    
     # record_order_event(
     #     order=order,
     #     type=OrderEventType.PAID,
@@ -68,7 +84,7 @@ def confirm_order_payment(order_id: int) -> OrderModel:  #*, payment
     #     payload={
     #         "payment_id": payment.id,
     #         "ref_id": payment.ref_id,
-    #         "amount": str(order.get_price()),
+    #         "amount": str(order.final_price()),
     #     },
     # )
 
@@ -85,7 +101,7 @@ def _confirm_order_payment(order_id: int) -> OrderModel:
         PaymentModel.objects
         .filter(
             order_id=order_id,
-            status=PaymentStatusType.success,
+            status=PaymentStatusType.SUCCESS,
         )
         .order_by("-created_date")
         .first()
@@ -94,4 +110,4 @@ def _confirm_order_payment(order_id: int) -> OrderModel:
     if not payment:
         raise ValidationError(_("No successful payment found"))
 
-    return confirm_order_payment(order_id=order_id)
+    return confirm_order_payment(order_id) # = order_id

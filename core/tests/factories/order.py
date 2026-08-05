@@ -15,6 +15,7 @@ from order.models import (
 )
 
 from tests.factories.accounts import UserFactory
+
 from tests.factories.shop import (
     AddressFactory,
     CouponFactory,
@@ -35,9 +36,15 @@ class OrderFactory(BaseFactory):
 
     total_price = fuzzy.FuzzyInteger(100000, 5000000)
 
-    full_name = factory.Faker("name")
+    # full_name = factory.Faker("name")
+    full_name = factory.LazyAttribute(
+        lambda o: o.user.profile.get_fullname()
+    )
 
-    phone = "09123456789"
+    # phone = '09123456789'
+    phone = factory.LazyAttribute(
+        lambda o: o.user.profile.phone_number
+    )
 
     email = factory.LazyAttribute(
         lambda o: o.user.email

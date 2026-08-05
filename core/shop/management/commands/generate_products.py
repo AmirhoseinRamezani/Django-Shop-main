@@ -1,3 +1,4 @@
+# shop/management/commands/generate_products.py
 import random
 from pathlib import Path
 

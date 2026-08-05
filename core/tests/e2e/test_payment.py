@@ -37,7 +37,7 @@ class TestPaymentLifecycle:
 
         verify_payment(
             authority=payment.authority_id,
-            ref_id="REF123",
+            ref_id=123,
             response={},
         )
 

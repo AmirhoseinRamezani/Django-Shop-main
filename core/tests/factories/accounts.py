@@ -1,16 +1,26 @@
 # tests/factories/accounts.py
 import factory
-
-from django.contrib.auth import get_user_model
+from tests.base import BaseFactory
 
 from accounts.models import (
+    UserManager,
     User,
     Profile,
     DeviceSession,
     RefreshToken,
 )
 
-from tests.base import BaseFactory
+
+from django.contrib.auth import get_user_model
+
+# from tests.factories.shop import ProductFactory
+
+# from tests.factories.shop import (
+#     AddressFactory,
+#     CouponFactory,
+#     ProductFactory,
+# )
+
 
 User = get_user_model()
 
@@ -39,9 +49,12 @@ class UserFactory(BaseFactory):
         "password123",
     )
 
-    is_active = True
+    
+    # is_active = True => status = ProductStatusType.PUBLISH
     is_verified = True
-
+    
+    
+        
     class Params:
 
         admin = factory.Trait(
@@ -53,20 +66,67 @@ class UserFactory(BaseFactory):
             is_superuser=True,
         )
 
-        inactive = factory.Trait(
-            is_active=False,
-        )
 
         unverified = factory.Trait(
             is_verified=False,
         )
+        
+    @factory.post_generation
+    def profile(self, create, extracted, **kwargs):
+        # phone_number = factory.Sequence(
+        #     lambda n: f"0912000{n:04}"
+        # )
+        
+        if not create:
+            return
+        
+        profile = self.profile
+        
+        if not profile.first_name:
+            profile.first_name = "Test"
+
+        if not profile.last_name:
+            profile.last_name = "User"
+        
+        if not profile.phone_number:
+            profile.phone_number = "09123456789"
+        
+        
+        if extracted:
+
+            for k, v in extracted.items():
+                setattr(profile, k, v)
+
+        profile.save()
+    # @factory.post_generation
+    # def profile(self, create, extracted, **kwargs):
+
+    #     if not create:
+    #         return
+
+    #     profile = self.profile
+
+    #     if not profile.phone_number:
+    #         profile.phone_number = "09123456789"
+
+    #     if not profile.first_name:
+    #         profile.first_name = "Test"
+
+    #     if not profile.last_name:
+    #         profile.last_name = "User"
+
+    #     if extracted:
+    #         for k, v in extracted.items():
+    #             setattr(profile, k, v)
+
+    #     profile.save()
         
 class ProfileFactory(BaseFactory):
 
     class Meta:
         model = Profile
 
-    user = factory.SubFactory(UserFactory)
+    user = factory.LazyFunction(UserFactory)
 
     first_name = factory.Faker("first_name")
 

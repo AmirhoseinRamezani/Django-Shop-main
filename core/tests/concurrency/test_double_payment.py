@@ -21,12 +21,12 @@ def test_verify_is_safe(successful_payment):
 
         lambda: verify_payment(
             authority=successful_payment.authority_id,
-            ref_id="1",
+            ref_id=1,
         ),
 
         lambda: verify_payment(
             authority=successful_payment.authority_id,
-            ref_id="2",
+            ref_id=2,
         ),
     )
 

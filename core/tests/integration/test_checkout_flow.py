@@ -63,7 +63,7 @@ class TestCheckoutFlow:
 
         verify_payment(
             authority=payment.authority_id,
-            ref_id="REF-001",
+            ref_id=1234,
             response={},
         )
 
@@ -112,7 +112,7 @@ class TestCheckoutFlow:
 
         verify_payment(
             authority=payment.authority_id,
-            ref_id="REF-100",
+            ref_id=1234,
         )
 
         refresh(
@@ -158,7 +158,7 @@ class TestCheckoutFlow:
 
         verify_payment(
             authority=payment.authority_id,
-            ref_id="REF-1",
+            ref_id=1234,
         )
 
         payment.refresh_from_db()
@@ -167,7 +167,7 @@ class TestCheckoutFlow:
 
         second = verify_payment(
             authority=payment.authority_id,
-            ref_id="REF-1",
+            ref_id=1234,
         )
 
         assert second.pk == payment.pk
@@ -211,7 +211,7 @@ class TestCheckoutFlow:
 
         verify_payment(
             authority=payment.authority_id,
-            ref_id="OK",
+            ref_id=1234,
         )
 
         product.refresh_from_db()

@@ -42,7 +42,7 @@ def test_complete_checkout_flow(
 
     verify_payment(
         authority=payment.authority_id,
-        ref_id="999999",
+        ref_id=999999,
         response={},
     )
 

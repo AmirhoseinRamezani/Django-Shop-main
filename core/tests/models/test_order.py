@@ -17,7 +17,7 @@ class TestOrderModel:
         order,
     ):
 
-        assert order.get_price() == order.total_price
+        assert order.final_price == order.total_price
 
     def test_get_price_with_coupon(
         self,
@@ -28,7 +28,7 @@ class TestOrderModel:
         order.coupon = coupon
         order.coupon_discount_percent = 20
 
-        assert order.get_price() == round(
+        assert order.final_price == round(
             order.total_price * 80 / 100
         )
 

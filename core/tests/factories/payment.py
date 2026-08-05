@@ -22,15 +22,17 @@ class PaymentFactory(BaseFactory):
         lambda n: f"AUTH-{n}"
     )
 
-    ref_id = None
+    ref_id = factory.Sequence(
+        lambda n: 100000 + n
+    )
 
     amount = factory.SelfAttribute(
         "order.total_price"
     )
 
     status = PaymentStatusType.pending
-
-    response_json = {}
+    
+    response_json = factory.LazyFunction(dict)
 
     is_consumed = False
 
@@ -39,7 +41,7 @@ class PaymentFactory(BaseFactory):
         success = factory.Trait(
             status=PaymentStatusType.success,
             ref_id=factory.Sequence(
-                lambda n: f"REF-{n}"
+                lambda n: 100000 + n
             ),
         )
 
@@ -55,7 +57,7 @@ class PaymentFactory(BaseFactory):
             status=PaymentStatusType.success,
             is_consumed=True,
             ref_id=factory.Sequence(
-                lambda n: f"REF-{n}"
+                lambda n: 100000 + n
             ),
         )
 
