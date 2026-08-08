@@ -15,11 +15,6 @@ from order.services.state_machine import (
     OrderStateMachine,
 )
 
-# from order.services.coupon import (
-#     CouponService,
-# )
-
-
 class RefundService:
 
     @staticmethod
@@ -67,9 +62,7 @@ class RefundService:
             refunded_by=actor,
             response=result,
         )
-        
-        # if order.coupon:
-        #     CouponService.rollback(order.coupon)
+
         RefundPolicy.rollback_coupon(
             order,
         )

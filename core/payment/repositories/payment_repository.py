@@ -35,24 +35,6 @@ class PaymentRepository(BaseRepository):
     def get(cls, payment_id: int) -> PaymentModel:
         return cls.queryset().get(pk=payment_id)
 
-    @classmethod
-    def by_authority(cls, authority: str) -> PaymentModel:
-        return cls.queryset().get(
-            authority_id=authority,
-        )
-
-    @classmethod
-    def by_idempotency_key(cls, key):
-        return cls.queryset().get(
-            idempotency_key=key,
-        )
-
-    @classmethod
-    def by_reference(cls, ref_id: str):
-        return cls.queryset().filter(
-            ref_id=ref_id,
-        ).first()
-
     # -----------------------------
     # Order
     # -----------------------------
@@ -94,21 +76,6 @@ class PaymentRepository(BaseRepository):
         )
 
     @classmethod
-    def latest_success(
-        cls,
-        order,
-    ) -> Optional[PaymentModel]:
-
-        return (
-            cls.for_order(order)
-            .filter(
-                status=PaymentStatusType.SUCCESS,
-            )
-            .order_by("-verified_date")
-            .first()
-        )
-
-    @classmethod
     def latest_failed(
         cls,
         order,
@@ -123,15 +90,7 @@ class PaymentRepository(BaseRepository):
         )
         
     @classmethod
-    def verified(cls):
-        return (
-            cls.queryset()
-            .verified()
-        )
-        
-    @classmethod
     def create(cls, **kwargs):
-
         return cls.model.objects.create(**kwargs)
 
     # -----------------------------
@@ -216,94 +175,3 @@ class PaymentRepository(BaseRepository):
     # -----------------------------
     # Exists
     # -----------------------------
-
-    @classmethod
-    def exists_reference(
-        cls,
-        ref_id: str,
-    ) -> bool:
-
-        return (
-            cls.queryset()
-            .filter(ref_id=ref_id)
-            .exists()
-        )
-
-    @classmethod
-    def exists_authority(
-        cls,
-        authority: str,
-    ) -> bool:
-
-        return (
-            cls.queryset()
-            .filter(
-                authority_id=authority,
-            )
-            .exists()
-        )
-        
-    
-    # # ==========================================================
-    # # Aggregate Queries
-    # # ==========================================================
-
-    # @property
-    # def pending_attempt(self):
-    #     """
-    #     Current pending gateway execution.
-    #     """
-    #     from payment.enums import PaymentAttemptStatus
-
-    #     return (
-    #         self.attempts
-    #         .filter(
-    #             status=PaymentAttemptStatus.PENDING,
-    #         )
-    #         .order_by(
-    #             "-attempt_number",
-    #         )
-    #         .first()
-    #     )
-
-    # @property
-    # def failed_attempts(self):
-    #     from payment.enums import PaymentAttemptStatus
-
-    #     return (
-    #         self.attempts
-    #         .filter(
-    #             status=PaymentAttemptStatus.FAILED,
-    #         )
-    #     )
-
-    # @property
-    # def timeout_attempts(self):
-    #     from payment.enums import PaymentAttemptStatus
-
-    #     return (
-    #         self.attempts
-    #         .filter(
-    #             status=PaymentAttemptStatus.TIMEOUT,
-    #         )
-    #     )
-
-    # @property
-    # def cancelled_attempts(self):
-    #     from payment.enums import PaymentAttemptStatus
-
-    #     return (
-    #         self.attempts
-    #         .filter(
-    #             status=PaymentAttemptStatus.CANCELLED,
-    #         )
-    #     )
-
-    # @property
-    # def has_attempts(self) -> bool:
-    #     return self.attempts.exists()
-
-    # @property
-    # def has_successful_attempt(self) -> bool:
-    #     return self.successful_attempt is not None
-

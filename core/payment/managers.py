@@ -33,12 +33,6 @@ class PaymentQuerySet(models.QuerySet):
             status=PaymentStatusType.FAILED,
         )
 
-    def verified(self):
-        return self.filter(
-            status=PaymentStatusType.SUCCESS,
-            verified_date__isnull=False,
-        )
-
     def consumed(self):
         return self.filter(
             is_consumed=True,
@@ -73,16 +67,6 @@ class PaymentQuerySet(models.QuerySet):
             order=order,
         )
 
-    def by_authority(self, authority):
-        return self.filter(
-            authority_id=authority,
-        )
-
-    def by_reference(self, ref_id):
-        return self.filter(
-            ref_id=ref_id,
-        )
-
     def by_gateway(self, gateway):
         return self.filter(
             gateway=gateway,
@@ -110,21 +94,14 @@ class PaymentManager(
         PaymentQuerySet
     )
 ):
-    def active(self):
-        return self.get_queryset().open()
-    
+    pass
     # def open(self):
-    #     return self.get_queryset().filter(
-    #         status=PaymentStatusType.PENDING,
-    #         closed_date__isnull=True,
-    #         is_consumed=False,
-    #         is_refunded=False,
-    #     )
+    # def verified(self):
+    # active()
+    # closed()
+    # by_authority()
+    # by_reference()
 
-    def closed(self):
-        return self.get_queryset().filter(
-            closed_date__isnull=False,
-        )
 
 
 # ===============================
