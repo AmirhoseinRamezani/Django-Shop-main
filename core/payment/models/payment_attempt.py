@@ -253,12 +253,6 @@ class PaymentAttempt(models.Model):
         )
 
         constraints = [
-            # -----------------------------------------------
-            # One attempt number can exist only once per payment.
-            #
-            # Attempt number generation is still an application/repository
-            # responsibility and must be concurrency-safe.
-            # -----------------------------------------------
             models.UniqueConstraint(
                 fields=[
                     "payment",
@@ -267,13 +261,11 @@ class PaymentAttempt(models.Model):
                 name="payment_attempt_payment_number_uniq",
             ),
 
-            # Attempt number must always be positive.
             models.CheckConstraint(
                 condition=Q(attempt_number__gte=1),
                 name="payment_attempt_number_positive",
             ),
 
-            # A successful attempt must have a reference ID.
             models.CheckConstraint(
                 condition=(
                     ~Q(status=PaymentAttemptStatus.SUCCESS)
@@ -282,8 +274,6 @@ class PaymentAttempt(models.Model):
                 name="payment_attempt_success_requires_ref",
             ),
 
-            # Terminal attempts must have a completion timestamp.
-            # PENDING is the only non-terminal state.
             models.CheckConstraint(
                 condition=(
                     ~Q(status=PaymentAttemptStatus.SUCCESS)
@@ -317,7 +307,6 @@ class PaymentAttempt(models.Model):
                 name="payment_attempt_finished_state_valid",
             ),
 
-            # finished_at can never be earlier than started_at.
             models.CheckConstraint(
                 condition=(
                     Q(finished_at__isnull=True)
@@ -329,7 +318,6 @@ class PaymentAttempt(models.Model):
         ]
 
         indexes = [
-            # Find the latest pending attempt for a payment.
             models.Index(
                 fields=[
                     "payment",
@@ -339,8 +327,6 @@ class PaymentAttempt(models.Model):
                 name="pay_attempt_payment_status_idx",
             ),
 
-            # Operational monitoring:
-            # Find recent attempts by status.
             models.Index(
                 fields=[
                     "status",
@@ -349,7 +335,6 @@ class PaymentAttempt(models.Model):
                 name="pay_attempt_status_started_idx",
             ),
 
-            # Gateway reconciliation / callback lookup.
             models.Index(
                 fields=[
                     "payment",
@@ -366,7 +351,6 @@ class PaymentAttempt(models.Model):
                 name="pay_attempt_payment_tx_idx",
             ),
 
-            # Gateway authority lookup.
             models.Index(
                 fields=[
                     "payment",
