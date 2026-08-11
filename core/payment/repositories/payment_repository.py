@@ -514,33 +514,125 @@ class PaymentRepository(BaseRepository):
         update_fields: list[str] | tuple[str, ...] | None = None,
     ) -> PaymentModel:
         """
-        Persist a domain-mutated Payment.
+        Persist a domain-mutated Payment with optimistic concurrency.
 
-        The repository does not:
-            - call full_clean();
-            - perform domain transitions;
-            - inspect current business state;
-            - open a transaction;
-            - mutate related PaymentAttempt rows.
+        Contract
+        --------
+        The caller must provide an instance loaded with its current
+        version.
 
-        Args:
-            payment:
-                Payment instance to persist.
+        Example:
+            payment.version == 7
 
-            update_fields:
-                Optional Django update_fields collection.
+        Repository performs conceptually:
+            UPDATE payment
+            SET ...
+            WHERE id = payment.id
+            AND version = 7
 
-        Returns:
-            The same persisted PaymentModel instance.
+        and increments the stored version to 8.
 
-        Transaction:
-            Caller-owned.
+        If zero rows are affected:
+            PaymentConcurrencyError
+        is raised.
 
-        Database exceptions:
-            Allowed to propagate unchanged.
+        IMPORTANT:
+        This method does NOT open transaction.atomic().
+        Transaction ownership remains with the Application Service.
+
         """
-        payment.save(
-            update_fields=update_fields,
+
+        from django.db.models import F
+
+        from payment.exceptions import (
+            PaymentConcurrencyError,
+        )
+
+        if payment.pk is None:
+            raise ValueError(
+                "Cannot use optimistic save for an unsaved Payment."
+            )
+
+        expected_version = payment.version
+
+        if expected_version < 1:
+            raise ValueError(
+                "Payment version must be greater than zero."
+            )
+
+        # ------------------------------------------------------------
+        # Determine fields
+        # ------------------------------------------------------------
+
+        if update_fields is None:
+            fields = [
+                "order",
+                "amount",
+                "currency",
+                "gateway",
+                "status",
+                "is_consumed",
+                "is_refunded",
+                "updated_date",
+            ]
+        else:
+            fields = list(update_fields)
+
+            if "version" in fields:
+                fields.remove("version")
+
+            if "updated_date" not in fields:
+                fields.append("updated_date")
+
+        # ------------------------------------------------------------
+        # Version is always part of persistence.
+        #
+        # It is NOT supplied by caller.
+        #
+        # Database increments it atomically.
+        # ------------------------------------------------------------
+
+        queryset = (
+            cls.model.objects
+            .filter(
+                pk=payment.pk,
+                version=expected_version,
+            )
+        )
+
+        update_kwargs = {
+            field: getattr(payment, field)
+            for field in fields
+            if field != "updated_date"
+        }
+
+        update_kwargs["version"] = F(
+            "version"
+        ) + 1
+
+        rows = queryset.update(
+            **update_kwargs
+        )
+
+        # ------------------------------------------------------------
+        # Concurrency failure
+        # ------------------------------------------------------------
+
+        if rows != 1:
+            raise PaymentConcurrencyError(
+                (
+                    "Payment was modified concurrently. "
+                    f"payment_id={payment.pk}, "
+                    f"expected_version={expected_version}"
+                )
+            )
+
+        # ------------------------------------------------------------
+        # Synchronize in-memory aggregate.
+        # ------------------------------------------------------------
+
+        payment.version = (
+            expected_version + 1
         )
 
         return payment

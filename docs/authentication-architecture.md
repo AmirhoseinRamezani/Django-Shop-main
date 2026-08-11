@@ -358,3 +358,66 @@ feat(paymentmodel): refactor payment aggregate root for enterprise architecture
 - Improve DDD and Clean Architecture compliance
 - Prepare payment aggregate for repository pattern
 - Prepare payment core for PaymentAttempt redesign
+
+                     PAYMENT CORE
+                          │
+             ┌────────────┴────────────┐
+             │                         │
+             ▼                         ▼
+       PaymentModel             PaymentAttempt
+             │                         │
+             │                         │
+       State Machine             State Machine
+             │                         │
+             ▼                         ▼
+       Financial                 Gateway Identity
+       Invariants                Attempt Lifecycle
+             │                         │
+             └────────────┬────────────┘
+                          │
+                          ▼
+                     Repository
+                          │
+              ┌───────────┴───────────┐
+              │                       │
+              ▼                       ▼
+       Pessimistic Lock        Optimistic Version
+       select_for_update       compare-and-swap
+              │                       │
+              └───────────┬───────────┘
+                          ▼
+                      PostgreSQL
+
+            Gateway
+            │
+            ▼
+            Gateway Adapter
+            │
+            ▼
+            Application Service
+            │
+            ├── Policy
+            ├── Payment
+            ├── Attempt
+            └── Repository
+
+        
+                     Payment Core
+                          │
+             ┌────────────┴────────────┐
+             │                         │
+        exceptions.py             policies.py
+             │                         │
+       Error Contract           Business Decisions
+             │                         │
+             └────────────┬────────────┘
+                          │
+                   Application
+                     Services
+                          │
+              ┌───────────┼───────────┐
+              │           │           │
+          Repository   Gateway    Event Bus
+              │           │           │
+              ▼           ▼           ▼
+           Database    External     Events
