@@ -1,180 +1,80 @@
-# payment/models/refund.py
 from __future__ import annotations
 
-import uuid
 from decimal import Decimal
 from typing import Optional
 
 from django.core.exceptions import ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
-from django.core.validators import MinValueValidator
 from django.db import models
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
-from payment.enums import (
-    Currency,
-    PaymentGateway,
-    RefundStatus,
-    RefundReason,
-)
-from payment.managers import RefundManager
+from payment.enums import RefundReason, RefundStatus
+from payment.models.payment import PaymentModel
 
 
 class Refund(models.Model):
+    """One independent refund lifecycle belonging to a successful Payment.
+
+    Refund is a domain entity, not a workflow engine. It never performs
+    gateway I/O, opens transactions, queries repositories, aggregates other
+    refunds, mutates Payment/Order, dispatches events, or persists itself from
+    domain commands.
+
+    Cumulative refundable-balance checks belong to the application service and
+    MUST execute while holding the canonical Payment lock.
     """
-    Refund Domain Entity.
-    A Refund belongs to exactly one Payment aggregate.
-    Architecture
-    ------------
-    Payment
-        ├── PaymentAttempt
-        ├── Refund #1
-        ├── Refund #2
-        └── Refund #N
-
-    Responsibilities
-    ----------------
-    Refund is responsible for:
-
-        - Representing one refund operation.
-        - Maintaining refund lifecycle state.
-        - Validating refund amount.
-        - Maintaining gateway-generated refund identifiers.
-        - Enforcing successful-state invariants.
-        - Providing side-effect-free domain behavior.
-        - Supporting idempotent success/failure transitions.
-
-    Refund is NOT responsible for:
-
-        - Calculating whether the Payment is fully refunded.
-        - Aggregating other refunds.
-        - Querying the database.
-        - Executing transactions.
-        - Locking Payment or Refund rows.
-        - Performing optimistic locking.
-        - Calling payment gateways.
-        - Storing raw gateway payloads.
-        - Creating GatewayLog records.
-        - Saving itself from domain methods.
-
-    Persistence
-    -----------
-    Repository/Application Service is responsible for:
-
-        - database transactions;
-        - select_for_update();
-        - optimistic locking;
-        - refund amount aggregation;
-        - persistence;
-        - GatewayLog creation;
-        - OutboxEvent creation.
-
-    Gateway Payloads
-    ----------------
-    Raw gateway request/response payloads MUST NOT be stored here.
-    They belong exclusively to GatewayLog.
-    """
-
-    # =========================
-    # Identity
-    # =========================
 
     payment = models.ForeignKey(
-        "payment.PaymentModel",
+        PaymentModel,
         on_delete=models.PROTECT,
         related_name="refunds",
-        help_text=_(
-            "Payment aggregate that owns this refund."
-        ),
+        help_text=_("Payment aggregate against which this refund is requested."),
     )
-
-    # =========================
-    # Idempotency
-    # =========================
-
-    idempotency_key = models.UUIDField(
-        unique=True,
-        editable=False,
-        default=uuid.uuid4,
-        help_text=_(
-            "Unique application-level idempotency key for this refund."
-        ),
-    )
-
-    # =========================
-    # Financial
-    # =========================
 
     amount = models.DecimalField(
         max_digits=12,
         decimal_places=0,
-        validators=[
-            MinValueValidator(
-                Decimal("1"),
-            ),
-        ],
-        help_text=_(
-            "Amount requested for this individual refund."
-        ),
+        help_text=_("Immutable amount requested for this refund operation."),
     )
 
     currency = models.CharField(
         max_length=8,
-        choices=Currency.choices,
-        help_text=_(
-            "Currency of the refund amount."
-        ),
+        help_text=_("Immutable currency snapshot of the Payment."),
     )
 
-    # =========================
-    # Gateway Context
-    # =========================
-
-    gateway = models.CharField(
-        max_length=32,
-        choices=PaymentGateway.choices,
+    idempotency_key = models.CharField(
+        max_length=128,
+        unique=True,
         db_index=True,
-        help_text=_(
-            "Payment gateway responsible for processing this refund."
-        ),
+        help_text=_("Application-level idempotency identity for this refund."),
     )
 
-    # =========================
-    # State
-    # =========================
+    reason = models.CharField(
+        max_length=32,
+        choices=RefundReason.choices,
+        default=RefundReason.OTHER,
+    )
+
+    reason_detail = models.CharField(
+        max_length=500,
+        blank=True,
+        default="",
+    )
 
     status = models.CharField(
         max_length=20,
         choices=RefundStatus.choices,
         default=RefundStatus.PENDING,
         db_index=True,
-        help_text=_(
-            "Current lifecycle state of this refund."
-        ),
     )
 
-    # =========================
-    # Gateway Identifiers
-    # =========================
-    #
-    # These fields contain normalized gateway identifiers only.
-    #
-    # Raw gateway payloads MUST NOT be stored here.
-    # Raw request/response data belongs exclusively to GatewayLog.
-    #
-    # Once SUCCESS, existing gateway identifiers are immutable.
-    # =========================
-
-    gateway_ref = models.CharField(
+    gateway_reference = models.CharField(
         max_length=128,
         blank=True,
         default="",
         db_index=True,
-        help_text=_(
-            "Gateway-generated refund reference identifier."
-        ),
     )
 
     gateway_transaction_id = models.CharField(
@@ -182,717 +82,257 @@ class Refund(models.Model):
         blank=True,
         default="",
         db_index=True,
-        help_text=_(
-            "Gateway-side transaction identifier for the refund."
-        ),
     )
-
-    # =========================
-    # Gateway Result
-    # =========================
 
     response_code = models.CharField(
         max_length=64,
         blank=True,
         default="",
-        help_text=_(
-            "Normalized gateway response code."
-        ),
     )
 
     gateway_message = models.CharField(
         max_length=255,
         blank=True,
         default="",
-        help_text=_(
-            "Normalized gateway response message."
-        ),
     )
 
     failure_reason = models.CharField(
         max_length=255,
         blank=True,
         default="",
-        help_text=_(
-            "Internal normalized reason for refund failure."
-        ),
-    )
-    
-    reason = models.CharField(
-        max_length=32,
-        choices=RefundReason.choices,
-        default=RefundReason.OTHER,
     )
 
-    # =========================
-    # Lifecycle Timestamps
-    # ========================
-    
-    requested_at = models.DateTimeField(
-        auto_now_add=True,
-        editable=False,
-        help_text=_(
-            "Timestamp when the refund entity was created."
-        ),
-    )
+    requested_at = models.DateTimeField(auto_now_add=True)
 
-    completed_at = models.DateTimeField(
+    finished_at = models.DateTimeField(
         null=True,
         blank=True,
-        help_text=_(
-            "Timestamp when the refund reached SUCCESS."
-        ),
     )
 
-    failed_at = models.DateTimeField(
+    latency_ms = models.PositiveIntegerField(
         null=True,
         blank=True,
-        help_text=_(
-            "Timestamp when the refund reached FAILED."
-        ),
     )
 
-    # =========================
-    # Metadata
-    # =========================
+    ip_address = models.GenericIPAddressField(
+        null=True,
+        blank=True,
+    )
+
+    user_agent = models.TextField(
+        blank=True,
+        default="",
+    )
 
     meta = models.JSONField(
         default=dict,
         blank=True,
         encoder=DjangoJSONEncoder,
-        help_text=_(
-            "Non-sensitive structured metadata associated with this refund."
-        ),
     )
-
-    # =========================
-    # Audit Timestamps
-    # =========================
-
-    created_date = models.DateTimeField(
-        auto_now_add=True,
-        editable=False,
-    )
-
-    updated_date = models.DateTimeField(
-        auto_now=True,
-    )
-
-    # =========================
-    # Manager
-    # =========================
-
-    objects = RefundManager()
-
-    # =========================
-    # Meta
-    # =========================
 
     class Meta:
-        ordering = (
-            "-created_date",
-            "-id",
-        )
-
+        verbose_name = _("Refund")
+        verbose_name_plural = _("Refunds")
+        ordering = ("-requested_at", "-id")
         constraints = [
-
-            # -----------------------------------------------
-            # Refund amount must always be positive.
-            # -----------------------------------------------
             models.CheckConstraint(
                 condition=Q(amount__gt=0),
                 name="refund_amount_positive",
             ),
-
-            # -----------------------------------------------
-            # Successful refund must have gateway reference.
-            # -----------------------------------------------
+            models.CheckConstraint(
+                condition=Q(currency__gt=""),
+                name="refund_currency_required",
+            ),
+            models.CheckConstraint(
+                condition=Q(idempotency_key__gt=""),
+                name="refund_idempotency_key_required",
+            ),
             models.CheckConstraint(
                 condition=(
                     ~Q(status=RefundStatus.SUCCESS)
-                    | Q(gateway_ref__gt="")
+                    | Q(gateway_reference__gt="")
+                    | Q(gateway_transaction_id__gt="")
                 ),
-                name="refund_success_requires_gateway_ref",
+                name="refund_success_requires_gateway_identity",
             ),
-
-            # -----------------------------------------------
-            # Successful refund must have completion timestamp.
-            # -----------------------------------------------
             models.CheckConstraint(
                 condition=(
                     ~Q(status=RefundStatus.SUCCESS)
-                    | Q(completed_at__isnull=False)
+                    | Q(failure_reason="")
                 ),
-                name="refund_success_requires_completed_at",
+                name="refund_success_no_failure_reason",
             ),
-
-            # -----------------------------------------------
-            # Failed refund must have failure timestamp.
-            # -----------------------------------------------
             models.CheckConstraint(
                 condition=(
-                    ~Q(status=RefundStatus.FAILED)
-                    | Q(failed_at__isnull=False)
-                ),
-                name="refund_failed_requires_failed_at",
-            ),
-
-            # -----------------------------------------------
-            # Pending refund cannot have terminal timestamps.
-            # -----------------------------------------------
-            models.CheckConstraint(
-                condition=(
-                    ~Q(status=RefundStatus.PENDING)
-                    | (
-                        Q(completed_at__isnull=True)
-                        & Q(failed_at__isnull=True)
+                    Q(status=RefundStatus.PENDING, finished_at__isnull=True)
+                    | Q(
+                        status__in=(RefundStatus.SUCCESS, RefundStatus.FAILED),
+                        finished_at__isnull=False,
                     )
                 ),
-                name="refund_pending_has_no_terminal_timestamp",
+                name="refund_finished_state_valid",
             ),
-
-            # -----------------------------------------------
-            # Successful refund cannot have failure timestamp.
-            # -----------------------------------------------
             models.CheckConstraint(
                 condition=(
-                    ~Q(status=RefundStatus.SUCCESS)
-                    | Q(failed_at__isnull=True)
+                    Q(finished_at__isnull=True)
+                    | Q(finished_at__gte=F("requested_at"))
                 ),
-                name="refund_success_has_no_failed_at",
+                name="refund_finish_after_request",
             ),
-
-            # -----------------------------------------------
-            # Failed refund cannot have completion timestamp.
-            # -----------------------------------------------
-            models.CheckConstraint(
-                condition=(
-                    ~Q(status=RefundStatus.FAILED)
-                    | Q(completed_at__isnull=True)
-                ),
-                name="refund_failed_has_no_completed_at",
+            models.UniqueConstraint(
+                fields=("payment", "gateway_reference"),
+                condition=Q(gateway_reference__gt=""),
+                name="refund_payment_gateway_ref_uniq",
             ),
-
+            models.UniqueConstraint(
+                fields=("payment", "gateway_transaction_id"),
+                condition=Q(gateway_transaction_id__gt=""),
+                name="refund_payment_gateway_tx_uniq",
+            ),
         ]
-
         indexes = [
-
-            # -----------------------------------------------
-            # Payment refund history.
-            # -----------------------------------------------
             models.Index(
-                fields=[
-                    "payment",
-                    "-created_date",
-                ],
-                name="refund_payment_created_idx",
-            ),
-
-            # -----------------------------------------------
-            # Payment refund state queries.
-            # -----------------------------------------------
-            models.Index(
-                fields=[
-                    "payment",
-                    "status",
-                    "-created_date",
-                ],
+                fields=("payment", "status", "-requested_at"),
                 name="refund_payment_status_idx",
             ),
-
-            # -----------------------------------------------
-            # Payment successful refund aggregation.
-            #
-            # Application/Repository can efficiently query:
-            #
-            # payment.refunds.successful()
-            # -----------------------------------------------
             models.Index(
-                fields=[
-                    "payment",
-                    "status",
-                    "currency",
-                ],
-                name="refund_payment_success_idx",
+                fields=("status", "-requested_at"),
+                name="refund_status_requested_idx",
             ),
-
-            # -----------------------------------------------
-            # Gateway reconciliation.
-            # -----------------------------------------------
             models.Index(
-                fields=[
-                    "gateway",
-                    "gateway_ref",
-                ],
-                name="refund_gateway_ref_idx",
+                fields=("payment", "-requested_at"),
+                name="refund_payment_requested_idx",
             ),
-
             models.Index(
-                fields=[
-                    "gateway",
-                    "gateway_transaction_id",
-                ],
-                name="refund_gateway_tx_idx",
+                fields=("payment", "gateway_reference"),
+                name="refund_payment_ref_idx",
             ),
-
-            # -----------------------------------------------
-            # Operational monitoring.
-            # -----------------------------------------------
             models.Index(
-                fields=[
-                    "status",
-                    "-created_date",
-                ],
-                name="refund_status_created_idx",
-            ),
-
-            # -----------------------------------------------
-            # Gateway + status operational queries.
-            # -----------------------------------------------
-            models.Index(
-                fields=[
-                    "gateway",
-                    "status",
-                    "-created_date",
-                ],
-                name="refund_gateway_status_idx",
+                fields=("payment", "gateway_transaction_id"),
+                name="refund_payment_tx_idx",
             ),
         ]
 
-    # =========================
-    # Validation
-    # =========================
-
-    def clean(self) -> None:
-        """
-        Validate Refund invariants.
-        This method is intentionally side-effect free.
-
-        It:
-            - Does not query the database.
-            - Does not save the entity.
-            - Does not perform network operations.
-            - Does not calculate aggregate refund totals.
-            - Does not inspect other refunds.
-        """
-
-        super().clean()
-
-        # ----------------------
-        # Amount
-        # ----------------------
-
-        if self.amount <= Decimal("0"):
-            raise ValidationError(
-                {
-                    "amount": _(
-                        "Refund amount must be greater than zero."
-                    )
-                }
-            )
-
-        # ----------------------
-        # Currency
-        # ----------------------
-
-        if not self.currency:
-            raise ValidationError(
-                {
-                    "currency": _(
-                        "Refund currency is required."
-                    )
-                }
-            )
-
-        # ----------------------
-        # Gateway
-        # ----------------------
-
-        if not self.gateway:
-            raise ValidationError(
-                {
-                    "gateway": _(
-                        "Refund gateway is required."
-                    )
-                }
-            )
-
-        # ----------------------
-        # SUCCESS invariants
-        # ----------------------
-
-        if self.is_success:
-
-            if not self.gateway_ref:
-                raise ValidationError(
-                    {
-                        "gateway_ref": _(
-                            "A successful refund requires "
-                            "a gateway reference."
-                        )
-                    }
-                )
-
-            if self.completed_at is None:
-                raise ValidationError(
-                    {
-                        "completed_at": _(
-                            "A successful refund requires "
-                            "a completion timestamp."
-                        )
-                    }
-                )
-
-            if self.failed_at is not None:
-                raise ValidationError(
-                    {
-                        "failed_at": _(
-                            "A successful refund cannot have "
-                            "a failure timestamp."
-                        )
-                    }
-                )
-
-        # ----------------------
-        # FAILED invariants
-        # ----------------------
-
-        if self.is_failed:
-
-            if self.failed_at is None:
-                raise ValidationError(
-                    {
-                        "failed_at": _(
-                            "A failed refund requires "
-                            "a failure timestamp."
-                        )
-                    }
-                )
-
-            if self.completed_at is not None:
-                raise ValidationError(
-                    {
-                        "completed_at": _(
-                            "A failed refund cannot have "
-                            "a completion timestamp."
-                        )
-                    }
-                )
-
-        # ----------------------
-        # PENDING invariants
-        # ----------------------
-
-        if self.is_pending:
-
-            if self.completed_at is not None:
-                raise ValidationError(
-                    {
-                        "completed_at": _(
-                            "A pending refund cannot have "
-                            "a completion timestamp."
-                        )
-                    }
-                )
-
-            if self.failed_at is not None:
-                raise ValidationError(
-                    {
-                        "failed_at": _(
-                            "A pending refund cannot have "
-                            "a failure timestamp."
-                        )
-                    }
-                )
-
-    # =========================
-    # Persistence
-    # =========================
-
-    def save(self, *args, **kwargs):
-        """
-        Persist the Refund entity.
-
-        Domain methods NEVER call save().
-
-        The Repository/Application layer is responsible for:
-
-            - atomic transactions;
-            - row locking;
-            - optimistic locking;
-            - persistence;
-            - GatewayLog creation;
-            - OutboxEvent creation.
-
-        Note:
-            Refund itself does not implement optimistic locking because
-            concurrency control belongs to the Repository layer.
-        """
-
-        self.full_clean()
-
-        return super().save(
-            *args,
-            **kwargs,
-        )
-
-    # =========================
-    # State Properties
-    # =========================
+    # ------------------------------------------------------------------
+    # State
+    # ------------------------------------------------------------------
 
     @property
     def is_pending(self) -> bool:
-        """Return True when the refund is still pending."""
-
         return self.status == RefundStatus.PENDING
 
     @property
     def is_success(self) -> bool:
-        """Return True when the refund completed successfully."""
-
         return self.status == RefundStatus.SUCCESS
 
     @property
     def is_failed(self) -> bool:
-        """Return True when the refund permanently failed."""
-
         return self.status == RefundStatus.FAILED
 
     @property
-    def is_finished(self) -> bool:
-        """
-        Return True when the refund reached a terminal state.
-        """
-
-        return self.is_success or self.is_failed
+    def is_terminal(self) -> bool:
+        return self.status in {RefundStatus.SUCCESS, RefundStatus.FAILED}
 
     @property
-    def gateway_reference(self) -> Optional[str]:
+    def is_finished(self) -> bool:
+        return self.is_terminal and self.finished_at is not None
+
+    @property
+    def external_reference(self) -> Optional[str]:
+        return self.gateway_transaction_id or self.gateway_reference or None
+
+    def is_full_payment_refund(self, *, payment_amount: Decimal) -> bool:
+        """Whether this individual refund equals the original Payment amount.
+
+        This does not establish that the Payment is fully refunded; other
+        successful Refund aggregates must be considered by the service.
         """
-        Return the strongest available gateway identifier.
+        return self.amount == Decimal(str(payment_amount))
 
-        Priority:
+    def validate_against_payment(
+        self,
+        *,
+        payment_amount: Decimal,
+        payment_currency: str,
+    ) -> None:
+        """Validate this refund against an already-loaded Payment snapshot.
 
-            gateway_transaction_id
-                ↓
-            gateway_ref
-                ↓
-            None
+        This deliberately avoids dereferencing ``self.payment`` so callers
+        can perform validation after acquiring the Payment row lock without
+        introducing an implicit query.
         """
+        errors: dict[str, object] = {}
+        if self.amount > Decimal(str(payment_amount)):
+            errors["amount"] = _(
+                "Refund amount cannot exceed the original Payment amount."
+            )
+        if self.currency != self._normalize(payment_currency):
+            errors["currency"] = _(
+                "Refund currency must match the Payment currency."
+            )
+        if errors:
+            raise ValidationError(errors)
 
-        return (
-            self.gateway_transaction_id
-            or self.gateway_ref
-            or None
-        )
-
-    # =========================
-    # Domain: Can Complete
-    # =========================
-
-    def can_complete(self) -> bool:
-        """
-        Return whether this Refund can transition to SUCCESS.
-
-        This method intentionally checks only the Refund itself.
-
-        It MUST NOT:
-
-            - Query Payment.
-            - Query other Refunds.
-            - Calculate remaining refundable amount.
-            - Determine full refund state.
-
-        The caller/application service must validate aggregate-level
-        refund eligibility before invoking mark_success().
-        """
-
-        return self.is_pending
-
-    # =========================
-    # Domain: Mark Success
-    # =========================
+    # ------------------------------------------------------------------
+    # Domain transitions
+    # ------------------------------------------------------------------
 
     def mark_success(
         self,
         *,
-        gateway_ref: str,
+        gateway_reference: str = "",
         gateway_transaction_id: str = "",
         response_code: str = "",
         gateway_message: str = "",
+        latency_ms: int | None = None,
     ) -> "Refund":
-        """
-        Mark this refund as successful.
-
-        Idempotency
-        -----------
-        Calling this method multiple times with the same gateway
-        identifiers is safe.
-
-        Immutability
-        ------------
-        Existing gateway identifiers cannot be changed after SUCCESS.
-
-        Persistence
-        -----------
-        This method NEVER calls save().
-
-        The caller must persist the mutated entity through the
-        repository/application layer.
-        """
-
-        normalized_gateway_ref = str(
-            gateway_ref or ""
-        ).strip()
-
-        normalized_gateway_transaction_id = str(
-            gateway_transaction_id or ""
-        ).strip()
-
-        normalized_response_code = str(
-            response_code or ""
-        ).strip()
-
-        normalized_gateway_message = str(
-            gateway_message or ""
-        ).strip()
-
-        # ----------------------
-        # A successful refund always requires a gateway reference.
-        # ----------------------
-
-        if not normalized_gateway_ref:
-            raise ValidationError(
-                {
-                    "gateway_ref": _(
-                        "A successful refund requires "
-                        "a gateway reference."
-                    )
-                }
-            )
-
-        # ----------------------
-        # Idempotent SUCCESS.
-        # ----------------------
-
+        """Move PENDING -> SUCCESS, or reconcile an existing SUCCESS."""
         if self.is_success:
-
-            # Existing gateway reference is immutable.
-            if (
-                self.gateway_ref
-                and self.gateway_ref
-                != normalized_gateway_ref
-            ):
-                raise ValidationError(
-                    _(
-                        "Gateway reference cannot be changed "
-                        "after refund success."
-                    )
-                )
-
-            # Existing transaction ID is immutable.
-            if (
-                self.gateway_transaction_id
-                and normalized_gateway_transaction_id
-                and (
-                    self.gateway_transaction_id
-                    != normalized_gateway_transaction_id
-                )
-            ):
-                raise ValidationError(
-                    _(
-                        "Gateway transaction ID cannot be changed "
-                        "after refund success."
-                    )
-                )
-
-            # -----------------------------------------------
-            # Allow enrichment when an identifier was previously
-            # unavailable, but never overwrite an existing value.
-            # -----------------------------------------------
-
-            if (
-                not self.gateway_ref
-                and normalized_gateway_ref
-            ):
-                self.gateway_ref = (
-                    normalized_gateway_ref
-                )
-
-            if (
-                not self.gateway_transaction_id
-                and normalized_gateway_transaction_id
-            ):
-                self.gateway_transaction_id = (
-                    normalized_gateway_transaction_id
-                )
-
-            if normalized_response_code:
-                self.response_code = (
-                    normalized_response_code
-                )
-
-            if normalized_gateway_message:
-                self.gateway_message = (
-                    normalized_gateway_message
-                )
-
-            return self
-
-        # ----------------------
-        # FAILED is terminal.
-        # ----------------------
-
-        if self.is_failed:
-            raise ValidationError(
-                _(
-                    "A failed refund cannot be marked "
-                    "as successful."
-                )
+            return self._merge_success(
+                gateway_reference=gateway_reference,
+                gateway_transaction_id=gateway_transaction_id,
+                response_code=response_code,
+                gateway_message=gateway_message,
+                latency_ms=latency_ms,
             )
 
-        # ----------------------
-        # Pending is the only state allowed to complete.
-        # ----------------------
+        self._require_transition(RefundStatus.SUCCESS)
+        reference = self._normalize(gateway_reference)
+        transaction = self._normalize(gateway_transaction_id)
 
-        if not self.can_complete():
-            raise ValidationError(
-                _(
-                    "Refund cannot be completed."
-                )
-            )
-
-        now = timezone.now()
-
-        self.status = RefundStatus.SUCCESS
-
-        self.gateway_ref = (
-            normalized_gateway_ref
+        self._require(
+            bool(reference or transaction),
+            _("A successful refund requires at least one gateway identity."),
         )
 
-        self.gateway_transaction_id = (
-            normalized_gateway_transaction_id
+        self._assign_reference(reference)
+        self._assign_transaction(transaction)
+        self._update_gateway_metadata(
+            response_code=response_code,
+            gateway_message=gateway_message,
         )
-
-        self.response_code = (
-            normalized_response_code
-        )
-
-        self.gateway_message = (
-            normalized_gateway_message
-        )
-
         self.failure_reason = ""
-
-        self.completed_at = now
-
-        self.failed_at = None
-
+        self._finish(RefundStatus.SUCCESS, latency_ms=latency_ms)
         return self
 
-    # =========================
-    # Domain: Mark Failed
-    # =========================
+    def _merge_success(
+        self,
+        *,
+        gateway_reference: str,
+        gateway_transaction_id: str,
+        response_code: str,
+        gateway_message: str,
+        latency_ms: int | None,
+    ) -> "Refund":
+        self._assign_reference(self._normalize(gateway_reference))
+        self._assign_transaction(self._normalize(gateway_transaction_id))
+        self._update_gateway_metadata(
+            response_code=response_code,
+            gateway_message=gateway_message,
+        )
+        self._record_success_latency(latency_ms)
+        self.failure_reason = ""
+        return self
 
     def mark_failed(
         self,
@@ -900,74 +340,222 @@ class Refund(models.Model):
         reason: str = "",
         response_code: str = "",
         gateway_message: str = "",
+        latency_ms: int | None = None,
     ) -> "Refund":
-        """
-        Mark the refund as failed.
-
-        Idempotency
-        -----------
-        Calling this method on an already failed refund is safe.
-
-        Terminal State
-        --------------
-        A successful refund can never transition to FAILED.
-
-        Persistence
-        -----------
-        This method NEVER calls save().
-        """
-
-        # ----------------------
-        # SUCCESS is immutable/terminal.
-        # ----------------------
-
-        if self.is_success:
-            raise ValidationError(
-                _(
-                    "A successful refund cannot be marked "
-                    "as failed."
-                )
-            )
-
-        # ----------------------
-        # Idempotent FAILED transition.
-        # ----------------------
-
+        """Move PENDING -> FAILED; a failed Refund is never resurrected."""
         if self.is_failed:
+            self._update_gateway_metadata(
+                response_code=response_code,
+                gateway_message=gateway_message,
+            )
+            if reason:
+                self.failure_reason = self._normalize(reason)
+            self._record_existing_terminal_latency(latency_ms)
             return self
 
-        now = timezone.now()
-
-        self.status = RefundStatus.FAILED
-
-        self.failure_reason = str(
-            reason or ""
-        ).strip()
-
-        self.response_code = str(
-            response_code or ""
-        ).strip()
-
-        self.gateway_message = str(
-            gateway_message or ""
-        ).strip()
-
-        self.failed_at = now
-
-        self.completed_at = None
-
+        self._require_transition(RefundStatus.FAILED)
+        self._update_gateway_metadata(
+            response_code=response_code,
+            gateway_message=gateway_message,
+        )
+        self.failure_reason = self._normalize(reason)
+        self._finish(RefundStatus.FAILED, latency_ms=latency_ms)
         return self
 
-    # =========================
-    # Representation
-    # =========================
+    def register_gateway_response(
+        self,
+        *,
+        response_code: str = "",
+        gateway_message: str = "",
+    ) -> "Refund":
+        """Store normalized response metadata while the refund is pending."""
+        self._require(
+            self.is_pending,
+            _("Gateway response can only be registered for a pending refund."),
+        )
+        self._update_gateway_metadata(
+            response_code=response_code,
+            gateway_message=gateway_message,
+        )
+        return self
+
+    # ------------------------------------------------------------------
+    # Latency
+    # ------------------------------------------------------------------
+
+    def record_latency(self, *, latency_ms: int | None = None) -> "Refund":
+        if latency_ms is None:
+            return self
+        self._require(latency_ms >= 0, _("Latency cannot be negative."))
+        self.latency_ms = latency_ms
+        return self
+
+    def _calculate_latency(self, *, finished_at) -> Optional[int]:
+        if self.requested_at is None or finished_at is None:
+            return None
+        elapsed = finished_at - self.requested_at
+        return max(0, int(elapsed.total_seconds() * 1000))
+
+    def _record_latency(self, *, latency_ms: int | None, finished_at) -> None:
+        if latency_ms is None:
+            self.latency_ms = self._calculate_latency(finished_at=finished_at)
+            return
+        self._require(latency_ms >= 0, _("Latency cannot be negative."))
+        self.latency_ms = latency_ms
+
+    def _record_success_latency(self, latency_ms: int | None) -> None:
+        if self.latency_ms is None:
+            self._record_latency(latency_ms=latency_ms, finished_at=self.finished_at)
+
+    def _record_existing_terminal_latency(self, latency_ms: int | None) -> None:
+        if self.latency_ms is None:
+            self._record_latency(latency_ms=latency_ms, finished_at=self.finished_at)
+
+    # ------------------------------------------------------------------
+    # Gateway identity / metadata
+    # ------------------------------------------------------------------
+
+    def _assign_reference(self, value: str) -> None:
+        if not value:
+            return
+        if not self.gateway_reference:
+            self.gateway_reference = value
+            return
+        self._require(
+            self.gateway_reference == value,
+            _("Gateway refund reference conflict detected."),
+        )
+
+    def _assign_transaction(self, value: str) -> None:
+        if not value:
+            return
+        if not self.gateway_transaction_id:
+            self.gateway_transaction_id = value
+            return
+        self._require(
+            self.gateway_transaction_id == value,
+            _("Gateway refund transaction identifier conflict detected."),
+        )
+
+    def _update_gateway_metadata(
+        self,
+        *,
+        response_code: str = "",
+        gateway_message: str = "",
+    ) -> None:
+        response_code = self._normalize(response_code)
+        gateway_message = self._normalize(gateway_message)
+        if response_code:
+            self.response_code = response_code
+        if gateway_message:
+            self.gateway_message = gateway_message
+
+    # ------------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------------
+
+    def clean(self) -> None:
+        super().clean()
+        self._validate_invariants()
+
+    def _validate_invariants(self) -> None:
+        errors: dict[str, object] = {}
+
+        if self.amount is None or self.amount <= Decimal("0"):
+            errors["amount"] = _("Refund amount must be greater than zero.")
+        if not self._normalize(self.currency):
+            errors["currency"] = _("Refund currency is required.")
+        if not self._normalize(self.idempotency_key):
+            errors["idempotency_key"] = _("Refund idempotency key is required.")
+
+        if self.is_pending:
+            if self.finished_at is not None:
+                errors["finished_at"] = _(
+                    "Pending refunds cannot have a finished timestamp."
+                )
+        elif self.is_terminal:
+            if self.finished_at is None:
+                errors["finished_at"] = _(
+                    "Terminal refunds require a finished timestamp."
+                )
+        else:
+            errors["status"] = _("Invalid refund state.")
+
+        if self.is_success:
+            if not (self.gateway_reference or self.gateway_transaction_id):
+                errors["gateway_reference"] = _(
+                    "Successful refunds require at least one gateway identity."
+                )
+            if self.failure_reason:
+                errors["failure_reason"] = _(
+                    "Successful refunds cannot contain a failure reason."
+                )
+
+        if (
+            self.finished_at is not None
+            and self.requested_at is not None
+            and self.finished_at < self.requested_at
+        ):
+            errors["finished_at"] = _(
+                "Finished time cannot be earlier than refund request time."
+            )
+
+        if self.latency_ms is not None and self.latency_ms < 0:
+            errors["latency_ms"] = _("Latency cannot be negative.")
+
+        if errors:
+            raise ValidationError(errors)
+
+    # ------------------------------------------------------------------
+    # Guards / transition engine
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalize(value: str | None) -> str:
+        return (value or "").strip()
+
+    def _require(self, condition: bool, message: str) -> None:
+        if not condition:
+            raise ValidationError(message)
+
+    _ALLOWED_TRANSITIONS = {
+        RefundStatus.PENDING: {
+            RefundStatus.SUCCESS,
+            RefundStatus.FAILED,
+        },
+        RefundStatus.SUCCESS: set(),
+        RefundStatus.FAILED: set(),
+    }
+
+    def _require_transition(self, target: RefundStatus) -> None:
+        if self.status == target:
+            return
+        allowed = self._ALLOWED_TRANSITIONS.get(self.status, set())
+        self._require(
+            target in allowed,
+            _(
+                "Transition from '%(current)s' to '%(target)s' is not allowed."
+            )
+            % {"current": self.status, "target": target},
+        )
+
+    def _finish(self, status: RefundStatus, *, latency_ms: int | None = None) -> None:
+        self._require_transition(status)
+        finished_at = timezone.now()
+        self.status = status
+        self.finished_at = finished_at
+        self._record_latency(latency_ms=latency_ms, finished_at=finished_at)
 
     def __str__(self) -> str:
         return (
-            f"Refund<"
-            f"payment={self.payment_id}, "
-            f"amount={self.amount}, "
-            f"currency={self.currency}, "
-            f"status={self.status}"
-            f">"
+            f"Refund(id={self.pk}, payment={self.payment_id}, "
+            f"amount={self.amount} {self.currency}, "
+            f"status={self.get_status_display()})"
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"<Refund id={self.pk} payment={self.payment_id} "
+            f"amount={self.amount} currency={self.currency!r} "
+            f"status={self.status!r}>"
         )
