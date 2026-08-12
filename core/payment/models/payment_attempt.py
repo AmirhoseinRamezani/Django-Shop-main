@@ -1,4 +1,4 @@
-# payment/models/payment_attempt.py
+# core/payment/models/payment_attempt.py
 from __future__ import annotations
 
 from typing import Optional
@@ -6,19 +6,20 @@ from typing import Optional
 from django.core.exceptions import ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from payment.enums import PaymentAttemptStatus
 from payment.managers import PaymentAttemptManager
 
+
 class PaymentAttempt(models.Model):
     """
     Payment Attempt Aggregate Entity.
 
-    A PaymentAttempt represents exactly one communication cycle
-    between a Payment aggregate and its payment gateway.
+    A PaymentAttempt represents exactly one execution cycle between
+    a Payment aggregate and its payment gateway.
 
     Example lifecycle:
 
@@ -32,13 +33,15 @@ class PaymentAttempt(models.Model):
     ----------------
     PaymentAttempt is responsible for:
 
-        - Tracking one gateway communication cycle.
-        - Storing gateway-generated identifiers.
-        - Tracking attempt state.
-        - Tracking execution timing.
-        - Tracking gateway response metadata.
-        - Tracking technical failure information.
+        - Tracking one gateway execution cycle.
+        - Tracking gateway-generated identifiers.
+        - Tracking attempt lifecycle state.
+        - Tracking retry relationships.
+        - Tracking execution timing and latency.
+        - Tracking normalized gateway metadata.
+        - Tracking client request context.
         - Exposing side-effect-free domain behavior.
+        - Enforcing attempt-level invariants.
 
     Explicitly NOT responsible for
     --------------------------------
@@ -50,19 +53,19 @@ class PaymentAttempt(models.Model):
         - Persist itself from domain methods.
         - Generate attempt numbers under concurrency.
         - Synchronize Payment.current_attempt.
-        - Store raw gateway request/response payloads.
         - Implement repository logic.
         - Implement application workflow.
+        - Store raw gateway request/response payloads.
 
     Persistence and concurrency responsibilities belong to the
     Repository / Application Service layer.
 
-    Gateway payloads belong to GatewayLog.
+    Raw gateway payloads belong to GatewayLog.
     """
 
-    # ------------------------------
+    # ------------------------------------
     # Identity
-    # ------------------------------
+    # ------------------------------------
 
     payment = models.ForeignKey(
         "payment.PaymentModel",
@@ -79,9 +82,9 @@ class PaymentAttempt(models.Model):
         ),
     )
 
-    # ------------------------------
-    # Gateway References
-    # ------------------------------
+    # ------------------------------------
+    # Gateway Identity
+    # ------------------------------------
 
     authority_id = models.CharField(
         max_length=128,
@@ -89,7 +92,7 @@ class PaymentAttempt(models.Model):
         default="",
         db_index=True,
         help_text=_(
-            "Gateway authority/token assigned to this payment attempt."
+            "Gateway authority/token assigned to this attempt."
         ),
     )
 
@@ -99,7 +102,7 @@ class PaymentAttempt(models.Model):
         default="",
         db_index=True,
         help_text=_(
-            "Gateway reference identifier returned after successful payment."
+            "Gateway reference assigned after successful execution."
         ),
     )
 
@@ -113,9 +116,9 @@ class PaymentAttempt(models.Model):
         ),
     )
 
-    # ------------------------------
+    # ------------------------------------
     # Retry Chain
-    # ------------------------------
+    # ------------------------------------
 
     retry_of = models.ForeignKey(
         "self",
@@ -124,13 +127,20 @@ class PaymentAttempt(models.Model):
         on_delete=models.SET_NULL,
         related_name="retries",
         help_text=_(
-            "Previous payment attempt from which this retry originated."
+            "Historical attempt from which this retry originated."
         ),
     )
 
-    # ------------------------------
-    # State
-    # ------------------------------
+    retry_count = models.PositiveSmallIntegerField(
+        default=1,
+        help_text=_(
+            "Retry sequence number represented by this attempt."
+        ),
+    )
+
+    # ------------------------------------
+    # Lifecycle
+    # ------------------------------------
 
     status = models.CharField(
         max_length=20,
@@ -138,9 +148,13 @@ class PaymentAttempt(models.Model):
         default=PaymentAttemptStatus.PENDING,
         db_index=True,
         help_text=_(
-            "Current state of this payment gateway attempt."
+            "Current lifecycle state of this payment attempt."
         ),
     )
+
+    # ------------------------------------
+    # Gateway Metadata
+    # ------------------------------------
 
     response_code = models.CharField(
         max_length=64,
@@ -156,7 +170,7 @@ class PaymentAttempt(models.Model):
         blank=True,
         default="",
         help_text=_(
-            "Human-readable gateway response message."
+            "Normalized gateway response message."
         ),
     )
 
@@ -165,18 +179,18 @@ class PaymentAttempt(models.Model):
         blank=True,
         default="",
         help_text=_(
-            "Internal normalized reason for attempt failure."
+            "Internal normalized reason for technical/business failure."
         ),
     )
 
-    # ------------------------------
+    # ------------------------------------
     # Timing
-    # ------------------------------
+    # ------------------------------------
 
     started_at = models.DateTimeField(
         auto_now_add=True,
         help_text=_(
-            "Timestamp when gateway communication started."
+            "Timestamp at which this attempt execution started."
         ),
     )
 
@@ -184,7 +198,7 @@ class PaymentAttempt(models.Model):
         null=True,
         blank=True,
         help_text=_(
-            "Timestamp when this gateway attempt reached a terminal state."
+            "Timestamp at which this attempt reached a terminal state."
         ),
     )
 
@@ -192,19 +206,19 @@ class PaymentAttempt(models.Model):
         null=True,
         blank=True,
         help_text=_(
-            "Measured gateway communication latency in milliseconds."
+            "Measured execution latency in milliseconds."
         ),
     )
 
-    # ------------------------------
+    # ------------------------------------
     # Request Context
-    # ------------------------------
+    # ------------------------------------
 
     ip_address = models.GenericIPAddressField(
         null=True,
         blank=True,
         help_text=_(
-            "Client IP address associated with this payment attempt."
+            "Client IP address associated with this attempt."
         ),
     )
 
@@ -212,20 +226,13 @@ class PaymentAttempt(models.Model):
         blank=True,
         default="",
         help_text=_(
-            "Client user-agent associated with this payment attempt."
+            "Client user-agent associated with this attempt."
         ),
     )
 
-    retry_count = models.PositiveSmallIntegerField(
-        default=1,
-        help_text=_(
-            "Retry sequence count associated with this attempt."
-        ),
-    )
-
-    # ------------------------------
-    # Metadata
-    # ------------------------------
+    # ------------------------------------
+    # Safe Metadata
+    # ------------------------------------
 
     meta = models.JSONField(
         default=dict,
@@ -236,56 +243,87 @@ class PaymentAttempt(models.Model):
         ),
     )
 
-    # ------------------------------
+    # ------------------------------------
     # Manager
-    # ------------------------------
+    # ------------------------------------
 
     objects = PaymentAttemptManager()
 
-    # ------------------------------
+    # ------------------------------------
     # Meta
-    # ------------------------------
+    # ------------------------------------
 
     class Meta:
+        verbose_name = _("Payment Attempt")
+        verbose_name_plural = _("Payment Attempts")
+
         ordering = (
             "-attempt_number",
             "-id",
         )
 
         constraints = [
+            # --------------------------------
+            # Attempt number
+            # --------------------------------
+
             models.UniqueConstraint(
-                fields=[
+                fields=(
                     "payment",
                     "attempt_number",
-                ],
+                ),
                 name="payment_attempt_payment_number_uniq",
             ),
 
             models.CheckConstraint(
-                condition=Q(attempt_number__gte=1),
+                condition=Q(
+                    attempt_number__gte=1,
+                ),
                 name="payment_attempt_number_positive",
             ),
 
+            # --------------------------------
+            # Retry
+            # --------------------------------
+
+            models.CheckConstraint(
+                condition=Q(
+                    retry_count__gte=1,
+                ),
+                name="payment_attempt_retry_positive",
+            ),
+
+            # --------------------------------
+            # SUCCESS identity
+            # --------------------------------
+
             models.CheckConstraint(
                 condition=(
-                    ~Q(status=PaymentAttemptStatus.SUCCESS)
-                    | Q(gateway_reference__gt="")
+                    ~Q(
+                        status=PaymentAttemptStatus.SUCCESS,
+                    )
+                    | Q(
+                        gateway_reference__gt="",
+                    )
                 ),
                 name="payment_attempt_success_requires_ref",
             ),
 
             models.CheckConstraint(
                 condition=(
-                    ~Q(status=PaymentAttemptStatus.SUCCESS)
-                    | Q(authority_id__gt="")
+                    ~Q(
+                        status=PaymentAttemptStatus.SUCCESS,
+                    )
+                    | Q(
+                        authority_id__gt="",
+                    )
                 ),
                 name="payment_attempt_success_requires_authority",
             ),
 
-            models.CheckConstraint(
-                condition=Q(retry_count__gte=1),
-                name="payment_attempt_retry_positive",
-            ),
+            # --------------------------------
+            # Lifecycle / finished_at
+            # --------------------------------
 
             models.CheckConstraint(
                 condition=(
@@ -307,11 +345,19 @@ class PaymentAttempt(models.Model):
                 name="payment_attempt_finished_state_valid",
             ),
 
+            # --------------------------------
+            # Finished time cannot precede start time
+            # --------------------------------
+
             models.CheckConstraint(
                 condition=(
-                    Q(finished_at__isnull=True)
+                    Q(
+                        finished_at__isnull=True,
+                    )
                     |
-                    Q(finished_at__gte=models.F("started_at"))
+                    Q(
+                        finished_at__gte=F("started_at"),
+                    )
                 ),
                 name="payment_attempt_finish_after_start",
             ),
@@ -319,63 +365,57 @@ class PaymentAttempt(models.Model):
 
         indexes = [
             models.Index(
-                fields=[
+                fields=(
                     "payment",
                     "status",
                     "-attempt_number",
-                ],
+                ),
                 name="pay_attempt_payment_status_idx",
             ),
 
             models.Index(
-                fields=[
+                fields=(
                     "status",
                     "-started_at",
-                ],
+                ),
                 name="pay_attempt_status_started_idx",
             ),
 
             models.Index(
-                fields=[
+                fields=(
                     "payment",
                     "gateway_reference",
-                ],
+                ),
                 name="pay_attempt_payment_ref_idx",
             ),
 
             models.Index(
-                fields=[
+                fields=(
                     "payment",
                     "gateway_transaction_id",
-                ],
+                ),
                 name="pay_attempt_payment_tx_idx",
             ),
 
             models.Index(
-                fields=[
+                fields=(
                     "payment",
                     "authority_id",
-                ],
+                ),
                 name="pay_attempt_payment_auth_idx",
+            ),
+
+            models.Index(
+                fields=(
+                    "retry_of",
+                ),
+                name="pay_attempt_retry_of_idx",
             ),
         ]
 
-    # ------------------------------
-    # Validation
-    # ------------------------------
-
-    def clean(self) -> None:
-        """
-        Validate domain invariants.
-
-        This method is intentionally side-effect free.
-        """
-        super().clean()
-        self._validate_invariants()
-
-    # ------------------------------
-    # State Properties
-    # ------------------------------
+    # ================================
+    # STATE PROPERTIES
+    # ================================
 
     @property
     def is_pending(self) -> bool:
@@ -398,16 +438,25 @@ class PaymentAttempt(models.Model):
         return self.status == PaymentAttemptStatus.CANCELLED
 
     @property
+    def is_terminal(self) -> bool:
+        return self.status in {
+            PaymentAttemptStatus.SUCCESS,
+            PaymentAttemptStatus.FAILED,
+            PaymentAttemptStatus.TIMEOUT,
+            PaymentAttemptStatus.CANCELLED,
+        }
+
+    @property
     def is_finished(self) -> bool:
         return (
-            self.status != PaymentAttemptStatus.PENDING
+            self.is_terminal
             and self.finished_at is not None
         )
 
     @property
     def external_reference(self) -> Optional[str]:
         """
-        Return the strongest available gateway reference.
+        Return the strongest known gateway identity.
 
         Priority:
 
@@ -417,6 +466,7 @@ class PaymentAttempt(models.Model):
                 ↓
             authority_id
         """
+
         return (
             self.gateway_transaction_id
             or self.gateway_reference
@@ -424,9 +474,9 @@ class PaymentAttempt(models.Model):
             or None
         )
 
-    # ------------------------------
-    # State Machine
-    # ------------------------------
+    # ================================
+    # STATE MACHINE
+    # ================================
 
     _ALLOWED_TRANSITIONS = {
         PaymentAttemptStatus.PENDING: {
@@ -441,9 +491,9 @@ class PaymentAttempt(models.Model):
         PaymentAttemptStatus.CANCELLED: set(),
     }
 
-    # ------------------------------
-    # Domain API
-    # ------------------------------
+    # ================================
+    # SUCCESS
+    # ================================
 
     def mark_success(
         self,
@@ -458,15 +508,16 @@ class PaymentAttempt(models.Model):
         """
         Transition this attempt to SUCCESS.
 
-        Characteristics:
+        Properties:
 
             - Idempotent.
             - Persistence ignorant.
-            - Financially immutable.
+            - Gateway identity is immutable.
+            - Duplicate success notifications are reconciled.
             - Supports late gateway transaction identifiers.
-            - Rejects identity conflicts.
         """
 
+        # Explicit idempotency.
         if self.is_success:
             return self._merge_success(
                 authority_id=authority_id,
@@ -478,33 +529,66 @@ class PaymentAttempt(models.Model):
             )
 
         self._require_transition(
-            PaymentAttemptStatus.SUCCESS
+            PaymentAttemptStatus.SUCCESS,
         )
 
-        authority_id = self._normalize(authority_id)
+        normalized_authority = self._normalize(
+            authority_id,
+        )
+
+        normalized_reference = self._normalize(
+            gateway_reference,
+        )
+
+        normalized_transaction = self._normalize(
+            gateway_transaction_id,
+        )
 
         self._require(
-            bool(authority_id),
-            _("Authority identifier is required for a successful attempt."),
+            bool(normalized_authority),
+            _(
+                "Authority identifier is required "
+                "for a successful payment attempt."
+            ),
         )
 
-        self._assign_authority(authority_id)
-        self._assign_reference(gateway_reference)
-        self._assign_transaction(gateway_transaction_id)
+        self._require(
+            bool(normalized_reference),
+            _(
+                "Gateway reference is required "
+                "for a successful payment attempt."
+            ),
+        )
+
+        self._assign_authority(
+            normalized_authority,
+        )
+
+        self._assign_reference(
+            normalized_reference,
+        )
+
+        self._assign_transaction(
+            normalized_transaction,
+        )
 
         self._update_gateway_metadata(
             response_code=response_code,
             gateway_message=gateway_message,
         )
 
+        self.failure_reason = ""
+
         self._finish(
             status=PaymentAttemptStatus.SUCCESS,
             latency_ms=latency_ms,
         )
 
-        self.failure_reason = ""
-
         return self
+
+    # ================================
+    # SUCCESS MERGE / IDEMPOTENCY
+    # ================================
 
     def _merge_success(
         self,
@@ -519,28 +603,38 @@ class PaymentAttempt(models.Model):
         """
         Reconcile duplicate SUCCESS notifications.
 
-        Duplicate callbacks/webhooks must never change the
-        financial identity of an already successful attempt.
+        Existing financial identity is immutable.
+        Conflicting identity is rejected.
         """
 
-        self._reconcile_authority(authority_id)
-        self._reconcile_reference(gateway_reference)
-        self._reconcile_transaction(gateway_transaction_id)
+        self._reconcile_authority(
+            authority_id,
+        )
+
+        self._reconcile_reference(
+            gateway_reference,
+        )
+
+        self._reconcile_transaction(
+            gateway_transaction_id,
+        )
 
         self._update_gateway_metadata(
             response_code=response_code,
             gateway_message=gateway_message,
         )
 
-        self._record_success_latency(latency_ms)
+        self._record_success_latency(
+            latency_ms,
+        )
 
         self.failure_reason = ""
 
         return self
 
-    # ------------------------------
-    # Failure
-    # ------------------------------
+    # ================================
+    # FAILURE
+    # ================================
 
     def mark_failed(
         self,
@@ -551,8 +645,27 @@ class PaymentAttempt(models.Model):
         latency_ms: int | None = None,
     ) -> "PaymentAttempt":
         """
-        Mark the attempt as failed.
+        Transition this attempt to FAILED.
+
+        FAILED is terminal.
         """
+
+        if self.is_failed:
+            self._update_gateway_metadata(
+                response_code=response_code,
+                gateway_message=gateway_message,
+            )
+
+            if reason:
+                self.failure_reason = self._normalize(
+                    reason,
+                )
+
+            self._record_existing_terminal_latency(
+                latency_ms,
+            )
+
+            return self
 
         return self._mark_terminal(
             status=PaymentAttemptStatus.FAILED,
@@ -562,9 +675,9 @@ class PaymentAttempt(models.Model):
             latency_ms=latency_ms,
         )
 
-    # ------------------------------
-    # Timeout
-    # ------------------------------
+    # ================================
+    # TIMEOUT
+    # ================================
 
     def mark_timeout(
         self,
@@ -573,8 +686,25 @@ class PaymentAttempt(models.Model):
         latency_ms: int | None = None,
     ) -> "PaymentAttempt":
         """
-        Mark the attempt as timed out.
+        Transition this attempt to TIMEOUT.
+
+        TIMEOUT is terminal at the attempt level.
+
+        A later gateway callback must be handled by the
+        callback/reconciliation application workflow.
         """
+
+        if self.is_timeout:
+            if reason:
+                self.failure_reason = self._normalize(
+                    reason,
+                )
+
+            self._record_existing_terminal_latency(
+                latency_ms,
+            )
+
+            return self
 
         return self._mark_terminal(
             status=PaymentAttemptStatus.TIMEOUT,
@@ -582,9 +712,9 @@ class PaymentAttempt(models.Model):
             latency_ms=latency_ms,
         )
 
-    # ------------------------------
-    # Cancellation
-    # ------------------------------
+    # ================================
+    # CANCEL
+    # ================================
 
     def mark_cancelled(
         self,
@@ -592,13 +722,27 @@ class PaymentAttempt(models.Model):
         reason: str = "",
     ) -> "PaymentAttempt":
         """
-        Mark the attempt as cancelled.
+        Transition this attempt to CANCELLED.
+
+        CANCELLED is terminal.
         """
+
+        if self.is_cancelled:
+            if reason:
+                self.failure_reason = self._normalize(
+                    reason,
+                )
+
+            return self
 
         return self._mark_terminal(
             status=PaymentAttemptStatus.CANCELLED,
             reason=reason,
         )
+
+    # ================================
+    # GENERIC TERMINAL TRANSITION
+    # ================================
 
     def _mark_terminal(
         self,
@@ -610,19 +754,21 @@ class PaymentAttempt(models.Model):
         latency_ms: int | None = None,
     ) -> "PaymentAttempt":
         """
-        Transition the attempt to a terminal state.
-
-        Transition validation happens before mutation.
+        Transition from PENDING to a terminal state.
         """
 
-        self._require_transition(status)
+        self._require_transition(
+            status,
+        )
 
         self._update_gateway_metadata(
             response_code=response_code,
             gateway_message=gateway_message,
         )
 
-        self.failure_reason = self._normalize(reason)
+        self.failure_reason = self._normalize(
+            reason,
+        )
 
         self._finish(
             status=status,
@@ -631,9 +777,9 @@ class PaymentAttempt(models.Model):
 
         return self
 
-    # ------------------------------
-    # Gateway Metadata
-    # ------------------------------
+    # ================================
+    # GATEWAY RESPONSE
+    # ================================
 
     def register_gateway_response(
         self,
@@ -644,14 +790,14 @@ class PaymentAttempt(models.Model):
         """
         Register normalized gateway response metadata.
 
-        Raw gateway payload persistence belongs to GatewayLog.
+        Raw gateway payloads must be stored in GatewayLog.
         """
 
         self._require(
             self.is_pending,
             _(
                 "Gateway response can only be registered "
-                "for pending attempts."
+                "for a pending payment attempt."
             ),
         )
 
@@ -662,9 +808,9 @@ class PaymentAttempt(models.Model):
 
         return self
 
-    # ------------------------------
-    # Latency
-    # ------------------------------
+    # ================================
+    # LATENCY
+    # ================================
 
     def record_latency(
         self,
@@ -672,10 +818,7 @@ class PaymentAttempt(models.Model):
         latency_ms: int | None = None,
     ) -> "PaymentAttempt":
         """
-        Record explicit gateway latency.
-
-        This method is intentionally side-effect free with respect
-        to persistence.
+        Record explicit execution latency.
         """
 
         if latency_ms is None:
@@ -690,163 +833,303 @@ class PaymentAttempt(models.Model):
 
         return self
 
-    # ------------------------------
-    # Domain Helpers
-    # ------------------------------
+    def _calculate_latency(
+        self,
+        *,
+        finished_at,
+    ) -> Optional[int]:
+        """
+        Calculate latency from started_at to finished_at.
+        """
+
+        if (
+            self.started_at is None
+            or finished_at is None
+        ):
+            return None
+
+        elapsed = finished_at - self.started_at
+
+        return max(
+            0,
+            int(
+                elapsed.total_seconds() * 1000,
+            ),
+        )
+
+    def _record_latency(
+        self,
+        *,
+        latency_ms: int | None,
+        finished_at,
+    ) -> None:
+        """
+        Record explicit latency or calculate it automatically.
+        """
+
+        if latency_ms is None:
+            self.latency_ms = self._calculate_latency(
+                finished_at=finished_at,
+            )
+            return
+
+        self._require(
+            latency_ms >= 0,
+            _("Latency cannot be negative."),
+        )
+
+        self.latency_ms = latency_ms
+
+    def _record_success_latency(
+        self,
+        latency_ms: int | None,
+    ) -> None:
+        """
+        Preserve the first known terminal latency.
+        """
+
+        if self.latency_ms is not None:
+            return
+
+        self._record_latency(
+            latency_ms=latency_ms,
+            finished_at=self.finished_at,
+        )
+
+    def _record_existing_terminal_latency(
+        self,
+        latency_ms: int | None,
+    ) -> None:
+        """
+        Preserve the original latency of a terminal attempt.
+        """
+
+        if self.latency_ms is not None:
+            return
+
+        self._record_latency(
+            latency_ms=latency_ms,
+            finished_at=self.finished_at,
+        )
+
+    # ================================
+    # GATEWAY IDENTITY
+    # ================================
 
     def _assign_authority(
         self,
         authority_id: str,
     ) -> None:
-        authority_id = self._normalize(authority_id)
+        """
+        Assign gateway authority once.
 
-        if not authority_id:
+        Existing authority is immutable.
+        """
+
+        normalized = self._normalize(
+            authority_id,
+        )
+
+        if not normalized:
             return
 
         if not self.authority_id:
-            self.authority_id = authority_id
+            self.authority_id = normalized
             return
 
         self._require(
-            self.authority_id == authority_id,
-            _("Authority identifier conflict detected."),
+            self.authority_id == normalized,
+            _(
+                "Authority identifier conflict detected."
+            ),
         )
 
     def _assign_reference(
         self,
         gateway_reference: str,
     ) -> None:
-        gateway_reference = self._normalize(gateway_reference)
+        """
+        Assign gateway reference once.
+
+        Existing reference is immutable.
+        """
+
+        normalized = self._normalize(
+            gateway_reference,
+        )
 
         self._require(
-            bool(gateway_reference),
+            bool(normalized),
             _("Gateway reference is required."),
         )
 
         if not self.gateway_reference:
-            self.gateway_reference = gateway_reference
+            self.gateway_reference = normalized
             return
 
         self._require(
-            self.gateway_reference == gateway_reference,
-            _("Gateway reference conflict detected."),
+            self.gateway_reference == normalized,
+            _(
+                "Gateway reference conflict detected."
+            ),
         )
 
     def _assign_transaction(
         self,
         gateway_transaction_id: str,
     ) -> None:
-        gateway_transaction_id = self._normalize(
-            gateway_transaction_id
+        """
+        Assign gateway transaction ID once.
+
+        Existing transaction ID is immutable.
+        """
+
+        normalized = self._normalize(
+            gateway_transaction_id,
         )
 
-        if not gateway_transaction_id:
+        if not normalized:
             return
 
         if not self.gateway_transaction_id:
-            self.gateway_transaction_id = gateway_transaction_id
+            self.gateway_transaction_id = normalized
             return
 
         self._require(
-            self.gateway_transaction_id == gateway_transaction_id,
+            self.gateway_transaction_id == normalized,
             _(
                 "Gateway transaction identifier conflict detected."
             ),
         )
 
+    # ================================
+    # GATEWAY METADATA
+    # ================================
+
     def _update_gateway_metadata(
         self,
         *,
-        response_code: str,
-        gateway_message: str,
+        response_code: str = "",
+        gateway_message: str = "",
     ) -> None:
-        response_code = self._normalize(response_code)
-        gateway_message = self._normalize(gateway_message)
+        """
+        Update normalized gateway metadata.
 
-        if response_code:
-            self.response_code = response_code
+        Empty incoming values never erase existing metadata.
+        """
 
-        if gateway_message:
-            self.gateway_message = gateway_message
+        normalized_code = self._normalize(
+            response_code,
+        )
 
-    # ------------------------------
-    # Identity Reconciliation
-    # ------------------------------
+        normalized_message = self._normalize(
+            gateway_message,
+        )
+
+        if normalized_code:
+            self.response_code = normalized_code
+
+        if normalized_message:
+            self.gateway_message = normalized_message
+
+    # ================================
+    # IDENTITY RECONCILIATION
+    # ================================
 
     def _reconcile_authority(
         self,
         authority_id: str,
     ) -> None:
-        """
-        Reconcile authority identifier for an already successful attempt.
+        normalized = self._normalize(
+            authority_id,
+        )
 
-        Empty values are ignored because some gateways may omit
-        the authority during verification callbacks.
-        """
-
-        authority_id = self._normalize(authority_id)
-
-        if not authority_id:
+        if not normalized:
             return
 
-        self._assign_authority(authority_id)
+        self._assign_authority(
+            normalized,
+        )
 
     def _reconcile_reference(
         self,
         gateway_reference: str,
     ) -> None:
-        """
-        Gateway reference is immutable.
-        """
+        normalized = self._normalize(
+            gateway_reference,
+        )
 
-        self._assign_reference(gateway_reference)
+        self._require(
+            bool(normalized),
+            _("Gateway reference is required."),
+        )
+
+        self._assign_reference(
+            normalized,
+        )
 
     def _reconcile_transaction(
         self,
         gateway_transaction_id: str,
     ) -> None:
+        self._assign_transaction(
+            gateway_transaction_id,
+        )
+
+    # ================================
+    # VALIDATION
+    # ================================
+
+    def clean(self) -> None:
         """
-        Reconcile gateway transaction identifier.
+        Validate all model/domain invariants.
 
-        Some gateways provide the transaction identifier only
-        during verification.
+        clean() does not replace database constraints.
         """
 
-        self._assign_transaction(gateway_transaction_id)
+        super().clean()
+        self._validate_invariants()
 
-    # ------------------------------
-    # Validation Helpers
-    # ------------------------------
+    def _validate_invariants(self) -> None:
+        self._validate_identity()
+        self._validate_state()
+        self._validate_dates()
+        self._validate_retry()
+        self._validate_latency()
+        self._validate_retry_chain()
 
     def _validate_identity(self) -> None:
-        """
-        Validate gateway identity invariants.
-        """
+        errors: dict[str, object] = {}
+        
+        # --------------------------------
+        # Gateway transaction ID
+        # --------------------------------
 
         if (
-            self.status != PaymentAttemptStatus.SUCCESS
-            and self.gateway_transaction_id
+            self.gateway_transaction_id
+            and self.status != PaymentAttemptStatus.SUCCESS
         ):
-            raise ValidationError(
-                {
-                    "gateway_transaction_id": _(
-                        "Only successful attempts may contain "
-                        "a transaction identifier."
-                    )
-                }
+            errors["gateway_transaction_id"] = _(
+                "Only successful attempts may contain "
+                "a gateway transaction identifier."
             )
 
-        if self.status == PaymentAttemptStatus.SUCCESS:
-            errors = {}
+        # --------------------------------
+        # SUCCESS identity
+        # --------------------------------
 
-            if not self.gateway_reference:
-                errors["gateway_reference"] = _(
-                    "Successful attempts require a gateway reference."
-                )
+        if self.status == PaymentAttemptStatus.SUCCESS:
 
             if not self.authority_id:
                 errors["authority_id"] = _(
-                    "Successful attempts require an authority identifier."
+                    "Successful attempts require "
+                    "an authority identifier."
+                )
+
+            if not self.gateway_reference:
+                errors["gateway_reference"] = _(
+                    "Successful attempts require "
+                    "a gateway reference."
                 )
 
             if self.failure_reason:
@@ -855,34 +1138,57 @@ class PaymentAttempt(models.Model):
                     "a failure reason."
                 )
 
-            if errors:
-                raise ValidationError(errors)
+        # --------------------------------
+        # Non-success reference
+        # --------------------------------
 
-        elif self.gateway_reference:
+        if (
+            self.status != PaymentAttemptStatus.SUCCESS
+            and self.gateway_reference
+        ):
+            errors["gateway_reference"] = _(
+                "Only successful attempts may contain "
+                "a gateway reference."
+            )
+
+        if errors:
+            raise ValidationError(
+                errors,
+            )
+
+    def _validate_state(self) -> None:
+        """
+        Validate lifecycle consistency.
+        """
+
+        if self.is_pending:
+            if self.finished_at is not None:
+                raise ValidationError(
+                    {
+                        "finished_at": _(
+                            "Pending attempts cannot have "
+                            "a finished timestamp."
+                        )
+                    }
+                )
+
+            return
+
+        if not self.is_terminal:
             raise ValidationError(
                 {
-                    "gateway_reference": _(
-                        "Only successful attempts may have "
-                        "a gateway reference."
+                    "status": _(
+                        "Invalid payment attempt state."
                     )
                 }
             )
 
-    def _validate_retry(self) -> None:
-        if self.retry_count < 1:
+        if self.finished_at is None:
             raise ValidationError(
                 {
-                    "retry_count": _(
-                        "Retry count must be greater than zero."
-                    )
-                }
-            )
-
-        if self.attempt_number < 1:
-            raise ValidationError(
-                {
-                    "attempt_number": _(
-                        "Attempt number must be greater than zero."
+                    "finished_at": _(
+                        "Terminal attempts require "
+                        "a finished timestamp."
                     )
                 }
             )
@@ -902,104 +1208,88 @@ class PaymentAttempt(models.Model):
                 }
             )
 
-    def _validate_state(self) -> None:
-        if self.is_pending:
-            if self.finished_at is not None:
+    def _validate_retry(self) -> None:
+        errors: dict[str, object] = {}
+
+        if self.attempt_number < 1:
+            errors["attempt_number"] = _(
+                "Attempt number must be greater than zero."
+            )
+
+        if self.retry_count < 1:
+            errors["retry_count"] = _(
+                "Retry count must be greater than zero."
+            )
+
+        if errors:
+            raise ValidationError(
+                errors,
+            )
+
+    def _validate_retry_chain(self) -> None:
+        """
+        Validate retry relationship invariants.
+        """
+
+        # First attempt.
+        if self.retry_of_id is None:
+            if self.retry_count != 1:
                 raise ValidationError(
                     {
-                        "finished_at": _(
-                            "Pending attempts cannot have "
-                            "a finished timestamp."
+                        "retry_count": _(
+                            "The first attempt must have "
+                            "retry count 1."
                         )
                     }
                 )
+
             return
 
-        if self.finished_at is None:
+        # Self-reference.
+        if self.pk is not None and self.retry_of_id == self.pk:
             raise ValidationError(
                 {
-                    "finished_at": _(
-                        "Completed attempts require "
-                        "a finished timestamp."
+                    "retry_of": _(
+                        "An attempt cannot retry itself."
                     )
                 }
             )
 
-    def _validate_invariants(self) -> None:
-        """
-        Validate every domain invariant.
-        """
-
-        self._validate_identity()
-        self._validate_state()
-        self._validate_dates()
-        self._validate_retry()
-
-    # ------------------------------
-    # Latency Helpers
-    # ------------------------------
-
-    def _calculate_latency(
-        self,
-        *,
-        finished_at,
-    ) -> Optional[int]:
-        """
-        Calculate attempt latency from start and finish timestamps.
-        """
-
-        if self.started_at is None or finished_at is None:
-            return None
-
-        elapsed = finished_at - self.started_at
-
-        return max(
-            0,
-            int(elapsed.total_seconds() * 1000),
-        )
-
-    def _record_latency(
-        self,
-        *,
-        latency_ms: int | None,
-        finished_at,
-    ) -> None:
-        if latency_ms is None:
-            self.latency_ms = self._calculate_latency(
-                finished_at=finished_at,
+        # Retry attempts must have retry_count >= 2.
+        if self.retry_count < 2:
+            raise ValidationError(
+                {
+                    "retry_count": _(
+                        "Retry attempts must have retry count "
+                        "greater than one."
+                    )
+                }
             )
-            return
 
-        self._require(
-            latency_ms >= 0,
-            _("Latency cannot be negative."),
-        )
+    def _validate_latency(self) -> None:
+        if (
+            self.latency_ms is not None
+            and self.latency_ms < 0
+        ):
+            raise ValidationError(
+                {
+                    "latency_ms": _(
+                        "Latency cannot be negative."
+                    )
+                }
+            )
 
-        self.latency_ms = latency_ms
-
-    def _record_success_latency(
-        self,
-        latency_ms: int | None,
-    ) -> None:
-        """
-        Preserve the first successful latency measurement.
-        """
-
-        if self.latency_ms is not None:
-            return
-
-        self._record_latency(
-            latency_ms=latency_ms,
-            finished_at=self.finished_at,
-        )
-
-    # ------------------------------
-    # Guards
-    # ------------------------------
+    # ================================
+    # GUARDS
+    # ================================
 
     @staticmethod
-    def _normalize(value: str | None) -> str:
-        return (value or "").strip()
+    def _normalize(
+        value: str | None,
+    ) -> str:
+        return (
+            value or ""
+        ).strip()
 
     def _require(
         self,
@@ -1007,22 +1297,31 @@ class PaymentAttempt(models.Model):
         message: str,
     ) -> None:
         if not condition:
-            raise ValidationError(message)
+            raise ValidationError(
+                message,
+            )
 
-    # ------------------------------
-    # Transition Helpers
-    # ------------------------------
+    # ================================
+    # TRANSITION HELPERS
+    # ================================
 
     def _require_transition(
         self,
         target: PaymentAttemptStatus,
     ) -> None:
         """
-        Ensure the current state may transition to the target state.
+        Validate a lifecycle transition.
+
+        Same-state transitions are explicitly idempotent.
         """
 
+        current = self.status
+
+        if current == target:
+            return
+
         allowed = self._ALLOWED_TRANSITIONS.get(
-            self.status,
+            current,
             set(),
         )
 
@@ -1033,7 +1332,7 @@ class PaymentAttempt(models.Model):
                 "is not allowed."
             )
             % {
-                "current": self.status,
+                "current": current,
                 "target": target,
             },
         )
@@ -1045,10 +1344,14 @@ class PaymentAttempt(models.Model):
         latency_ms: int | None = None,
     ) -> None:
         """
-        Complete a valid state transition.
+        Finish the current attempt.
+
+        This method only mutates the in-memory model.
         """
 
-        self._require_transition(status)
+        self._require_transition(
+            status,
+        )
 
         finished_at = timezone.now()
 
@@ -1060,15 +1363,15 @@ class PaymentAttempt(models.Model):
             finished_at=finished_at,
         )
 
-    # ------------------------------
-    # Representation
-    # ------------------------------
+    # ================================
+    # REPRESENTATION
+    # ================================
 
     def __str__(self) -> str:
         return (
-            f"Attempt("
+            f"PaymentAttempt("
             f"payment={self.payment_id}, "
-            f"number={self.attempt_number}, "
+            f"attempt={self.attempt_number}, "
             f"status={self.get_status_display()}"
             f")"
         )
@@ -1080,4 +1383,3 @@ class PaymentAttempt(models.Model):
             f"attempt={self.attempt_number} "
             f"status={self.status!r}>"
         )
-
