@@ -421,3 +421,102 @@ feat(paymentmodel): refactor payment aggregate root for enterprise architecture
               │           │           │
               ▼           ▼           ▼
            Database    External     Events
+
+
+Refund V1:
+Order
+  │
+  └── Payment  ← Aggregate Root / Concurrency Boundary
+        │
+        ├── PaymentAttempt
+        │
+        └── Refund
+              │
+              └── one refund lifecycle
+
+Payment.amount
+Payment.currency
+Payment.gateway
+Payment.status
+        │
+        └──── immutable financial/payment snapshot
+                         │
+                         ▼
+                     Refund
+
+    target architecture :
+                            ┌────────────────────┐
+                            │       Order        │
+                            └─────────┬──────────┘
+                                      │
+                                      ▼
+                            ┌────────────────────┐
+                            │      Payment       │
+                            │  Aggregate Root    │
+                            │                    │
+                            │ amount             │
+                            │ currency           │
+                            │ gateway            │
+                            │ status             │
+                            │ version            │
+                            │ is_consumed        │
+                            │ is_refunded        │
+                            └──────┬───────┬─────┘
+                                   │       │
+                      ┌────────────┘       └────────────┐
+                      ▼                                 ▼
+              ┌────────────────┐                ┌────────────────┐
+              │ PaymentAttempt │                │     Refund     │
+              │                │                │                │
+              │ gateway attempt│                │ amount         │
+              │ status         │                │ currency       │
+              │ authority      │                │ idempotency    │
+              │ response       │                │ status         │
+              │ latency        │                │ gateway IDs    │
+              └────────────────┘                │ evidence       │
+                                                └────────────────┘
+
+                                Application Service
+                                    │
+                        ┌─────────────┼──────────────┐
+                        ▼             ▼              ▼
+                    Repository     Gateway          Outbox
+                        │             │              │
+                        ▼             ▼              ▼
+                    Database      Provider       Events
+
+
+                VERSION 1
+            ────────────────────
+            IRR
+            Decimal
+            Payment
+            PaymentAttempt
+            Refund
+            Idempotency
+            Concurrency
+            Repository
+            Gateway abstraction
+            Transaction boundary
+            Outbox
+            Audit
+            Tests
+            ────────────────────
+                    DONE
+
+            &
+
+                VERSION 2
+            ────────────────────
+            Money
+            Fractional currencies
+            Multi-currency
+            FX
+            Quote
+            Crypto assets
+            Blockchain networks
+            Crypto gateway
+            Exchange-rate snapshots
+            ────────────────────
+                    ↓
+                EXTENSION

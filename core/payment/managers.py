@@ -695,18 +695,18 @@ class RefundQuerySet(models.QuerySet):
         Return refunds using a specific gateway.
         """
         return self.filter(
-            gateway=gateway,
+            payment__gateway=gateway,
         )
 
     def with_gateway_reference(
         self,
-        gateway_ref: str,
+        gateway_reference: str,
     ) -> "RefundQuerySet":
         """
         Filter by gateway refund reference.
         """
         return self.filter(
-            gateway_ref=gateway_ref,
+            gateway_reference=gateway_reference,
         )
 
     def with_gateway_transaction_id(
