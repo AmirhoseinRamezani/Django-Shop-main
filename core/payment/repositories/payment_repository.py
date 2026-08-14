@@ -1,42 +1,63 @@
-# payment/repositories/payment_repository.py
+# core/payment/repositories/payment_repository.py
 from __future__ import annotations
+
 from typing import ClassVar
-from django.db.models import QuerySet
+
+from django.db import IntegrityError
+from django.db.models import F, QuerySet
 
 from payment.enums import PaymentStatusType
+from payment.exceptions import PaymentConcurrencyError
 from payment.models import PaymentModel
 from payment.repositories.base import BaseRepository
+
 
 class PaymentRepository(BaseRepository):
     """
     Persistence boundary for the Payment aggregate.
 
-    Responsibilities
-    ----------------
-    - Retrieve PaymentModel instances.
-    - Compose lazy Payment queries.
-    - Acquire explicit Payment row locks.
-    - Persist Payment instances.
-    - Expose persistence-oriented state queries.
+    ================================
+    RESPONSIBILITIES
+    ================================
 
-    Non-responsibilities
-    --------------------
-    - Gateway communication.
-    - Payment verification.
-    - Retry policy.
-    - PaymentAttempt persistence.
-    - PaymentAttempt numbering.
-    - Order mutation.
-    - Business workflow orchestration.
-    - Domain state-transition decisions.
-    - Event dispatching.
-    - Transaction management.
+    This repository owns persistence mechanics for PaymentModel:
 
-    Transaction ownership
-    ---------------------
-    This repository does not create transaction boundaries.
+        - retrieval
+        - filtering
+        - ordering
+        - row-level locking
+        - creation
+        - optimistic-concurrency persistence
+        - persistence-oriented existence checks
 
-    Callers own transaction.atomic().
+    ================================
+    NON-RESPONSIBILITIES
+    ================================
+
+    This repository MUST NOT own:
+
+        - business policy
+        - gateway communication
+        - payment verification
+        - refund policy
+        - PaymentAttempt workflow
+        - Order mutation
+        - transaction.atomic()
+        - Celery
+        - event publication
+        - webhook handling
+        - reconciliation decisions
+        - state-transition decisions
+
+    Domain decisions belong to the domain/application layers.
+
+    ================================
+    TRANSACTION OWNERSHIP
+    ================================
+
+    This repository NEVER creates transaction boundaries.
+
+    Application services own transaction.atomic().
 
     Example:
 
@@ -47,69 +68,144 @@ class PaymentRepository(BaseRepository):
 
             PaymentRepository.save(
                 payment,
-                update_fields=["status"],
+                update_fields=("status",),
             )
 
-    Locking contract
-    ----------------
-    get_for_update() uses SELECT ... FOR UPDATE.
+    ================================
+    LOCKING CONTRACT
+    ================================
 
-    The caller MUST execute it inside transaction.atomic().
+    get_for_update() and other locking methods require an active
+    database transaction.
 
-    get_for_update() locks the Payment row only.
-    PaymentAttempt rows are NOT locked automatically.
+    The repository does not implicitly create one.
 
-    Aggregate boundary
-    ------------------
-    Payment is the aggregate root.
+    Payment is the canonical aggregate lock for workflows involving:
 
-    PaymentAttempt is a child aggregate component whose persistence
-    belongs to PaymentAttemptRepository.
+        - payment state
+        - payment consumption
+        - cumulative refunds
+        - reconciliation
+        - duplicate callback handling
 
-    PaymentRepository must therefore remain Payment-scoped.
-
-    Lock ordering
-    -------------
-    When a workflow requires both Payment and PaymentAttempt locks,
-    callers MUST acquire them in this order:
+    If a workflow also needs PaymentAttempt locking, the canonical
+    lock order is:
 
         Payment
             ↓
         PaymentAttempt
 
-    PaymentRepository never acquires PaymentAttempt locks implicitly.
+    PaymentRepository never implicitly locks child records.
 
-    Database integrity
-    ------------------
-    Database constraints remain the final authority for persistence
-    integrity. The repository does not replace database constraints
-    with application-level existence checks.
+    ================================
+    OPTIMISTIC CONCURRENCY
+    ================================
+
+    PaymentModel.version is an optimistic concurrency token.
+
+    A normal save operation must use compare-and-swap semantics:
+
+        UPDATE payment
+        SET ...
+            version = version + 1
+        WHERE id = ?
+          AND version = ?
+
+    Exactly one row must be affected.
+
+    Zero affected rows means that another transaction changed the
+    aggregate.
+
+    In that situation PaymentConcurrencyError is raised.
+
+    The repository NEVER silently overwrites a concurrent update.
+
+    ================================
+    FINANCIAL IMMUTABILITY
+    ================================
+
+    Payment.amount and Payment.currency represent the immutable
+    financial snapshot of the Payment lifecycle.
+
+    The repository therefore does not provide a generic workflow
+    for changing those fields after creation.
+
+    Creation accepts the financial snapshot.
+
+    Subsequent persistence is intended for mutable aggregate state:
+
+        - status
+        - is_consumed
+        - is_refunded
+        - gateway-related mutable state if introduced later
+        - timestamps
+        - version
+
+    Financial corrections must be represented by a new domain fact
+    rather than silently modifying the original Payment.
+
+    ================================
+    CURRENCY SCOPE — V1
+    ================================
+
+    Version 1 of the payment system operates only with IRR.
+
+    This repository deliberately does NOT implement:
+
+        - currency conversion
+        - exchange rates
+        - money classes
+        - multi-currency normalization
+        - FX rounding
+        - currency arithmetic
+
+    Payment.amount remains a Decimal snapshot and Payment.currency
+    remains the explicit currency field.
+
+    Multi-currency support can be introduced later at the domain
+    boundary if the business actually requires it.
+
+    ================================
+    DATABASE AS FINAL AUTHORITY
+    ================================
+
+    Database constraints remain authoritative for structural
+    integrity.
+
+    Application-level existence checks are therefore never considered
+    sufficient protection against races.
+
+    Example:
+
+        pending payment uniqueness for an Order
+
+    must ultimately be protected by the PostgreSQL unique constraint
+    defined on PaymentModel.
+
+    The repository may expose convenient queries, but those queries
+    do not replace database constraints.
     """
 
     model: ClassVar[type[PaymentModel]] = PaymentModel
 
-    # ------------------------------------------------------------------
-    # Base QuerySet
-    # ------------------------------------------------------------------
+    # ================================
+    # BASE QUERYSET
+    # ================================
 
     @classmethod
     def queryset(cls) -> QuerySet[PaymentModel]:
         """
-        Return the base Payment QuerySet.
+        Return the base lazy Payment QuerySet.
 
-        The QuerySet remains lazy.
-
-        Locking:
-            None.
-
-        Transaction:
-            Not required.
+        No locking.
+        No transaction required.
+        No business filtering.
         """
         return cls.model.objects.all()
 
-    # ------------------------------------------------------------------
-    # Required Read
-    # ------------------------------------------------------------------
+    # ================================
+    # REQUIRED READ
+    # ================================
 
     @classmethod
     def get(
@@ -119,30 +215,12 @@ class PaymentRepository(BaseRepository):
         """
         Retrieve a Payment by primary key.
 
-        Args:
-            payment_id:
-                Payment primary-key value.
-
-        Returns:
-            PaymentModel
-
         Raises:
-            PaymentModel.DoesNotExist:
-                If the payment does not exist.
-
-        Locking:
-            None.
-
-        Transaction:
-            Not required.
+            PaymentModel.DoesNotExist
         """
         return cls.queryset().get(
             pk=payment_id,
         )
-
-    # ------------------------------------------------------------------
-    # Optional Read
-    # ------------------------------------------------------------------
 
     @classmethod
     def find(
@@ -150,20 +228,12 @@ class PaymentRepository(BaseRepository):
         payment_id: int,
     ) -> PaymentModel | None:
         """
-        Retrieve a Payment by primary key if it exists.
+        Retrieve a Payment if it exists.
 
         Returns:
             PaymentModel | None
 
-        Locking:
-            None.
-
-        Transaction:
-            Not required.
-
-        Exception behavior:
-            DoesNotExist is represented as None because this method
-            explicitly defines optional lookup semantics.
+        Does not raise DoesNotExist.
         """
         return (
             cls.queryset()
@@ -173,9 +243,9 @@ class PaymentRepository(BaseRepository):
             .first()
         )
 
-    # ------------------------------------------------------------------
-    # Order Queries
-    # ------------------------------------------------------------------
+    # ================================
+    # ORDER QUERIES
+    # ================================
 
     @classmethod
     def for_order(
@@ -183,21 +253,15 @@ class PaymentRepository(BaseRepository):
         order_id: int,
     ) -> QuerySet[PaymentModel]:
         """
-        Return payments belonging to an order.
+        Return all Payments belonging to an Order.
 
-        The QuerySet is lazy.
-
-        Locking:
-            None.
-
-        Transaction:
-            Not required.
-
-        Scope:
-            Payment records associated with the supplied Order.
+        The QuerySet remains lazy.
         """
-        return cls.queryset().filter(
-            order_id=order_id,
+        return (
+            cls.queryset()
+            .filter(
+                order_id=order_id,
+            )
         )
 
     @classmethod
@@ -206,23 +270,47 @@ class PaymentRepository(BaseRepository):
         order_id: int,
     ) -> QuerySet[PaymentModel]:
         """
-        Return pending payments belonging to an order.
+        Return pending Payments belonging to an Order.
 
-        This method performs a persistence query only.
+        This is a persistence query only.
 
-        It does NOT decide whether a pending payment is allowed to
-        transition to another state.
-
-        Locking:
-            None.
-
-        Transaction:
-            Not required.
+        It does NOT determine whether creation or retry is allowed.
         """
-        return cls.for_order(
-            order_id,
-        ).filter(
-            status=PaymentStatusType.PENDING,
+        return (
+            cls.for_order(order_id)
+            .filter(
+                status=PaymentStatusType.PENDING,
+            )
+        )
+
+    @classmethod
+    def successful_for_order(
+        cls,
+        order_id: int,
+    ) -> QuerySet[PaymentModel]:
+        """
+        Return successful Payments belonging to an Order.
+        """
+        return (
+            cls.for_order(order_id)
+            .filter(
+                status=PaymentStatusType.SUCCESS,
+            )
+        )
+
+    @classmethod
+    def failed_for_order(
+        cls,
+        order_id: int,
+    ) -> QuerySet[PaymentModel]:
+        """
+        Return failed Payments belonging to an Order.
+        """
+        return (
+            cls.for_order(order_id)
+            .filter(
+                status=PaymentStatusType.FAILED,
+            )
         )
 
     @classmethod
@@ -231,18 +319,12 @@ class PaymentRepository(BaseRepository):
         order_id: int,
     ) -> PaymentModel | None:
         """
-        Return the latest Payment for an order.
+        Return the latest Payment for an Order.
 
-        Ordering is explicit and deterministic:
+        Ordering is deterministic:
 
             -created_date
             -id
-
-        Locking:
-            None.
-
-        Transaction:
-            Not required.
         """
         return (
             cls.for_order(order_id)
@@ -254,29 +336,15 @@ class PaymentRepository(BaseRepository):
         )
 
     @classmethod
-    def latest_failed_for_order(
+    def latest_successful_for_order(
         cls,
         order_id: int,
     ) -> PaymentModel | None:
         """
-        Return the latest failed Payment for an order.
-
-        Ordering is explicit and deterministic:
-
-            -updated_date
-            -id
-
-        Locking:
-            None.
-
-        Transaction:
-            Not required.
+        Return the latest successful Payment for an Order.
         """
         return (
-            cls.for_order(order_id)
-            .filter(
-                status=PaymentStatusType.FAILED,
-            )
+            cls.successful_for_order(order_id)
             .order_by(
                 "-updated_date",
                 "-id",
@@ -284,22 +352,31 @@ class PaymentRepository(BaseRepository):
             .first()
         )
 
-    # ------------------------------------------------------------------
-    # State Queries
-    # ------------------------------------------------------------------
+    @classmethod
+    def latest_failed_for_order(
+        cls,
+        order_id: int,
+    ) -> PaymentModel | None:
+        """
+        Return the latest failed Payment for an Order.
+        """
+        return (
+            cls.failed_for_order(order_id)
+            .order_by(
+                "-updated_date",
+                "-id",
+            )
+            .first()
+        )
+
+    # ================================
+    # STATE QUERIES
+    # ================================
 
     @classmethod
     def pending(cls) -> QuerySet[PaymentModel]:
         """
-        Return all pending payments.
-
-        The QuerySet is lazy.
-
-        Locking:
-            None.
-
-        Transaction:
-            Not required.
+        Return all pending Payments.
         """
         return cls.queryset().filter(
             status=PaymentStatusType.PENDING,
@@ -308,15 +385,7 @@ class PaymentRepository(BaseRepository):
     @classmethod
     def successful(cls) -> QuerySet[PaymentModel]:
         """
-        Return all successful payments.
-
-        The QuerySet is lazy.
-
-        Locking:
-            None.
-
-        Transaction:
-            Not required.
+        Return all successful Payments.
         """
         return cls.queryset().filter(
             status=PaymentStatusType.SUCCESS,
@@ -325,23 +394,15 @@ class PaymentRepository(BaseRepository):
     @classmethod
     def failed(cls) -> QuerySet[PaymentModel]:
         """
-        Return all failed payments.
-
-        The QuerySet is lazy.
-
-        Locking:
-            None.
-
-        Transaction:
-            Not required.
+        Return all failed Payments.
         """
         return cls.queryset().filter(
             status=PaymentStatusType.FAILED,
         )
 
-    # ------------------------------------------------------------------
-    # Row Locking
-    # ------------------------------------------------------------------
+    # ================================
+    # ROW LOCKING
+    # ================================
 
     @classmethod
     def get_for_update(
@@ -349,36 +410,30 @@ class PaymentRepository(BaseRepository):
         payment_id: int,
     ) -> PaymentModel:
         """
-        Retrieve and row-lock one Payment.
+        Retrieve and lock exactly one Payment row.
 
-        Concurrency contract
-        --------------------
-        Caller MUST execute this method inside transaction.atomic().
+        SQL semantics:
+            SELECT ...
+            FROM payment
+            WHERE id = ?
+            FOR UPDATE
 
-        The method locks exactly the requested Payment row.
+        Transaction ownership belongs to the caller.
 
-        It does NOT automatically lock:
-            - PaymentAttempt rows;
-            - Order rows;
-            - Refund rows;
-            - any related records.
+        Intended for:
+            - state transitions
+            - consumption
+            - refund workflows
+            - reconciliation
+            - duplicate callback processing
 
-        Lock ordering
-        -------------
-        If the workflow also requires a PaymentAttempt lock:
+        The method does NOT lock:
+            - Order
+            - PaymentAttempt
+            - Refund
 
-            Payment
-                ↓
-            PaymentAttempt
-
-        The Payment row must be locked first.
-
-        Raises:
-            PaymentModel.DoesNotExist:
-                If the payment does not exist.
-
-        Transaction:
-            Owned by the caller.
+        If those rows are needed, the application workflow must acquire
+        them explicitly according to the canonical lock order.
         """
         return (
             cls.queryset()
@@ -388,9 +443,33 @@ class PaymentRepository(BaseRepository):
             )
         )
 
-    # ------------------------------------------------------------------
-    # Order-Scoped Locking
-    # ------------------------------------------------------------------
+    @classmethod
+    def get_for_update_nowait(
+        cls,
+        payment_id: int,
+    ) -> PaymentModel:
+        """
+        Retrieve and lock a Payment using NOWAIT semantics.
+
+        If another transaction already holds the lock, PostgreSQL
+        raises the appropriate database lock exception immediately.
+
+        This repository does not translate that database-level locking
+        behavior into business policy.
+        """
+        return (
+            cls.queryset()
+            .select_for_update(
+                nowait=True,
+            )
+            .get(
+                pk=payment_id,
+            )
+        )
+
+    # ================================
+    # ORDER-SCOPED LOCKING
+    # ================================
 
     @classmethod
     def pending_for_order_for_update(
@@ -398,27 +477,17 @@ class PaymentRepository(BaseRepository):
         order_id: int,
     ) -> QuerySet[PaymentModel]:
         """
-        Return pending payments for an order with row-level locks.
+        Return pending Payments for an Order with row locks.
 
-        The QuerySet is lazy.
+        Important:
 
-        Concurrency contract
-        --------------------
-        The caller MUST evaluate this QuerySet inside
-        transaction.atomic().
+        This locks existing pending Payment rows only.
 
-        Locked rows:
-            Matching pending Payment rows.
+        It does NOT make a check-then-create operation race-safe by
+        itself.
 
-        Not locked:
-            Order rows.
-            PaymentAttempt rows.
-            Other Payment rows.
-
-        Lock ordering
-        -------------
-        If a workflow later requires PaymentAttempt locks, Payment
-        locks must be acquired before PaymentAttempt locks.
+        Creation races must ultimately be protected by the database
+        uniqueness constraint.
         """
         return (
             cls.pending_for_order(order_id)
@@ -429,37 +498,49 @@ class PaymentRepository(BaseRepository):
             )
         )
 
-    # ------------------------------------------------------------------
-    # Worker Locking
-    # ------------------------------------------------------------------
+    @classmethod
+    def for_order_for_update(
+        cls,
+        order_id: int,
+    ) -> QuerySet[PaymentModel]:
+        """
+        Return all Payments for an Order with row-level locks.
+
+        This method is useful when an application workflow needs a
+        deterministic lock over the Payment records belonging to one
+        Order.
+
+        It does not lock the Order row itself.
+        """
+        return (
+            cls.for_order(order_id)
+            .select_for_update()
+            .order_by(
+                "created_date",
+                "id",
+            )
+        )
+
+    # ================================
+    # WORKER / RECONCILIATION LOCKING
+    # ================================
 
     @classmethod
     def pending_for_update_skip_locked(
         cls,
     ) -> QuerySet[PaymentModel]:
         """
-        Return pending payments using SKIP LOCKED.
+        Return pending Payments using SELECT ... FOR UPDATE SKIP LOCKED.
 
-        Intended for worker/reconciliation-style workflows where
-        already locked Payment rows should be skipped rather than
-        blocking the worker.
+        Intended for worker/reconciliation workflows.
 
-        The QuerySet is lazy.
+        Already locked rows are skipped instead of blocking the worker.
 
-        Concurrency contract
-        --------------------
-        The caller MUST evaluate this QuerySet inside
-        transaction.atomic().
+        The caller owns:
 
-        Locked rows:
-            Pending Payment rows successfully selected by PostgreSQL.
+            transaction.atomic()
 
-        Skipped rows:
-            Pending Payment rows already locked by another transaction.
-
-        Important:
-            This method does not implement a retry policy, verification
-            policy, or gateway workflow.
+        and the worker's processing policy.
         """
         return (
             cls.pending()
@@ -472,9 +553,53 @@ class PaymentRepository(BaseRepository):
             )
         )
 
-    # ------------------------------------------------------------------
-    # Persistence
-    # ------------------------------------------------------------------
+    # ================================
+    # EXISTENCE QUERIES
+    # ================================
+
+    @classmethod
+    def exists_for_order(
+        cls,
+        order_id: int,
+    ) -> bool:
+        """
+        Return whether any Payment exists for an Order.
+
+        This is a read convenience only.
+
+        It must NOT be used as a substitute for database constraints
+        when preventing duplicate active Payments.
+        """
+        return (
+            cls.queryset()
+            .filter(
+                order_id=order_id,
+            )
+            .exists()
+        )
+
+    @classmethod
+    def exists_pending_for_order(
+        cls,
+        order_id: int,
+    ) -> bool:
+        """
+        Return whether a pending Payment exists for an Order.
+
+        This is a read optimization/convenience.
+
+        It is NOT a concurrency guarantee.
+
+        The PostgreSQL unique constraint remains authoritative.
+        """
+        return (
+            cls.pending_for_order(order_id)
+            .exists()
+        )
+
+    # ================================
+    # CREATION
+    # ================================
 
     @classmethod
     def create(
@@ -482,29 +607,33 @@ class PaymentRepository(BaseRepository):
         **kwargs,
     ) -> PaymentModel:
         """
-        Persist a new Payment.
+        Create and persist a new Payment.
 
-        This method delegates creation to Django ORM.
+        The caller owns:
 
-        Responsibilities:
-            - Persist Payment data.
+            - transaction.atomic()
+            - business validation
+            - policy decisions
+            - idempotency decisions
 
-        Non-responsibilities:
-            - Gateway communication.
-            - PaymentAttempt creation.
-            - Transaction management.
-            - Business validation workflow.
-            - Order mutation.
+        Database constraints remain authoritative.
 
-        Transaction:
-            Caller-owned.
+        Important:
 
-        Database exceptions:
-            Allowed to propagate unchanged.
+        A race during creation may result in IntegrityError.
+
+        The repository deliberately does not hide that exception.
+
+        The application service should translate/reconcile the error
+        according to its idempotency and creation workflow.
         """
         return cls.model.objects.create(
             **kwargs,
         )
+
+    # ================================
+    # OPTIMISTIC CONCURRENCY
+    # ================================
 
     @classmethod
     def save(
@@ -514,43 +643,55 @@ class PaymentRepository(BaseRepository):
         update_fields: list[str] | tuple[str, ...] | None = None,
     ) -> PaymentModel:
         """
-        Persist a domain-mutated Payment with optimistic concurrency.
+        Persist a domain-mutated Payment using compare-and-swap.
 
-        Contract
-        --------
-        The caller must provide an instance loaded with its current
-        version.
+        Expected behavior:
 
-        Example:
-            payment.version == 7
+            version = N
 
-        Repository performs conceptually:
             UPDATE payment
-            SET ...
-            WHERE id = payment.id
-            AND version = 7
+            SET
+                mutable fields = ...,
+                version = version + 1
+            WHERE
+                id = payment.id
+                AND version = N
 
-        and increments the stored version to 8.
+        Exactly one affected row means success.
 
-        If zero rows are affected:
-            PaymentConcurrencyError
-        is raised.
+        Zero affected rows means concurrent modification and results
+        in PaymentConcurrencyError.
 
-        IMPORTANT:
-        This method does NOT open transaction.atomic().
-        Transaction ownership remains with the Application Service.
+        --------------------------------------------
+        IMPORTANT
+        --------------------------------------------
 
+        This method does NOT create transaction.atomic().
+
+        The caller owns the transaction boundary.
+
+        --------------------------------------------
+        FINANCIAL IMMUTABILITY
+        --------------------------------------------
+
+        ``amount`` and ``currency`` are intentionally rejected from
+        ordinary update_fields.
+
+        A Payment financial snapshot must not be silently rewritten.
+
+        --------------------------------------------
+        VERSION
+        --------------------------------------------
+
+        ``version`` is controlled exclusively by this repository.
+
+        Callers must never manually include ``version`` in
+        update_fields.
         """
-
-        from django.db.models import F
-
-        from payment.exceptions import (
-            PaymentConcurrencyError,
-        )
 
         if payment.pk is None:
             raise ValueError(
-                "Cannot use optimistic save for an unsaved Payment."
+                "Cannot persist an unsaved Payment through optimistic save."
             )
 
         expected_version = payment.version
@@ -560,65 +701,95 @@ class PaymentRepository(BaseRepository):
                 "Payment version must be greater than zero."
             )
 
-        # ------------------------------------------------------------
-        # Determine fields
-        # ------------------------------------------------------------
+        # --------------------------------------------
+        # Mutable Payment fields
+        # --------------------------------------------
+
+        immutable_fields = {
+            "amount",
+            "currency",
+            "order",
+        }
 
         if update_fields is None:
             fields = [
-                "order",
-                "amount",
-                "currency",
-                "gateway",
                 "status",
                 "is_consumed",
                 "is_refunded",
-                "updated_date",
             ]
         else:
             fields = list(update_fields)
 
-            if "version" in fields:
-                fields.remove("version")
+        # --------------------------------------------
+        # Version is repository-controlled.
+        # --------------------------------------------
 
-            if "updated_date" not in fields:
-                fields.append("updated_date")
+        if "version" in fields:
+            fields.remove("version")
 
-        # ------------------------------------------------------------
-        # Version is always part of persistence.
-        #
-        # It is NOT supplied by caller.
-        #
-        # Database increments it atomically.
-        # ------------------------------------------------------------
+        # --------------------------------------------
+        # Financial snapshot must remain immutable.
+        # --------------------------------------------
 
-        queryset = (
-            cls.model.objects
-            .filter(
-                pk=payment.pk,
-                version=expected_version,
+        forbidden = immutable_fields.intersection(fields)
+
+        if forbidden:
+            forbidden_fields = ", ".join(
+                sorted(forbidden)
             )
-        )
+
+            raise ValueError(
+                "Payment financial/aggregate identity fields cannot "
+                "be modified through PaymentRepository.save(): "
+                f"{forbidden_fields}"
+            )
+
+        # --------------------------------------------
+        # updated_date
+        #
+        # PaymentModel uses auto_now=True, but QuerySet.update() bypasses
+        # model save() and therefore does not automatically update it.
+        #
+        # We explicitly assign timezone.now().
+        # --------------------------------------------
+
+        from django.utils import timezone
 
         update_kwargs = {
             field: getattr(payment, field)
             for field in fields
-            if field != "updated_date"
         }
+
+        update_kwargs["updated_date"] = timezone.now()
+
+        # --------------------------------------------
+        # Atomic version increment.
+        # --------------------------------------------
 
         update_kwargs["version"] = F(
             "version"
         ) + 1
 
-        rows = queryset.update(
-            **update_kwargs
+        # --------------------------------------------
+        # Compare-and-swap.
+        # --------------------------------------------
+
+        rows_affected = (
+            cls.model.objects
+            .filter(
+                pk=payment.pk,
+                version=expected_version,
+            )
+            .update(
+                **update_kwargs,
+            )
         )
 
-        # ------------------------------------------------------------
-        # Concurrency failure
-        # ------------------------------------------------------------
+        # --------------------------------------------
+        # Concurrent modification.
+        # --------------------------------------------
 
-        if rows != 1:
+        if rows_affected != 1:
             raise PaymentConcurrencyError(
                 (
                     "Payment was modified concurrently. "
@@ -627,12 +798,217 @@ class PaymentRepository(BaseRepository):
                 )
             )
 
-        # ------------------------------------------------------------
+        # --------------------------------------------
         # Synchronize in-memory aggregate.
-        # ------------------------------------------------------------
+        # --------------------------------------------
 
         payment.version = (
             expected_version + 1
         )
 
+        payment.updated_date = update_kwargs[
+            "updated_date"
+        ]
+
         return payment
+
+    # ================================
+    # STATE-SPECIFIC PERSISTENCE
+    # ================================
+
+    @classmethod
+    def save_status(
+        cls,
+        payment: PaymentModel,
+    ) -> PaymentModel:
+        """
+        Persist a Payment state mutation.
+
+        Intended for domain commands such as:
+
+            payment.succeed()
+            payment.fail()
+
+        Optimistic locking is always applied.
+        """
+        return cls.save(
+            payment,
+            update_fields=(
+                "status",
+            ),
+        )
+
+    @classmethod
+    def save_consumption(
+        cls,
+        payment: PaymentModel,
+    ) -> PaymentModel:
+        """
+        Persist Payment consumption state.
+
+        The domain model must already have validated that the operation
+        is legal.
+        """
+        return cls.save(
+            payment,
+            update_fields=(
+                "is_consumed",
+            ),
+        )
+
+    @classmethod
+    def save_refund_state(
+        cls,
+        payment: PaymentModel,
+    ) -> PaymentModel:
+        """
+        Persist the aggregate-level fully-refunded flag.
+
+        The Refund workflow is responsible for proving that the
+        cumulative successful refund amount equals the Payment amount.
+
+        This method merely persists the already-decided domain state.
+        """
+        return cls.save(
+            payment,
+            update_fields=(
+                "is_refunded",
+            ),
+        )
+
+    # ================================
+    # CONDITIONAL PERSISTENCE HELPERS
+    # ================================
+
+    @classmethod
+    def mark_consumed_if_current(
+        cls,
+        *,
+        payment_id: int,
+        expected_version: int,
+    ) -> bool:
+        """
+        Atomically mark a Payment as consumed if its version matches.
+
+        This is a low-level persistence primitive.
+
+        Business eligibility must be checked by the application/domain
+        layer before calling it.
+
+        Returns:
+
+            True
+                Exactly one row was modified.
+
+            False
+                The expected version no longer matches.
+
+        No transaction boundary is created here.
+        """
+
+        if expected_version < 1:
+            raise ValueError(
+                "Payment version must be greater than zero."
+            )
+
+        from django.utils import timezone
+
+        rows_affected = (
+            cls.model.objects
+            .filter(
+                pk=payment_id,
+                version=expected_version,
+            )
+            .update(
+                is_consumed=True,
+                version=F("version") + 1,
+                updated_date=timezone.now(),
+            )
+        )
+
+        return rows_affected == 1
+
+    # ================================
+    # REFUND-RELATED READS
+    # ================================
+
+    @classmethod
+    def refundable_candidates(
+        cls,
+    ) -> QuerySet[PaymentModel]:
+        """
+        Return successful, consumed, not-fully-refunded Payments.
+
+        This is intentionally only a persistence query.
+
+        It does NOT calculate the remaining refundable balance.
+
+        Aggregate refund balance MUST be calculated while the Payment
+        row is locked.
+        """
+        return (
+            cls.successful()
+            .filter(
+                is_consumed=True,
+                is_refunded=False,
+            )
+        )
+
+    @classmethod
+    def refundable_candidates_for_update(
+        cls,
+    ) -> QuerySet[PaymentModel]:
+        """
+        Return refundable Payment candidates with row locks.
+
+        Intended for refund application workflows.
+
+        The caller must evaluate this QuerySet inside transaction.atomic().
+        """
+        return (
+            cls.refundable_candidates()
+            .select_for_update()
+            .order_by(
+                "created_date",
+                "id",
+            )
+        )
+
+    # ================================
+    # INTEGRITY HELPERS
+    # ================================
+
+    @classmethod
+    def create_safely(
+        cls,
+        **kwargs,
+    ) -> PaymentModel:
+        """
+        Create a Payment while preserving database integrity semantics.
+
+        This method intentionally does not convert IntegrityError into a
+        business exception because the exact reason may matter to the
+        application service.
+
+        The caller may inspect the integrity violation and perform the
+        appropriate idempotency/retry reconciliation.
+
+        This method exists primarily as an explicit semantic alias for
+        creation in concurrency-sensitive application workflows.
+        """
+        try:
+            return cls.create(
+                **kwargs,
+            )
+        except IntegrityError:
+            raise
+
+    # ================================
+    # REPRESENTATION
+    # ================================
+
+    def __repr__(self) -> str:
+        return (
+            f"<PaymentRepository "
+            f"model={self.model.__name__}>"
+        )
