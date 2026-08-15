@@ -12,7 +12,6 @@ from payment.enums import (
 )
 from payment.managers import GatewayLogManager
 
-
 class GatewayLog(models.Model):
     """
     Immutable Gateway Communication Audit Entity.

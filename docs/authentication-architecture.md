@@ -520,3 +520,21 @@ Payment.status
             ────────────────────
                     ↓
                 EXTENSION
+
+PaymentModel
+     │
+     ├── PaymentRepository
+     │
+     └── Refund
+           │
+           └── RefundRepository
+                    │
+                    ▼
+              RefundService
+                    │
+          ┌─────────┴─────────┐
+          ▼                   ▼
+   Gateway Provider       PaymentRepository
+          │                   │
+          ▼                   ▼
+     Gateway API        Payment state

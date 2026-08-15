@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any
 
 from django.core.exceptions import ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
@@ -25,66 +26,40 @@ class Refund(models.Model):
     """
     Refund domain entity.
 
-    A Refund represents exactly one refund financial lifecycle
-    belonging to one Payment aggregate.
+    A Refund represents exactly one refund financial lifecycle belonging
+    to one Payment aggregate.
 
-    Domain responsibilities:
-        - refund financial snapshot
-        - currency snapshot
-        - request idempotency identity
+    The model owns:
+        - financial/request snapshot
         - refund classification
         - refund lifecycle
         - gateway identities
         - normalized gateway evidence
-        - deterministic domain transitions
+        - deterministic state transitions
         - refund-local invariants
 
-    Explicitly outside this model:
-        - database transactions
-        - row locking
+    The model does NOT own:
+        - transaction boundaries
+        - database locking
         - repository access
-        - gateway HTTP calls
+        - gateway communication
         - cumulative refund calculation
         - Payment mutation
         - Order mutation
         - retries
         - task scheduling
-        - event dispatching
+        - event publication
 
-    Aggregate-level refundable balance MUST be calculated by the
-    application workflow while the canonical Payment row is locked.
+    Cumulative refund authorization belongs to the application workflow
+    and MUST be evaluated while the canonical Payment row is locked.
 
-    --------------------------------------------------
-    V1 MONEY CONTRACT
-    --------------------------------------------------
+    V1 money contract:
+        - Decimal
+        - decimal_places=0
+        - IRR only
 
-    V1 deliberately keeps money representation simple:
-
-        Decimal
-        +
-        decimal_places=0
-        +
-        Payment currency snapshot
-
-    The current platform calculates prices only in Iranian Rial.
-
-    Therefore V1 does NOT introduce:
-
-        - Money value objects
-        - FX
-        - exchange rates
-        - fractional currency units
-        - multi-currency arithmetic
-        - crypto assets
-        - currency conversion
-
-    The currency field remains because the financial snapshot must be
-    explicit and because the Payment Core is intended to evolve later.
-
-    V1 invariant:
-
-        Refund.currency == Payment.currency
-
+    V2 concerns such as Money, FX, fractional currencies, multi-currency
+    and crypto assets are intentionally outside this model.
     """
 
     # ================================
@@ -122,7 +97,7 @@ class Refund(models.Model):
     )
 
     # ================================
-    # Request idempotency
+    # Request identity / idempotency
     # ================================
 
     idempotency_key = models.CharField(
@@ -267,9 +242,9 @@ class Refund(models.Model):
         )
 
         constraints = [
-            # ------------------------------------
+            # ----------------------------------------------------------
             # Financial invariants
-            # ------------------------------------
+            # ----------------------------------------------------------
 
             models.CheckConstraint(
                 condition=Q(amount__gt=0),
@@ -281,31 +256,33 @@ class Refund(models.Model):
                 name="refund_currency_required",
             ),
 
-            # ------------------------------------
-            # Idempotency
-            # ------------------------------------
-
-            models.CheckConstraint(
-                condition=Q(idempotency_key__gt=""),
-                name="refund_idempotency_key_required",
-            ),
-
-            # ------------------------------------
-            # V1 currency
-            #
-            # V1 calculations are Rial-only.
-            # Keeping this database-level prevents accidental creation
-            # of unsupported currency refunds.
-            # ------------------------------------
+            # ----------------------------------------------------------
+            # V1 currency contract
+            # ----------------------------------------------------------
 
             models.CheckConstraint(
                 condition=Q(currency=Currency.IRR),
                 name="refund_v1_currency_irr",
             ),
 
-            # ------------------------------------
-            # Lifecycle
-            # ------------------------------------
+            # ----------------------------------------------------------
+            # Idempotency
+            # ----------------------------------------------------------
+
+            models.CheckConstraint(
+                condition=Q(idempotency_key__gt=""),
+                name="refund_idempotency_key_required",
+            ),
+
+            # ----------------------------------------------------------
+            # Lifecycle consistency
+            #
+            # PENDING:
+            #     finished_at IS NULL
+            #
+            # SUCCESS / FAILED:
+            #     finished_at IS NOT NULL
+            # ----------------------------------------------------------
 
             models.CheckConstraint(
                 condition=(
@@ -334,9 +311,9 @@ class Refund(models.Model):
                 name="refund_finish_after_request",
             ),
 
-            # ------------------------------------
+            # ----------------------------------------------------------
             # SUCCESS invariants
-            # ------------------------------------
+            # ----------------------------------------------------------
 
             models.CheckConstraint(
                 condition=(
@@ -358,9 +335,9 @@ class Refund(models.Model):
                 name="refund_success_no_failure_reason",
             ),
 
-            # ------------------------------------
+            # ----------------------------------------------------------
             # FAILED invariants
-            # ------------------------------------
+            # ----------------------------------------------------------
 
             models.CheckConstraint(
                 condition=(
@@ -371,12 +348,11 @@ class Refund(models.Model):
                 name="refund_failed_requires_failure_reason",
             ),
 
-            # ------------------------------------
+            # ----------------------------------------------------------
             # Gateway identity uniqueness
             #
-            # Scoped to Payment because the same gateway identifier
-            # may theoretically exist under another payment context.
-            # ------------------------------------
+            # Scoped to Payment intentionally.
+            # ----------------------------------------------------------
 
             models.UniqueConstraint(
                 fields=(
@@ -477,60 +453,50 @@ class Refund(models.Model):
         payment_currency: str,
     ) -> None:
         """
-        Validate this Refund against a loaded Payment snapshot.
-        No relation access occurs here.
+        Validate this Refund against an already-loaded Payment snapshot.
 
-        No:
-            - query
+        This method deliberately performs no:
+            - database query
             - transaction
-            - lock
+            - locking
             - repository access
             - cumulative refund calculation
 
-        The cumulative invariant belongs to the application workflow
-        while the Payment row is locked.
+        Cumulative refund authorization belongs to the application
+        workflow while the Payment row is locked.
         """
-        errors: dict[str, object] = {}
 
-        payment_amount = Decimal(
+        normalized_payment_amount = Decimal(
             str(payment_amount)
         )
-
-        payment_currency = self._normalize(
+        normalized_payment_currency = self._normalize(
             payment_currency
         )
 
-        # Payment itself must be financially valid.
-        if payment_amount <= Decimal("0"):
+        if normalized_payment_amount <= Decimal("0"):
             raise PaymentInvariantViolation(
                 "Payment amount must be greater than zero."
             )
 
-        # Refund amount must be positive.
         if self.amount is None:
-            errors["amount"] = _(
+            raise PaymentRefundAmountInvalidError(
                 "Refund amount is required."
             )
 
-        elif self.amount <= Decimal("0"):
-            errors["amount"] = _(
+        if self.amount <= Decimal("0"):
+            raise PaymentRefundAmountInvalidError(
                 "Refund amount must be greater than zero."
             )
 
-        # Individual refund may never exceed Payment.
-        elif self.amount > payment_amount:
-            errors["amount"] = _(
+        if self.amount > normalized_payment_amount:
+            raise PaymentRefundAmountInvalidError(
                 "Refund amount cannot exceed the original Payment amount."
             )
 
-        # Currency must match the Payment snapshot.
-        if self.currency != payment_currency:
-            errors["currency"] = _(
+        if self.currency != normalized_payment_currency:
+            raise PaymentCurrencyMismatchError(
                 "Refund currency must match the Payment currency."
             )
-
-        if errors:
-            raise ValidationError(errors)
 
     def is_full_payment_refund(
         self,
@@ -538,16 +504,19 @@ class Refund(models.Model):
         payment_amount: Decimal,
     ) -> bool:
         """
-        Return whether this individual Refund equals Payment amount.
-        This does NOT determine aggregate full-refund status.
+        Return whether this individual Refund equals the complete
+        Payment amount.
+
+        This does NOT determine whether the Payment is fully refunded.
 
         Example:
+
             Payment   = 1,000,000
             Refund #1 =   600,000
             Refund #2 =   400,000
 
-        The Payment becomes fully refunded only after the successful
-        cumulative refund amount reaches Payment.amount.
+        Neither Refund is individually a full refund, while the
+        cumulative successful refund amount equals the Payment amount.
         """
 
         return self.amount == Decimal(
@@ -566,24 +535,28 @@ class Refund(models.Model):
         response_code: str = "",
         gateway_message: str = "",
         latency_ms: int | None = None,
-    ) -> "Refund":
+    ) -> Refund:
         """
-        PENDING -> SUCCESS.
+        Transition:
+
+            PENDING -> SUCCESS
+
         Repeated SUCCESS processing is idempotent.
-        Existing gateway identities are never silently replaced.
+
+        Existing gateway identities are never silently overwritten.
         """
 
         reference = self._normalize(
             gateway_reference
         )
-
         transaction_id = self._normalize(
             gateway_transaction_id
         )
 
-        # --------------------------------------------
-        # Already successful = idempotent reconciliation
-        # --------------------------------------------
+        # ------------------------------------
+        # Already successful:
+        # reconciliation is allowed, financial state is not repeated.
+        # ------------------------------------
 
         if self.is_success:
             self._reconcile_success_identity(
@@ -592,26 +565,14 @@ class Refund(models.Model):
             )
             return self
 
-        # --------------------------------------------
-        # Only PENDING may become SUCCESS.
-        # --------------------------------------------
-
         self._require_transition(
             RefundStatus.SUCCESS
         )
-
-        # --------------------------------------------
-        # Successful refund requires gateway identity.
-        # --------------------------------------------
 
         if not (reference or transaction_id):
             raise PaymentInvariantViolation(
                 "A successful refund requires at least one gateway identity."
             )
-
-        # --------------------------------------------
-        # Gateway identity assignment.
-        # --------------------------------------------
 
         self._assign_gateway_reference(
             reference
@@ -621,10 +582,6 @@ class Refund(models.Model):
             transaction_id
         )
 
-        # --------------------------------------------
-        # Gateway evidence.
-        # --------------------------------------------
-
         self._update_gateway_metadata(
             response_code=response_code,
             gateway_message=gateway_message,
@@ -632,10 +589,6 @@ class Refund(models.Model):
 
         # SUCCESS cannot retain failure evidence.
         self.failure_reason = ""
-
-        # --------------------------------------------
-        # Terminal transition.
-        # --------------------------------------------
 
         self._finish(
             RefundStatus.SUCCESS,
@@ -651,16 +604,16 @@ class Refund(models.Model):
         response_code: str = "",
         gateway_message: str = "",
         latency_ms: int | None = None,
-    ) -> "Refund":
+    ) -> Refund:
         """
-        PENDING -> FAILED.
-        FAILED is terminal.
-        Repeated FAILED processing is an idempotent no-op.
-        """
+        Transition:
 
-        # --------------------------------------------
-        # Already failed = idempotent no-op.
-        # --------------------------------------------
+            PENDING -> FAILED
+
+        FAILED is terminal.
+
+        Repeated FAILED processing is intentionally idempotent.
+        """
 
         if self.is_failed:
             return self
@@ -697,11 +650,13 @@ class Refund(models.Model):
         *,
         response_code: str = "",
         gateway_message: str = "",
-    ) -> "Refund":
+    ) -> Refund:
         """
-        Record non-terminal gateway evidence.
-        Only PENDING refunds may receive mutable gateway evidence.
-        Terminal refunds are historical financial facts.
+        Register non-terminal gateway evidence.
+
+        Only PENDING Refunds may receive mutable gateway evidence.
+
+        Terminal Refunds represent historical financial facts.
         """
 
         if not self.is_pending:
@@ -732,14 +687,14 @@ class Refund(models.Model):
         gateway_transaction_id: str,
     ) -> None:
         """
-        Reconcile identities for an already-successful Refund.
+        Reconcile identities for an already successful Refund.
 
         Rules:
+
             stored A + incoming A -> OK
-            stored A + incoming B -> conflict
+            stored A + incoming B -> CONFLICT
             stored empty + incoming A -> enrich
             stored A + incoming empty -> OK
-            both empty -> OK
         """
 
         self._reconcile_identity_value(
@@ -828,23 +783,23 @@ class Refund(models.Model):
         gateway_message: str = "",
     ) -> None:
         """
-        Update normalized gateway evidence.
-        Empty values never erase existing evidence.
+        Update normalized non-financial gateway evidence.
+
+        Empty incoming values never erase existing evidence.
         """
 
-        response_code = self._normalize(
+        normalized_code = self._normalize(
             response_code
         )
-
-        gateway_message = self._normalize(
+        normalized_message = self._normalize(
             gateway_message
         )
 
-        if response_code:
-            self.response_code = response_code
+        if normalized_code:
+            self.response_code = normalized_code
 
-        if gateway_message:
-            self.gateway_message = gateway_message
+        if normalized_message:
+            self.gateway_message = normalized_message
 
     # ================================
     # Lifecycle / latency
@@ -898,7 +853,8 @@ class Refund(models.Model):
         latency_ms: int | None = None,
     ) -> None:
         """
-        Complete a terminal transition.
+        Complete a terminal Refund transition.
+
         Persistence remains outside the domain model.
         """
 
@@ -923,11 +879,11 @@ class Refund(models.Model):
         self._validate_invariants()
 
     def _validate_invariants(self) -> None:
-        errors: dict[str, object] = {}
+        errors: dict[str, Any] = {}
 
-        # --------------------------------------------
-        # Financial
-        # --------------------------------------------
+        # ------------------------------------
+        # Financial invariants
+        # ------------------------------------
 
         if (
             self.amount is None
@@ -937,23 +893,22 @@ class Refund(models.Model):
                 "Refund amount must be greater than zero."
             )
 
-        if not self._normalize(self.currency):
+        normalized_currency = self._normalize(
+            self.currency
+        )
+
+        if not normalized_currency:
             errors["currency"] = _(
                 "Refund currency is required."
             )
-
-        # V1 only supports Rial.
-        if (
-            self.currency
-            and self.currency != Currency.IRR
-        ):
+        elif normalized_currency != Currency.IRR:
             errors["currency"] = _(
                 "V1 refunds must use Iranian Rial."
             )
 
-        # --------------------------------------------
+        # ------------------------------------
         # Idempotency
-        # --------------------------------------------
+        # ------------------------------------
 
         if not self._normalize(
             self.idempotency_key
@@ -962,9 +917,9 @@ class Refund(models.Model):
                 "Refund idempotency key is required."
             )
 
-        # --------------------------------------------
+        # ------------------------------------
         # Lifecycle
-        # --------------------------------------------
+        # ------------------------------------
 
         if self.is_pending:
             if self.finished_at is not None:
@@ -983,9 +938,9 @@ class Refund(models.Model):
                 "Invalid refund state."
             )
 
-        # --------------------------------------------
-        # SUCCESS
-        # --------------------------------------------
+        # ------------------------------------
+        # SUCCESS invariants
+        # ------------------------------------
 
         if self.is_success:
             if not (
@@ -1001,9 +956,9 @@ class Refund(models.Model):
                     "Successful refunds cannot contain a failure reason."
                 )
 
-        # --------------------------------------------
-        # FAILED
-        # --------------------------------------------
+        # ------------------------------------
+        # FAILED invariants
+        # ------------------------------------
 
         if (
             self.is_failed
@@ -1015,9 +970,9 @@ class Refund(models.Model):
                 "Failed refunds require a failure reason."
             )
 
-        # --------------------------------------------
+        # ------------------------------------
         # Temporal consistency
-        # --------------------------------------------
+        # ------------------------------------
 
         if (
             self.finished_at is not None
@@ -1028,9 +983,9 @@ class Refund(models.Model):
                 "Finished time cannot be earlier than refund request time."
             )
 
-        # --------------------------------------------
+        # ------------------------------------
         # Latency
-        # --------------------------------------------
+        # ------------------------------------
 
         if (
             self.latency_ms is not None
@@ -1062,11 +1017,13 @@ class Refund(models.Model):
     ) -> None:
         """
         Closed Refund state machine:
+
             PENDING -> SUCCESS
             PENDING -> FAILED
 
         Terminal states cannot be resurrected.
-        Same-state idempotency is handled by public domain commands.
+
+        Same-state idempotency is handled by the public domain commands.
         """
 
         if self.status == target:
@@ -1096,16 +1053,6 @@ class Refund(models.Model):
         value: str | None,
     ) -> str:
         return (value or "").strip()
-
-    @staticmethod
-    def _require(
-        condition: bool,
-        message: str,
-    ) -> None:
-        if not condition:
-            raise PaymentInvariantViolation(
-                message
-            )
 
     # ================================
     # Representation
