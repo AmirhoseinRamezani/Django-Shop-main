@@ -1,11 +1,10 @@
-# payment/repositories/refund_repository.py
+# core/payment/repositories/refund_repository.py
 
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import ClassVar
+from typing import Any, ClassVar
 
-from django.db import IntegrityError
 from django.db.models import QuerySet, Sum
 
 from payment.enums import RefundStatus
@@ -13,103 +12,178 @@ from payment.models.refund import Refund
 from payment.repositories.base import BaseRepository
 
 
-class RefundRepository(BaseRepository):
+class RefundRepository(
+    BaseRepository[Refund],
+):
     """
-    Persistence boundary for the Refund aggregate.
-
-    This repository is intentionally persistence-focused.
+    Persistence boundary for Refund.
 
     Responsibilities
     ----------------
-    The repository owns:
+    - Refund persistence
+    - Refund queries
+    - Payment-scoped queries
+    - row locking
+    - cumulative successful-refund aggregation
+    - idempotency lookup
+    - gateway evidence persistence
 
-        - Refund QuerySets
-        - Refund retrieval
-        - Refund filtering
-        - Refund existence checks
-        - Refund row locking
-        - Refund creation
-        - Refund persistence
-        - Refund aggregate read primitives
-        - Successful-refund aggregation
-        - Database integrity propagation
+    Non-responsibilities
+    --------------------
+    - refund authorization
+    - refund state-machine decisions
+    - gateway communication
+    - provider-specific parsing
+    - transaction ownership
+    - Payment state transitions
+    - event publication
+    - business policy
 
-    The repository does NOT own:
+    Concurrency contract
+    --------------------
+    Payment is the canonical synchronization point for cumulative
+    refund authorization.
 
-        - transaction.atomic()
-        - Payment locking
-        - refund business policy
-        - refundable-balance calculation
-        - cumulative refund authorization
-        - gateway communication
-        - gateway verification
-        - refund orchestration
-        - Payment mutation
-        - event publishing
-        - retry policy
-        - idempotency business reconciliation
+    RefundRepository does not implicitly lock Payment.
 
-    ------------------------------------------------
-    CONCURRENCY CONTRACT
-    ------------------------------------------------
+    RefundService is responsible for:
+        transaction.atomic()
+            ->
+        PaymentRepository.get_for_update()
+            ->
+        RefundRepository queries
+            ->
+        gateway execution
+            ->
+        Refund persistence
+            ->
+        Payment synchronization
 
-    The Payment row is the canonical synchronization point for refund
-    authorization.
+    Idempotency
+    -----------
+    The database uniqueness constraint on idempotency_key is authoritative.
 
-    A service responsible for authorizing a new refund should generally:
+    Repository-level lookup is used for reconciliation, while the database
+    remains the final concurrency authority.
 
-        1. Enter transaction.atomic().
-        2. Lock the Payment row with SELECT ... FOR UPDATE.
-        3. Resolve refund idempotency.
-        4. Calculate successful refunds for the Payment.
-        5. Validate the requested refund against the Payment snapshot.
-        6. Create/process the Refund.
-        7. Update Payment state when required.
-        8. Commit.
+    Financial aggregation
+    ---------------------
+    successful_amount_for_payment() includes only SUCCESS refunds.
 
-    Refund row locks are useful for workflows operating on an existing
-    Refund, but they do not replace locking the Payment row when making
-    cumulative financial decisions.
-
-    ------------------------------------------------
-    DATABASE AUTHORITY
-    ------------------------------------------------
-
-    The Refund model/database constraints remain authoritative for:
-
-        - positive refund amount
-        - supported currency
-        - unique idempotency key
-        - lifecycle consistency
-        - successful refund gateway identity
-        - failed refund failure reason
-        - gateway identity uniqueness scoped to Payment
-
-    IntegrityError is intentionally not translated here because the
-    application service is the correct layer to determine the business
-    meaning of a database conflict.
+    PENDING and FAILED refunds never contribute to the refundable balance.
     """
 
     model: ClassVar[type[Refund]] = Refund
 
     # ================================
-    # BASE QUERYSET
+    # STATUS GROUPS
+    # ================================
+
+    SUCCESS_STATUSES: ClassVar[
+        tuple[str, ...]
+    ] = (
+        RefundStatus.SUCCESS,
+    )
+
+    TERMINAL_STATUSES: ClassVar[
+        tuple[str, ...]
+    ] = (
+        RefundStatus.SUCCESS,
+        RefundStatus.FAILED,
+    )
+
+    ACTIVE_STATUSES: ClassVar[
+        tuple[str, ...]
+    ] = (
+        RefundStatus.PENDING,
+    )
+
+    # ================================
+    # STRUCTURAL FIELDS
+    # ================================
+
+    STRUCTURAL_FIELDS: ClassVar[
+        frozenset[str]
+    ] = frozenset(
+        {
+            "payment",
+            "payment_id",
+            "amount",
+            "currency",
+            "idempotency_key",
+            "reason",
+            "reason_detail",
+        }
+    )
+
+    SAFE_UPDATE_FIELDS: ClassVar[
+        tuple[str, ...]
+    ] = (
+        "status",
+        "gateway_reference",
+        "gateway_transaction_id",
+        "response_code",
+        "gateway_message",
+        "failure_reason",
+        "finished_at",
+        "latency_ms",
+        "ip_address",
+        "user_agent",
+        "meta",
+    )
+
+    GATEWAY_EVIDENCE_FIELDS: ClassVar[
+        tuple[str, ...]
+    ] = (
+        "response_code",
+        "gateway_message",
+        "latency_ms",
+    )
+
+    SUCCESS_UPDATE_FIELDS: ClassVar[
+        tuple[str, ...]
+    ] = (
+        "status",
+        "gateway_reference",
+        "gateway_transaction_id",
+        "response_code",
+        "gateway_message",
+        "failure_reason",
+        "finished_at",
+        "latency_ms",
+    )
+
+    FAILURE_UPDATE_FIELDS: ClassVar[
+        tuple[str, ...]
+    ] = (
+        "status",
+        "response_code",
+        "gateway_message",
+        "failure_reason",
+        "finished_at",
+        "latency_ms",
+    )
+
+    # ================================
+    # QUERYSET
     # ================================
 
     @classmethod
-    def queryset(cls) -> QuerySet[Refund]:
+    def queryset(
+        cls,
+    ) -> QuerySet[Refund]:
         """
         Return the base lazy Refund QuerySet.
 
-        This method performs no evaluation and introduces no locking.
-
-        Returns:
-            QuerySet[Refund]
+        No transaction.
+        No locking.
+        No business filtering.
         """
+
         return cls.model.objects.all()
 
     # ================================
-    # BASIC RETRIEVAL
+    # BASIC READ
     # ================================
 
     @classmethod
@@ -118,11 +192,11 @@ class RefundRepository(BaseRepository):
         refund_id: int,
     ) -> Refund:
         """
-        Retrieve a Refund by primary key.
+        Retrieve one Refund.
 
-        Raises:
-            Refund.DoesNotExist
+        DoesNotExist intentionally propagates.
         """
+
         return cls.queryset().get(
             pk=refund_id,
         )
@@ -133,11 +207,9 @@ class RefundRepository(BaseRepository):
         refund_id: int,
     ) -> Refund | None:
         """
-        Retrieve a Refund by primary key if it exists.
-
-        Returns:
-            Refund | None
+        Retrieve one Refund if it exists.
         """
+
         return (
             cls.queryset()
             .filter(
@@ -147,258 +219,7 @@ class RefundRepository(BaseRepository):
         )
 
     # ================================
-    # IDEMPOTENCY
-    # ================================
-
-    @classmethod
-    def get_by_idempotency_key(
-        cls,
-        idempotency_key: str,
-    ) -> Refund:
-        """
-        Retrieve a Refund by its idempotency key.
-
-        The uniqueness guarantee is enforced by the database.
-
-        Business reconciliation of an existing Refund belongs to the
-        application/service layer.
-        """
-        return (
-            cls.queryset()
-            .get(
-                idempotency_key=idempotency_key,
-            )
-        )
-
-    @classmethod
-    def find_by_idempotency_key(
-        cls,
-        idempotency_key: str,
-    ) -> Refund | None:
-        """
-        Retrieve a Refund by idempotency key if it exists.
-
-        This is a non-locking read.
-        """
-        return (
-            cls.queryset()
-            .filter(
-                idempotency_key=idempotency_key,
-            )
-            .first()
-        )
-
-    @classmethod
-    def get_by_idempotency_key_for_update(
-        cls,
-        idempotency_key: str,
-    ) -> Refund:
-        """
-        Retrieve and lock a Refund by idempotency key.
-
-        The caller owns the transaction boundary.
-
-        Intended for:
-            - idempotency reconciliation
-            - gateway callback processing
-            - refund state reconciliation
-        """
-        return (
-            cls.queryset()
-            .select_for_update()
-            .get(
-                idempotency_key=idempotency_key,
-            )
-        )
-
-    @classmethod
-    def find_by_idempotency_key_for_update(
-        cls,
-        idempotency_key: str,
-    ) -> Refund | None:
-        """
-        Retrieve and lock an existing Refund by idempotency key.
-
-        Returns:
-            Refund | None
-
-        The caller owns transaction.atomic().
-        """
-        return (
-            cls.queryset()
-            .select_for_update()
-            .filter(
-                idempotency_key=idempotency_key,
-            )
-            .first()
-        )
-
-    # ================================
-    # PAYMENT QUERIES
-    # ================================
-
-    @classmethod
-    def for_payment(
-        cls,
-        payment_id: int,
-    ) -> QuerySet[Refund]:
-        """
-        Return all Refunds belonging to a Payment.
-
-        The QuerySet remains lazy.
-        """
-        return (
-            cls.queryset()
-            .filter(
-                payment_id=payment_id,
-            )
-        )
-
-    @classmethod
-    def pending_for_payment(
-        cls,
-        payment_id: int,
-    ) -> QuerySet[Refund]:
-        """
-        Return pending Refunds belonging to a Payment.
-
-        This is a persistence query only.
-
-        It does NOT mean that another refund may or may not be created.
-        """
-        return (
-            cls.for_payment(payment_id)
-            .filter(
-                status=RefundStatus.PENDING,
-            )
-        )
-
-    @classmethod
-    def successful_for_payment(
-        cls,
-        payment_id: int,
-    ) -> QuerySet[Refund]:
-        """
-        Return successful Refunds belonging to a Payment.
-        """
-        return (
-            cls.for_payment(payment_id)
-            .filter(
-                status=RefundStatus.SUCCESS,
-            )
-        )
-
-    @classmethod
-    def failed_for_payment(
-        cls,
-        payment_id: int,
-    ) -> QuerySet[Refund]:
-        """
-        Return failed Refunds belonging to a Payment.
-        """
-        return (
-            cls.for_payment(payment_id)
-            .filter(
-                status=RefundStatus.FAILED,
-            )
-        )
-
-    # ================================
-    # GLOBAL STATE QUERIES
-    # ================================
-
-    @classmethod
-    def pending(cls) -> QuerySet[Refund]:
-        """
-        Return all pending Refunds.
-
-        The QuerySet remains lazy.
-        """
-        return cls.queryset().filter(
-            status=RefundStatus.PENDING,
-        )
-
-    @classmethod
-    def successful(cls) -> QuerySet[Refund]:
-        """
-        Return all successful Refunds.
-
-        The QuerySet remains lazy.
-        """
-        return cls.queryset().filter(
-            status=RefundStatus.SUCCESS,
-        )
-
-    @classmethod
-    def failed(cls) -> QuerySet[Refund]:
-        """
-        Return all failed Refunds.
-
-        The QuerySet remains lazy.
-        """
-        return cls.queryset().filter(
-            status=RefundStatus.FAILED,
-        )
-
-    # ================================
-    # ORDERING / LATEST
-    # ================================
-
-    @classmethod
-    def latest_for_payment(
-        cls,
-        payment_id: int,
-    ) -> Refund | None:
-        """
-        Return the most recently requested Refund for a Payment.
-
-        Ordering is deterministic through requested_at and id.
-        """
-        return (
-            cls.for_payment(payment_id)
-            .order_by(
-                "-requested_at",
-                "-id",
-            )
-            .first()
-        )
-
-    @classmethod
-    def latest_successful_for_payment(
-        cls,
-        payment_id: int,
-    ) -> Refund | None:
-        """
-        Return the most recently completed successful Refund.
-        """
-        return (
-            cls.successful_for_payment(payment_id)
-            .order_by(
-                "-finished_at",
-                "-id",
-            )
-            .first()
-        )
-
-    @classmethod
-    def latest_failed_for_payment(
-        cls,
-        payment_id: int,
-    ) -> Refund | None:
-        """
-        Return the most recently completed failed Refund.
-        """
-        return (
-            cls.failed_for_payment(payment_id)
-            .order_by(
-                "-finished_at",
-                "-id",
-            )
-            .first()
-        )
-
-    # ================================
-    # ROW LOCKING
+    # LOCKING
     # ================================
 
     @classmethod
@@ -407,10 +228,11 @@ class RefundRepository(BaseRepository):
         refund_id: int,
     ) -> Refund:
         """
-        Retrieve and lock a Refund by primary key.
+        Lock one Refund.
 
-        The caller owns transaction.atomic().
+        Caller owns transaction.atomic().
         """
+
         return (
             cls.queryset()
             .select_for_update()
@@ -420,19 +242,32 @@ class RefundRepository(BaseRepository):
         )
 
     @classmethod
+    def find_for_update(
+        cls,
+        refund_id: int,
+    ) -> Refund | None:
+        """
+        Lock one Refund if it exists.
+        """
+
+        return (
+            cls.queryset()
+            .filter(
+                pk=refund_id,
+            )
+            .select_for_update()
+            .first()
+        )
+
+    @classmethod
     def get_for_update_nowait(
         cls,
         refund_id: int,
     ) -> Refund:
         """
-        Retrieve and lock a Refund using NOWAIT semantics.
-
-        If the row is already locked, the database lock exception is
-        intentionally propagated to the caller.
-
-        The repository does not translate lock failures into business
-        exceptions.
+        Lock one Refund using NOWAIT.
         """
+
         return (
             cls.queryset()
             .select_for_update(
@@ -443,28 +278,95 @@ class RefundRepository(BaseRepository):
             )
         )
 
+    # ================================
+    # IDEMPOTENCY
+    # ================================
+
+    @staticmethod
+    def _normalize_idempotency_key(
+        value: str | None,
+    ) -> str:
+        return str(
+            value or "",
+        ).strip()
+
     @classmethod
-    def get_for_update_skip_locked(
+    def find_by_idempotency_key(
         cls,
-        refund_id: int,
+        idempotency_key: str,
     ) -> Refund | None:
         """
-        Retrieve and lock a Refund using SKIP LOCKED semantics.
+        Find a Refund by its globally unique idempotency identity.
 
-        Returns None when the row is currently locked by another
-        transaction.
-
-        This is useful for worker/reconciliation workflows.
+        Empty keys return None instead of performing an accidental query.
         """
+
+        normalized = cls._normalize_idempotency_key(
+            idempotency_key,
+        )
+
+        if not normalized:
+            return None
+
         return (
             cls.queryset()
-            .select_for_update(
-                skip_locked=True,
-            )
             .filter(
-                pk=refund_id,
+                idempotency_key=normalized,
             )
             .first()
+        )
+
+    @classmethod
+    def find_by_idempotency_key_for_update(
+        cls,
+        idempotency_key: str,
+    ) -> Refund | None:
+        """
+        Find and lock a Refund by idempotency identity.
+
+        Caller owns transaction.atomic().
+        """
+
+        normalized = cls._normalize_idempotency_key(
+            idempotency_key,
+        )
+
+        if not normalized:
+            return None
+
+        return (
+            cls.queryset()
+            .filter(
+                idempotency_key=normalized,
+            )
+            .select_for_update()
+            .first()
+        )
+
+    # ================================
+    # PAYMENT-SCOPED QUERIES
+    # ================================
+
+    @classmethod
+    def for_payment(
+        cls,
+        payment_id: int,
+    ) -> QuerySet[Refund]:
+        """
+        Return Refunds belonging to one Payment.
+
+        Newest Refund first.
+        """
+
+        return (
+            cls.queryset()
+            .filter(
+                payment_id=payment_id,
+            )
+            .order_by(
+                "-created_at",
+                "-id",
+            )
         )
 
     @classmethod
@@ -473,88 +375,187 @@ class RefundRepository(BaseRepository):
         payment_id: int,
     ) -> QuerySet[Refund]:
         """
-        Return all Refunds belonging to a Payment with row locks.
+        Return Payment Refunds with row locks.
 
-        IMPORTANT:
-
-        This does not replace locking the Payment row.
-
-        The Payment row remains the canonical synchronization point for
-        cumulative refund authorization.
+        Payment locking remains the responsibility of the Service.
         """
+
         return (
-            cls.for_payment(payment_id)
+            cls.for_payment(
+                payment_id,
+            )
             .select_for_update()
-            .order_by(
-                "requested_at",
-                "id",
+        )
+
+    @classmethod
+    def count_for_payment(
+        cls,
+        payment_id: int,
+    ) -> int:
+        return cls.for_payment(
+            payment_id,
+        ).count()
+
+    @classmethod
+    def exists_for_payment(
+        cls,
+        payment_id: int,
+    ) -> bool:
+        return cls.for_payment(
+            payment_id,
+        ).exists()
+
+    @classmethod
+    def latest_for_payment(
+        cls,
+        payment_id: int,
+    ) -> Refund | None:
+        return cls.for_payment(
+            payment_id,
+        ).first()
+
+    # ================================
+    # STATUS QUERIES
+    # ================================
+
+    @classmethod
+    def _for_status(
+        cls,
+        payment_id: int,
+        status: str,
+    ) -> QuerySet[Refund]:
+        return (
+            cls.for_payment(
+                payment_id,
+            )
+            .filter(
+                status=status,
             )
         )
 
     @classmethod
-    def pending_for_payment_for_update(
+    def pending_for_payment(
         cls,
         payment_id: int,
     ) -> QuerySet[Refund]:
-        """
-        Return pending Refunds for a Payment with row locks.
-
-        The caller owns transaction.atomic().
-        """
-        return (
-            cls.pending_for_payment(payment_id)
-            .select_for_update()
-            .order_by(
-                "requested_at",
-                "id",
-            )
+        return cls._for_status(
+            payment_id,
+            RefundStatus.PENDING,
         )
 
     @classmethod
-    def successful_for_payment_for_update(
+    def successful_for_payment(
         cls,
         payment_id: int,
     ) -> QuerySet[Refund]:
-        """
-        Return successful Refunds for a Payment with row locks.
+        return cls._for_status(
+            payment_id,
+            RefundStatus.SUCCESS,
+        )
 
-        This is useful when a workflow must operate on the actual
-        successful Refund rows.
+    @classmethod
+    def failed_for_payment(
+        cls,
+        payment_id: int,
+    ) -> QuerySet[Refund]:
+        return cls._for_status(
+            payment_id,
+            RefundStatus.FAILED,
+        )
 
-        It is NOT the primary synchronization mechanism for cumulative
-        refund authorization.
-        """
+    @classmethod
+    def terminal_for_payment(
+        cls,
+        payment_id: int,
+    ) -> QuerySet[Refund]:
         return (
-            cls.successful_for_payment(payment_id)
-            .select_for_update()
-            .order_by(
-                "requested_at",
-                "id",
+            cls.for_payment(
+                payment_id,
+            )
+            .filter(
+                status__in=cls.TERMINAL_STATUSES,
             )
         )
 
     @classmethod
-    def pending_for_update_skip_locked(
+    def active_for_payment(
+        cls,
+        payment_id: int,
+    ) -> QuerySet[Refund]:
+        return (
+            cls.for_payment(
+                payment_id,
+            )
+            .filter(
+                status__in=cls.ACTIVE_STATUSES,
+            )
+        )
+
+    # ================================
+    # STATUS LOOKUPS
+    # ================================
+
+    @classmethod
+    def latest_pending_for_payment(
+        cls,
+        payment_id: int,
+    ) -> Refund | None:
+        return cls.pending_for_payment(
+            payment_id,
+        ).first()
+
+    @classmethod
+    def latest_successful_for_payment(
+        cls,
+        payment_id: int,
+    ) -> Refund | None:
+        return cls.successful_for_payment(
+            payment_id,
+        ).first()
+
+    @classmethod
+    def latest_failed_for_payment(
+        cls,
+        payment_id: int,
+    ) -> Refund | None:
+        return cls.failed_for_payment(
+            payment_id,
+        ).first()
+
+    # ================================
+    # GLOBAL STATUS QUERIES
+    # ================================
+
+    @classmethod
+    def pending_all(
         cls,
     ) -> QuerySet[Refund]:
-        """
-        Return pending Refunds using SKIP LOCKED semantics.
+        return cls.queryset().filter(
+            status=RefundStatus.PENDING,
+        )
 
-        Intended primarily for worker/reconciliation processing.
+    @classmethod
+    def successful_all(
+        cls,
+    ) -> QuerySet[Refund]:
+        return cls.queryset().filter(
+            status=RefundStatus.SUCCESS,
+        )
 
-        Refund rows already locked by another transaction are skipped.
+    @classmethod
+    def failed_all(
+        cls,
+    ) -> QuerySet[Refund]:
+        return cls.queryset().filter(
+            status=RefundStatus.FAILED,
+        )
 
-        The caller owns transaction.atomic().
-        """
-        return (
-            cls.pending()
-            .select_for_update(
-                skip_locked=True,
-            )
-            .order_by(
-                "requested_at",
-                "id",
-            )
+    @classmethod
+    def terminal_all(
+        cls,
+    ) -> QuerySet[Refund]:
+        return cls.queryset().filter(
+            status__in=cls.TERMINAL_STATUSES,
         )
 
     # ================================
@@ -567,141 +568,135 @@ class RefundRepository(BaseRepository):
         payment_id: int,
     ) -> Decimal:
         """
-        Return the cumulative successful refund amount for a Payment.
+        Return the authoritative cumulative successful refund amount.
 
-        Returns:
-            Decimal("0") when no successful Refund exists.
+        Only SUCCESS Refunds contribute.
 
-        --------------------------------------------
-        CONCURRENCY CONTRACT
-        --------------------------------------------
+        NULL aggregation is normalized to Decimal("0").
 
-        This is deliberately a read primitive.
+        This method performs no locking itself.
 
-        It does NOT:
-
-            - lock Payment
-            - lock Refund rows
-            - authorize a new refund
-            - determine remaining refundable balance
-
-        The application service must lock the Payment row before using
-        this value for a financial authorization decision.
-
-        Example:
-
-            with transaction.atomic():
-                payment = PaymentRepository.get_for_update(
-                    payment_id
-                )
-
-                refunded_amount = (
-                    RefundRepository
-                    .successful_amount_for_payment(
-                        payment.pk
-                    )
-                )
-
-                # Business authorization follows.
+        RefundService must hold the canonical Payment lock before using
+        this value for refund authorization.
         """
+
         result = (
-            cls.successful_for_payment(payment_id)
+            cls.successful_for_payment(
+                payment_id,
+            )
             .aggregate(
-                total=Sum("amount"),
+                total=Sum(
+                    "amount",
+                ),
             )
         )
 
-        total = result["total"]
+        total = result.get(
+            "total",
+        )
 
         if total is None:
             return Decimal("0")
 
-        return Decimal(str(total))
-
-    # ================================
-    # EXISTENCE QUERIES
-    # ================================
-
-    @classmethod
-    def exists_for_payment(
-        cls,
-        payment_id: int,
-    ) -> bool:
-        """
-        Return whether at least one Refund exists for a Payment.
-
-        Read convenience only.
-        """
-        return (
-            cls.for_payment(payment_id)
-            .exists()
+        return Decimal(
+            total,
         )
 
     @classmethod
-    def exists_pending_for_payment(
+    def successful_amount_for_payment_for_update(
         cls,
         payment_id: int,
-    ) -> bool:
+    ) -> Decimal:
         """
-        Return whether a pending Refund exists for a Payment.
+        Return successful refund total while locking matching Refund rows.
 
-        This is not a concurrency guarantee and must not be used alone
-        to authorize creation of another Refund.
+        This method is provided for reconciliation/maintenance workflows.
+
+        Normal refund authorization should still lock Payment first.
         """
-        return (
-            cls.pending_for_payment(payment_id)
-            .exists()
+
+        result = (
+            cls.successful_for_payment(
+                payment_id,
+            )
+            .select_for_update()
+            .aggregate(
+                total=Sum(
+                    "amount",
+                ),
+            )
         )
 
-    @classmethod
-    def exists_successful_for_payment(
-        cls,
-        payment_id: int,
-    ) -> bool:
-        """
-        Return whether at least one successful Refund exists.
-        """
-        return (
-            cls.successful_for_payment(payment_id)
-            .exists()
+        total = result.get(
+            "total",
         )
 
-    @classmethod
-    def exists_failed_for_payment(
-        cls,
-        payment_id: int,
-    ) -> bool:
-        """
-        Return whether at least one failed Refund exists.
-        """
-        return (
-            cls.failed_for_payment(payment_id)
-            .exists()
+        if total is None:
+            return Decimal("0")
+
+        return Decimal(
+            total,
         )
 
     # ================================
-    # GATEWAY IDENTITY QUERIES
+    # AMOUNT QUERIES
     # ================================
+
+    @classmethod
+    def successful_count_for_payment(
+        cls,
+        payment_id: int,
+    ) -> int:
+        return cls.successful_for_payment(
+            payment_id,
+        ).count()
+
+    @classmethod
+    def pending_count_for_payment(
+        cls,
+        payment_id: int,
+    ) -> int:
+        return cls.pending_for_payment(
+            payment_id,
+        ).count()
+
+    @classmethod
+    def failed_count_for_payment(
+        cls,
+        payment_id: int,
+    ) -> int:
+        return cls.failed_for_payment(
+            payment_id,
+        ).count()
+
+    # ================================
+    # GATEWAY IDENTITY
+    # ================================
+
+    @staticmethod
+    def _normalize_identity(
+        value: str | None,
+    ) -> str:
+        return str(
+            value or "",
+        ).strip()
 
     @classmethod
     def find_by_gateway_reference(
         cls,
         gateway_reference: str,
     ) -> Refund | None:
-        """
-        Find a Refund by gateway reference.
+        reference = cls._normalize_identity(
+            gateway_reference,
+        )
 
-        IMPORTANT:
+        if not reference:
+            return None
 
-        The database uniqueness constraint is scoped to Payment.
-
-        Therefore this method must not be treated as proof that the
-        gateway reference is globally unique.
-        """
         return (
             cls.queryset()
             .filter(
-                gateway_reference=gateway_reference,
+                gateway_reference=reference,
             )
             .first()
         )
@@ -711,17 +706,19 @@ class RefundRepository(BaseRepository):
         cls,
         gateway_reference: str,
     ) -> Refund | None:
-        """
-        Find and lock a Refund by gateway reference.
+        reference = cls._normalize_identity(
+            gateway_reference,
+        )
 
-        The database uniqueness scope remains Payment-level.
-        """
+        if not reference:
+            return None
+
         return (
             cls.queryset()
-            .select_for_update()
             .filter(
-                gateway_reference=gateway_reference,
+                gateway_reference=reference,
             )
+            .select_for_update()
             .first()
         )
 
@@ -730,15 +727,17 @@ class RefundRepository(BaseRepository):
         cls,
         gateway_transaction_id: str,
     ) -> Refund | None:
-        """
-        Find a Refund by gateway transaction identifier.
+        transaction_id = cls._normalize_identity(
+            gateway_transaction_id,
+        )
 
-        Database uniqueness is scoped to Payment.
-        """
+        if not transaction_id:
+            return None
+
         return (
             cls.queryset()
             .filter(
-                gateway_transaction_id=gateway_transaction_id,
+                gateway_transaction_id=transaction_id,
             )
             .first()
         )
@@ -748,17 +747,19 @@ class RefundRepository(BaseRepository):
         cls,
         gateway_transaction_id: str,
     ) -> Refund | None:
-        """
-        Find and lock a Refund by gateway transaction identifier.
+        transaction_id = cls._normalize_identity(
+            gateway_transaction_id,
+        )
 
-        The database uniqueness scope remains Payment-level.
-        """
+        if not transaction_id:
+            return None
+
         return (
             cls.queryset()
-            .select_for_update()
             .filter(
-                gateway_transaction_id=gateway_transaction_id,
+                gateway_transaction_id=transaction_id,
             )
+            .select_for_update()
             .first()
         )
 
@@ -769,55 +770,24 @@ class RefundRepository(BaseRepository):
     @classmethod
     def create(
         cls,
-        **kwargs,
+        **kwargs: Any,
     ) -> Refund:
         """
-        Create and persist a new Refund.
+        Create one immutable Refund snapshot.
+
+        IntegrityError intentionally propagates.
 
         The caller owns:
 
             - transaction.atomic()
             - Payment locking
-            - idempotency policy
-            - cumulative refund validation
-            - currency validation
-            - gateway workflow
-            - application orchestration
-
-        Database constraints remain authoritative.
-
-        IntegrityError is deliberately propagated.
+            - financial authorization
+            - business policy
         """
+
         return cls.model.objects.create(
             **kwargs,
         )
-
-    @classmethod
-    def create_safely(
-        cls,
-        **kwargs,
-    ) -> Refund:
-        """
-        Semantic alias for concurrency-sensitive Refund creation.
-
-        This method intentionally does not translate IntegrityError.
-
-        Possible database conflicts include:
-
-            - idempotency-key race
-            - gateway-reference collision
-            - gateway-transaction collision
-            - another database constraint violation
-
-        The application service is responsible for interpreting the
-        conflict and performing any required reconciliation.
-        """
-        try:
-            return cls.create(
-                **kwargs,
-            )
-        except IntegrityError:
-            raise
 
     # ================================
     # PERSISTENCE
@@ -831,94 +801,52 @@ class RefundRepository(BaseRepository):
         update_fields: list[str] | tuple[str, ...] | None = None,
     ) -> Refund:
         """
-        Persist a domain-mutated Refund.
-        --------------------------------------------
-        IMMUTABLE FINANCIAL / REQUEST IDENTITY
-        --------------------------------------------
+        Persist mutable Refund fields.
 
-        The following fields are immutable after Refund creation:
-            - payment
-            - payment_id
-            - amount
-            - currency
-            - idempotency_key
-            - requested_at
-
-        They define the financial and request identity of the Refund.
-        --------------------------------------------
-        MUTABLE LIFECYCLE / OBSERVABILITY
-        --------------------------------------------
-
-        Mutable fields include:
-            - status
-            - gateway_reference
-            - gateway_transaction_id
-            - response_code
-            - gateway_message
-            - failure_reason
-            - finished_at
-            - latency_ms
-            - ip_address
-            - user_agent
-            - meta
-
-        The Refund domain model remains responsible for state
-        transitions and domain invariant validation.
+        Immutable financial/request identity cannot be changed through
+        this method.
         """
 
         if refund.pk is None:
             raise ValueError(
-                "Cannot persist an unsaved Refund through "
-                "RefundRepository.save()."
+                "Cannot persist an unsaved Refund."
             )
 
-        immutable_fields = {
-            "payment",
-            "payment_id",
-            "amount",
-            "currency",
-            "idempotency_key",
-            "requested_at",
-        }
+        fields = (
+            list(cls.SAFE_UPDATE_FIELDS)
+            if update_fields is None
+            else list(update_fields)
+        )
 
-        if update_fields is None:
-            fields = [
-                "status",
-                "gateway_reference",
-                "gateway_transaction_id",
-                "response_code",
-                "gateway_message",
-                "failure_reason",
-                "finished_at",
-                "latency_ms",
-                "ip_address",
-                "user_agent",
-                "meta",
-            ]
-        else:
-            fields = list(update_fields)
-
-        # Prevent accidental mutation of the financial/request snapshot.
-        forbidden = immutable_fields.intersection(fields)
-
-        if forbidden:
-            forbidden_fields = ", ".join(
-                sorted(forbidden)
-            )
-
-            raise ValueError(
-                "Refund financial/request identity fields cannot be "
-                "modified through RefundRepository.save(): "
-                f"{forbidden_fields}"
-            )
-
-        # Empty update_fields would otherwise result in a no-op save.
-        # Treating it as an explicit programming error makes repository
-        # misuse easier to detect.
         if not fields:
             raise ValueError(
-                "RefundRepository.save() requires at least one mutable "
-                "field when update_fields is provided."
+                "RefundRepository.save() requires "
+                "at least one update field."
+            )
+
+        forbidden = cls.STRUCTURAL_FIELDS.intersection(
+            fields,
+        )
+
+        if forbidden:
+            raise ValueError(
+                "Refund structural fields cannot be modified "
+                "through RefundRepository.save(): "
+                + ", ".join(
+                    sorted(forbidden),
+                )
+            )
+
+        unsupported = set(fields).difference(
+            cls.SAFE_UPDATE_FIELDS,
+        )
+
+        if unsupported:
+            raise ValueError(
+                "Unsupported Refund update fields: "
+                + ", ".join(
+                    sorted(unsupported),
+                )
             )
 
         refund.save(
@@ -928,32 +856,30 @@ class RefundRepository(BaseRepository):
         return refund
 
     # ================================
-    # STATE-SPECIFIC PERSISTENCE
+    # REQUEST OBSERVABILITY
     # ================================
 
     @classmethod
-    def save_status(
+    def save_request_context(
         cls,
         refund: Refund,
     ) -> Refund:
         """
-        Persist a Refund lifecycle transition.
-        The domain object must already contain the desired validated
-        state.
+        Persist non-financial request metadata.
         """
+
         return cls.save(
             refund,
             update_fields=(
-                "status",
-                "finished_at",
-                "latency_ms",
-                "failure_reason",
-                "gateway_reference",
-                "gateway_transaction_id",
-                "response_code",
-                "gateway_message",
+                "ip_address",
+                "user_agent",
+                "meta",
             ),
         )
+
+    # ================================
+    # GATEWAY EVIDENCE
+    # ================================
 
     @classmethod
     def save_gateway_evidence(
@@ -961,18 +887,19 @@ class RefundRepository(BaseRepository):
         refund: Refund,
     ) -> Refund:
         """
-        Persist non-terminal gateway evidence.
+        Persist safe normalized gateway evidence.
 
-        Intended for:
-            Refund.register_gateway_response(...)
+        Raw provider payloads are intentionally outside this repository.
         """
+
         return cls.save(
             refund,
-            update_fields=(
-                "response_code",
-                "gateway_message",
-            ),
+            update_fields=cls.GATEWAY_EVIDENCE_FIELDS,
         )
+
+    # ================================
+    # SUCCESS / FAILURE
+    # ================================
 
     @classmethod
     def save_success(
@@ -982,23 +909,12 @@ class RefundRepository(BaseRepository):
         """
         Persist a successful Refund transition.
 
-        The Refund domain model must already have performed:
-            - state transition validation
-            - gateway identity reconciliation
-            - successful-refund invariants
+        State legality is enforced by Refund.mark_success().
         """
+
         return cls.save(
             refund,
-            update_fields=(
-                "status",
-                "gateway_reference",
-                "gateway_transaction_id",
-                "response_code",
-                "gateway_message",
-                "failure_reason",
-                "finished_at",
-                "latency_ms",
-            ),
+            update_fields=cls.SUCCESS_UPDATE_FIELDS,
         )
 
     @classmethod
@@ -1007,22 +923,137 @@ class RefundRepository(BaseRepository):
         refund: Refund,
     ) -> Refund:
         """
-        Persist a failed Refund transition.
+        Persist a deterministic failed Refund transition.
 
-        The Refund domain model must already have validated the failure
-        transition and failure reason.
+        State legality is enforced by Refund.mark_failed().
         """
+
         return cls.save(
             refund,
-            update_fields=(
-                "status",
-                "response_code",
-                "gateway_message",
-                "failure_reason",
-                "finished_at",
-                "latency_ms",
-            ),
+            update_fields=cls.FAILURE_UPDATE_FIELDS,
         )
+
+    # ================================
+    # PENDING / RECONCILIATION
+    # ================================
+
+    @classmethod
+    def stale_pending(
+        cls,
+        *,
+        created_before,
+    ) -> QuerySet[Refund]:
+        """
+        Return old pending Refunds as reconciliation candidates.
+
+        Candidate selection only.
+
+        No financial decision is made here.
+        """
+
+        return (
+            cls.pending_all()
+            .filter(
+                created_at__lt=created_before,
+            )
+            .order_by(
+                "created_at",
+                "id",
+            )
+        )
+
+    @classmethod
+    def stale_pending_for_update_skip_locked(
+        cls,
+        *,
+        created_before,
+    ) -> QuerySet[Refund]:
+        """
+        Return stale pending Refunds with SKIP LOCKED.
+
+        Intended for reconciliation workers.
+
+        Caller owns transaction.atomic().
+        """
+
+        return (
+            cls.stale_pending(
+                created_before=created_before,
+            )
+            .select_for_update(
+                skip_locked=True,
+            )
+        )
+
+    # ================================
+    # PAYMENT REFUND STATE SUPPORT
+    # ================================
+
+    @classmethod
+    def is_fully_refunded(
+        cls,
+        *,
+        payment_id: int,
+        payment_amount: Decimal,
+    ) -> bool:
+        """
+        Return whether successful refunds exactly equal Payment amount.
+
+        This is an aggregate query helper.
+
+        It does not mutate Payment and does not constitute the business
+        policy itself.
+        """
+
+        total = cls.successful_amount_for_payment(
+            payment_id,
+        )
+
+        return total == payment_amount
+
+    @classmethod
+    def has_refundable_balance(
+        cls,
+        *,
+        payment_id: int,
+        payment_amount: Decimal,
+    ) -> bool:
+        """
+        Return whether any successful-refund balance remains.
+        """
+
+        total = cls.successful_amount_for_payment(
+            payment_id,
+        )
+
+        return total < payment_amount
+
+    @classmethod
+    def remaining_refundable_amount(
+        cls,
+        *,
+        payment_id: int,
+        payment_amount: Decimal,
+    ) -> Decimal:
+        """
+        Calculate the remaining refundable amount from persisted SUCCESS
+        Refunds.
+
+        The caller is responsible for ensuring payment_amount is valid.
+        """
+
+        refunded = cls.successful_amount_for_payment(
+            payment_id,
+        )
+
+        remaining = (
+            payment_amount - refunded
+        )
+
+        if remaining <= Decimal("0"):
+            return Decimal("0")
+
+        return remaining
 
     # ================================
     # REPRESENTATION

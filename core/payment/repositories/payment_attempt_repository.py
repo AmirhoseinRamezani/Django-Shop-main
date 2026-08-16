@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from django.db import IntegrityError
 from django.db.models import Max, QuerySet
 from django.utils import timezone
 
@@ -12,64 +11,86 @@ from payment.enums import PaymentAttemptStatus
 from payment.models import PaymentAttempt
 from payment.repositories.base import BaseRepository
 
-class PaymentAttemptRepository(BaseRepository):
+
+class PaymentAttemptRepository(
+    BaseRepository[PaymentAttempt],
+):
     """
-    Persistence repository for PaymentAttempt.
+    Persistence boundary for PaymentAttempt.
 
-    Responsibilities:
-        - PaymentAttempt persistence
-        - read/query composition
-        - row locking
-        - gateway identity lookup
-        - retry-chain lookup
-        - state-specific persistence
-        - low-level conditional updates
+    Responsibilities
+    ----------------
+    - PaymentAttempt persistence
+    - read/query composition
+    - row locking
+    - gateway identity lookup
+    - retry-chain lookup
+    - attempt-number lookup
+    - state-specific persistence
+    - low-level conditional updates
 
-    Explicitly outside this repository:
-        - transaction ownership
-        - payment business policy
-        - retry eligibility
-        - gateway HTTP calls
-        - state-transition decisions
-        - attempt-number allocation policy
-        - financial calculations
-        - currency conversion
-        - FX
-        - Money value objects
+    Non-responsibilities
+    --------------------
+    - transaction ownership
+    - payment business policy
+    - retry eligibility
+    - gateway communication
+    - state-transition decisions
+    - financial calculations
+    - currency conversion
+    - event publication
 
-    V1 MONEY CONTRACT
+    Concurrency contract
+    --------------------
+    Payment is the canonical aggregate lock.
+
+    A service creating or retrying an attempt must normally lock:
+        Payment
+            ->
+        PaymentAttempt
+
+    This repository does not acquire the Payment lock implicitly.
+
+    Attempt numbering
     -----------------
+    next_attempt_number() is informational.
 
-    PaymentAttempt does not perform any monetary calculation.
+    It is NOT independently concurrency-safe.
 
-    Payment amount/currency belongs to the Payment aggregate.
+    The application service must hold the canonical Payment lock before
+    using it to allocate a new attempt number.
 
-    V1 supports Iranian Rial only. No currency conversion or FX
-    concerns belong in this repository.
+    Database uniqueness remains authoritative.
     """
 
     model: ClassVar[type[PaymentAttempt]] = PaymentAttempt
 
-    # ------------------------------------
+    # ================================
     # STATUS GROUPS
-    # ------------------------------------
+    # ================================
 
-    _TERMINAL_STATUSES: ClassVar[tuple[str, ...]] = (
+    TERMINAL_STATUSES: ClassVar[
+        tuple[str, ...]
+    ] = (
         PaymentAttemptStatus.SUCCESS,
         PaymentAttemptStatus.FAILED,
         PaymentAttemptStatus.TIMEOUT,
         PaymentAttemptStatus.CANCELLED,
     )
 
-    _ACTIVE_STATUSES: ClassVar[tuple[str, ...]] = (
+    ACTIVE_STATUSES: ClassVar[
+        tuple[str, ...]
+    ] = (
         PaymentAttemptStatus.PENDING,
     )
 
-    # ------------------------------------
-    # PROTECTED / SAFE FIELDS
-    # ------------------------------------
+    # ================================
+    # STRUCTURAL / MUTABLE FIELDS
+    # ================================
 
-    _STRUCTURAL_FIELDS: ClassVar[frozenset[str]] = frozenset(
+    STRUCTURAL_FIELDS: ClassVar[
+        frozenset[str]
+    ] = frozenset(
         {
             "payment",
             "payment_id",
@@ -79,7 +100,9 @@ class PaymentAttemptRepository(BaseRepository):
         }
     )
 
-    _SAFE_UPDATE_FIELDS: ClassVar[tuple[str, ...]] = (
+    SAFE_UPDATE_FIELDS: ClassVar[
+        tuple[str, ...]
+    ] = (
         "status",
         "authority_id",
         "gateway_reference",
@@ -94,7 +117,9 @@ class PaymentAttemptRepository(BaseRepository):
         "meta",
     )
 
-    _STATE_UPDATE_FIELDS: ClassVar[tuple[str, ...]] = (
+    STATE_UPDATE_FIELDS: ClassVar[
+        tuple[str, ...]
+    ] = (
         "status",
         "authority_id",
         "gateway_reference",
@@ -106,25 +131,27 @@ class PaymentAttemptRepository(BaseRepository):
         "latency_ms",
     )
 
-    # ------------------------------------
-    # BASE QUERYSET
-    # ------------------------------------
+    # ================================
+    # QUERYSET
+    # ================================
 
     @classmethod
-    def queryset(cls) -> QuerySet[PaymentAttempt]:
+    def queryset(
+        cls,
+    ) -> QuerySet[PaymentAttempt]:
         """
         Return the base lazy QuerySet.
 
-        No:
-            - transaction
-            - locking
-            - business filtering
+        No transaction.
+        No locking.
+        No business filtering.
         """
+
         return cls.model.objects.all()
 
-    # ------------------------------------
+    # ================================
     # BASIC READ
-    # ------------------------------------
+    # ================================
 
     @classmethod
     def get(
@@ -132,12 +159,13 @@ class PaymentAttemptRepository(BaseRepository):
         attempt_id: int,
     ) -> PaymentAttempt:
         """
-        Retrieve one PaymentAttempt by primary key.
-
-        Raises:
-            PaymentAttempt.DoesNotExist
+        Retrieve one PaymentAttempt.
+        DoesNotExist is intentionally preserved.
         """
-        return cls.queryset().get(pk=attempt_id)
+
+        return cls.queryset().get(
+            pk=attempt_id,
+        )
 
     @classmethod
     def find(
@@ -147,15 +175,18 @@ class PaymentAttemptRepository(BaseRepository):
         """
         Retrieve one PaymentAttempt if it exists.
         """
+
         return (
             cls.queryset()
-            .filter(pk=attempt_id)
+            .filter(
+                pk=attempt_id,
+            )
             .first()
         )
 
-    # ------------------------------------
+    # ================================
     # PAYMENT-SCOPED QUERIES
-    # ------------------------------------
+    # ================================
 
     @classmethod
     def for_payment(
@@ -163,15 +194,15 @@ class PaymentAttemptRepository(BaseRepository):
         payment_id: int,
     ) -> QuerySet[PaymentAttempt]:
         """
-        Return all attempts belonging to one Payment.
-
-        Deterministic ordering:
-            newest attempt number first
-            newest database identity first
+        Return attempts belonging to one Payment.
+        Newest attempt first.
         """
+
         return (
             cls.queryset()
-            .filter(payment_id=payment_id)
+            .filter(
+                payment_id=payment_id,
+            )
             .order_by(
                 "-attempt_number",
                 "-id",
@@ -184,13 +215,14 @@ class PaymentAttemptRepository(BaseRepository):
         payment_id: int,
     ) -> int:
         """
-        Return the number of attempts belonging to a Payment.
-
+        Return the number of attempts for a Payment.
         Informational only.
-
-        This method MUST NOT be used to allocate attempt_number.
+        Never use this for attempt-number allocation.
         """
-        return cls.for_payment(payment_id).count()
+
+        return cls.for_payment(
+            payment_id,
+        ).count()
 
     @classmethod
     def latest_for_payment(
@@ -198,9 +230,12 @@ class PaymentAttemptRepository(BaseRepository):
         payment_id: int,
     ) -> PaymentAttempt | None:
         """
-        Return the latest attempt for a Payment.
+        Return the newest attempt for a Payment.
         """
-        return cls.for_payment(payment_id).first()
+
+        return cls.for_payment(
+            payment_id,
+        ).first()
 
     @classmethod
     def first_for_payment(
@@ -210,9 +245,12 @@ class PaymentAttemptRepository(BaseRepository):
         """
         Return the oldest attempt for a Payment.
         """
+
         return (
             cls.queryset()
-            .filter(payment_id=payment_id)
+            .filter(
+                payment_id=payment_id,
+            )
             .order_by(
                 "attempt_number",
                 "id",
@@ -220,9 +258,9 @@ class PaymentAttemptRepository(BaseRepository):
             .first()
         )
 
-    # ------------------------------------
+    # ================================
     # STATUS QUERIES
-    # ------------------------------------
+    # ================================
 
     @classmethod
     def _for_status(
@@ -230,12 +268,10 @@ class PaymentAttemptRepository(BaseRepository):
         payment_id: int,
         status: str,
     ) -> QuerySet[PaymentAttempt]:
-        """
-        Compose a Payment-scoped status query.
-        """
-        return (
-            cls.for_payment(payment_id)
-            .filter(status=status)
+        return cls.for_payment(
+            payment_id,
+        ).filter(
+            status=status,
         )
 
     @classmethod
@@ -243,9 +279,6 @@ class PaymentAttemptRepository(BaseRepository):
         cls,
         payment_id: int,
     ) -> QuerySet[PaymentAttempt]:
-        """
-        Return pending attempts for a Payment.
-        """
         return cls._for_status(
             payment_id,
             PaymentAttemptStatus.PENDING,
@@ -256,9 +289,6 @@ class PaymentAttemptRepository(BaseRepository):
         cls,
         payment_id: int,
     ) -> QuerySet[PaymentAttempt]:
-        """
-        Return successful attempts for a Payment.
-        """
         return cls._for_status(
             payment_id,
             PaymentAttemptStatus.SUCCESS,
@@ -269,9 +299,6 @@ class PaymentAttemptRepository(BaseRepository):
         cls,
         payment_id: int,
     ) -> QuerySet[PaymentAttempt]:
-        """
-        Return failed attempts for a Payment.
-        """
         return cls._for_status(
             payment_id,
             PaymentAttemptStatus.FAILED,
@@ -282,9 +309,6 @@ class PaymentAttemptRepository(BaseRepository):
         cls,
         payment_id: int,
     ) -> QuerySet[PaymentAttempt]:
-        """
-        Return timeout attempts for a Payment.
-        """
         return cls._for_status(
             payment_id,
             PaymentAttemptStatus.TIMEOUT,
@@ -295,27 +319,9 @@ class PaymentAttemptRepository(BaseRepository):
         cls,
         payment_id: int,
     ) -> QuerySet[PaymentAttempt]:
-        """
-        Return cancelled attempts for a Payment.
-        """
         return cls._for_status(
             payment_id,
             PaymentAttemptStatus.CANCELLED,
-        )
-
-    @classmethod
-    def terminal_for_payment(
-        cls,
-        payment_id: int,
-    ) -> QuerySet[PaymentAttempt]:
-        """
-        Return terminal attempts for a Payment.
-        """
-        return (
-            cls.for_payment(payment_id)
-            .filter(
-                status__in=cls._TERMINAL_STATUSES,
-            )
         )
 
     @classmethod
@@ -326,60 +332,88 @@ class PaymentAttemptRepository(BaseRepository):
         """
         Return currently active attempts.
 
-        Currently only PENDING is considered active.
-
-        This query does not decide whether creating another attempt
-        is allowed.
+        Currently only PENDING is active.
         """
+
         return (
-            cls.for_payment(payment_id)
+            cls.for_payment(
+                payment_id,
+            )
             .filter(
-                status__in=cls._ACTIVE_STATUSES,
+                status__in=cls.ACTIVE_STATUSES,
             )
         )
 
-    # ------------------------------------
-    # LATEST STATUS SHORTCUTS
-    # ------------------------------------
+    @classmethod
+    def terminal_for_payment(
+        cls,
+        payment_id: int,
+    ) -> QuerySet[PaymentAttempt]:
+        """
+        Return terminal attempts.
+        """
+
+        return (
+            cls.for_payment(
+                payment_id,
+            )
+            .filter(
+                status__in=cls.TERMINAL_STATUSES,
+            )
+        )
+
+    # ================================
+    # LATEST STATUS
+    # ================================
 
     @classmethod
     def latest_pending_for_payment(
         cls,
         payment_id: int,
     ) -> PaymentAttempt | None:
-        return cls.pending_for_payment(payment_id).first()
+        return cls.pending_for_payment(
+            payment_id,
+        ).first()
 
     @classmethod
     def latest_successful_for_payment(
         cls,
         payment_id: int,
     ) -> PaymentAttempt | None:
-        return cls.successful_for_payment(payment_id).first()
+        return cls.successful_for_payment(
+            payment_id,
+        ).first()
 
     @classmethod
     def latest_failed_for_payment(
         cls,
         payment_id: int,
     ) -> PaymentAttempt | None:
-        return cls.failed_for_payment(payment_id).first()
+        return cls.failed_for_payment(
+            payment_id,
+        ).first()
 
     @classmethod
     def latest_timeout_for_payment(
         cls,
         payment_id: int,
     ) -> PaymentAttempt | None:
-        return cls.timeout_for_payment(payment_id).first()
+        return cls.timeout_for_payment(
+            payment_id,
+        ).first()
 
     @classmethod
     def latest_cancelled_for_payment(
         cls,
         payment_id: int,
     ) -> PaymentAttempt | None:
-        return cls.cancelled_for_payment(payment_id).first()
+        return cls.cancelled_for_payment(
+            payment_id,
+        ).first()
 
-    # ------------------------------------
-    # EXISTENCE QUERIES
-    # ------------------------------------
+    # ================================
+    # EXISTENCE
+    # ================================
 
     @classmethod
     def exists_for_payment(
@@ -387,8 +421,9 @@ class PaymentAttemptRepository(BaseRepository):
         payment_id: int,
     ) -> bool:
         return (
-            cls.queryset()
-            .filter(payment_id=payment_id)
+            cls.for_payment(
+                payment_id,
+            )
             .exists()
         )
 
@@ -400,68 +435,74 @@ class PaymentAttemptRepository(BaseRepository):
         """
         Convenience query only.
 
-        NOT a concurrency guarantee.
+        Not a concurrency guarantee.
         """
-        return cls.pending_for_payment(payment_id).exists()
+
+        return cls.pending_for_payment(
+            payment_id,
+        ).exists()
 
     @classmethod
     def exists_successful(
         cls,
         payment_id: int,
     ) -> bool:
-        return cls.successful_for_payment(payment_id).exists()
+        return cls.successful_for_payment(
+            payment_id,
+        ).exists()
 
     @classmethod
     def exists_terminal(
         cls,
         payment_id: int,
     ) -> bool:
-        return (
-            cls.for_payment(payment_id)
-            .filter(
-                status__in=cls._TERMINAL_STATUSES,
-            )
-            .exists()
-        )
+        return cls.terminal_for_payment(
+            payment_id,
+        ).exists()
 
     @classmethod
     def has_successful_attempt(
         cls,
         payment_id: int,
     ) -> bool:
-        return cls.exists_successful(payment_id)
+        return cls.exists_successful(
+            payment_id,
+        )
 
     @classmethod
     def has_active_attempt(
         cls,
         payment_id: int,
     ) -> bool:
-        return cls.exists_pending(payment_id)
+        return cls.exists_pending(
+            payment_id,
+        )
 
-    # ------------------------------------
-    # GATEWAY IDENTITY NORMALIZATION
-    # ------------------------------------
+    # ================================
+    # GATEWAY IDENTITY
+    # ================================
 
     @staticmethod
     def _normalize_identity(
         value: str | None,
     ) -> str:
         """
-        Normalize gateway identity for persistence lookup.
+        Normalize only surrounding whitespace.
 
-        Deliberately only strips surrounding whitespace.
+        Provider-specific identifier semantics must not be invented by
+        the repository.
 
-        The repository does NOT:
-            - lowercase identifiers
+        In particular this method does not:
+
+            - lowercase
             - remove leading zeros
-            - reinterpret gateway identifiers
-            - change gateway formats
+            - alter provider formats
+            - perform type conversion beyond string normalization
         """
-        return str(value or "").strip()
 
-    # ------------------------------------
-    # GATEWAY IDENTITY LOOKUPS
-    # ------------------------------------
+        return str(
+            value or "",
+        ).strip()
 
     @classmethod
     def find_by_authority(
@@ -470,14 +511,20 @@ class PaymentAttemptRepository(BaseRepository):
         payment_id: int,
         authority_id: str,
     ) -> PaymentAttempt | None:
-        authority = cls._normalize_identity(authority_id)
+        authority = cls._normalize_identity(
+            authority_id,
+        )
 
         if not authority:
             return None
 
         return (
-            cls.for_payment(payment_id)
-            .filter(authority_id=authority)
+            cls.for_payment(
+                payment_id,
+            )
+            .filter(
+                authority_id=authority,
+            )
             .first()
         )
 
@@ -489,14 +536,16 @@ class PaymentAttemptRepository(BaseRepository):
         gateway_reference: str,
     ) -> PaymentAttempt | None:
         reference = cls._normalize_identity(
-            gateway_reference
+            gateway_reference,
         )
 
         if not reference:
             return None
 
         return (
-            cls.for_payment(payment_id)
+            cls.for_payment(
+                payment_id,
+            )
             .filter(
                 gateway_reference=reference,
             )
@@ -511,23 +560,25 @@ class PaymentAttemptRepository(BaseRepository):
         gateway_transaction_id: str,
     ) -> PaymentAttempt | None:
         transaction_id = cls._normalize_identity(
-            gateway_transaction_id
+            gateway_transaction_id,
         )
 
         if not transaction_id:
             return None
 
         return (
-            cls.for_payment(payment_id)
+            cls.for_payment(
+                payment_id,
+            )
             .filter(
                 gateway_transaction_id=transaction_id,
             )
             .first()
         )
 
-    # ------------------------------------
-    # GATEWAY IDENTITY LOOKUPS + LOCK
-    # ------------------------------------
+    # ================================
+    # GATEWAY IDENTITY + LOCK
+    # ================================
 
     @classmethod
     def find_by_authority_for_update(
@@ -536,23 +587,20 @@ class PaymentAttemptRepository(BaseRepository):
         payment_id: int,
         authority_id: str,
     ) -> PaymentAttempt | None:
-        """
-        Find and lock an attempt by authority.
-
-        Only the PaymentAttempt row is locked.
-
-        The owning Payment row is NOT locked.
-
-        The caller owns transaction.atomic().
-        """
-        authority = cls._normalize_identity(authority_id)
+        authority = cls._normalize_identity(
+            authority_id,
+        )
 
         if not authority:
             return None
 
         return (
-            cls.for_payment(payment_id)
-            .filter(authority_id=authority)
+            cls.for_payment(
+                payment_id,
+            )
+            .filter(
+                authority_id=authority,
+            )
             .select_for_update()
             .first()
         )
@@ -565,14 +613,16 @@ class PaymentAttemptRepository(BaseRepository):
         gateway_reference: str,
     ) -> PaymentAttempt | None:
         reference = cls._normalize_identity(
-            gateway_reference
+            gateway_reference,
         )
 
         if not reference:
             return None
 
         return (
-            cls.for_payment(payment_id)
+            cls.for_payment(
+                payment_id,
+            )
             .filter(
                 gateway_reference=reference,
             )
@@ -588,14 +638,16 @@ class PaymentAttemptRepository(BaseRepository):
         gateway_transaction_id: str,
     ) -> PaymentAttempt | None:
         transaction_id = cls._normalize_identity(
-            gateway_transaction_id
+            gateway_transaction_id,
         )
 
         if not transaction_id:
             return None
 
         return (
-            cls.for_payment(payment_id)
+            cls.for_payment(
+                payment_id,
+            )
             .filter(
                 gateway_transaction_id=transaction_id,
             )
@@ -603,9 +655,9 @@ class PaymentAttemptRepository(BaseRepository):
             .first()
         )
 
-    # ------------------------------------
+    # ================================
     # PRIMARY KEY LOCKING
-    # ------------------------------------
+    # ================================
 
     @classmethod
     def get_for_update(
@@ -613,14 +665,17 @@ class PaymentAttemptRepository(BaseRepository):
         attempt_id: int,
     ) -> PaymentAttempt:
         """
-        Retrieve and lock one PaymentAttempt.
+        Lock one PaymentAttempt.
 
-        Caller MUST own transaction.atomic().
+        Caller owns transaction.atomic().
         """
+
         return (
             cls.queryset()
             .select_for_update()
-            .get(pk=attempt_id)
+            .get(
+                pk=attempt_id,
+            )
         )
 
     @classmethod
@@ -629,14 +684,17 @@ class PaymentAttemptRepository(BaseRepository):
         attempt_id: int,
     ) -> PaymentAttempt:
         """
-        Retrieve and lock one PaymentAttempt using NOWAIT.
-
-        Database lock behavior remains visible to the application layer.
+        Lock one PaymentAttempt using NOWAIT.
         """
+
         return (
             cls.queryset()
-            .select_for_update(nowait=True)
-            .get(pk=attempt_id)
+            .select_for_update(
+                nowait=True,
+            )
+            .get(
+                pk=attempt_id,
+            )
         )
 
     @classmethod
@@ -645,36 +703,32 @@ class PaymentAttemptRepository(BaseRepository):
         attempt_id: int,
     ) -> PaymentAttempt | None:
         """
-        Retrieve and lock an attempt if it exists.
+        Lock one PaymentAttempt if it exists.
         """
+
         return (
             cls.queryset()
-            .filter(pk=attempt_id)
+            .filter(
+                pk=attempt_id,
+            )
             .select_for_update()
             .first()
         )
 
-    # ------------------------------------
+    # ================================
     # PAYMENT-SCOPED LOCKING
-    # ------------------------------------
+    # ================================
 
     @classmethod
     def for_payment_for_update(
         cls,
         payment_id: int,
     ) -> QuerySet[PaymentAttempt]:
-        """
-        Return all attempts for a Payment with row-level locks.
-
-        The Payment row itself is NOT locked.
-        """
         return (
-            cls.for_payment(payment_id)
-            .select_for_update()
-            .order_by(
-                "-attempt_number",
-                "-id",
+            cls.for_payment(
+                payment_id,
             )
+            .select_for_update()
         )
 
     @classmethod
@@ -682,16 +736,11 @@ class PaymentAttemptRepository(BaseRepository):
         cls,
         payment_id: int,
     ) -> QuerySet[PaymentAttempt]:
-        """
-        Return pending attempts with row-level locks.
-        """
         return (
-            cls.pending_for_payment(payment_id)
-            .select_for_update()
-            .order_by(
-                "-attempt_number",
-                "-id",
+            cls.pending_for_payment(
+                payment_id,
             )
+            .select_for_update()
         )
 
     @classmethod
@@ -699,16 +748,11 @@ class PaymentAttemptRepository(BaseRepository):
         cls,
         payment_id: int,
     ) -> QuerySet[PaymentAttempt]:
-        """
-        Return terminal attempts with row-level locks.
-        """
         return (
-            cls.terminal_for_payment(payment_id)
-            .select_for_update()
-            .order_by(
-                "-attempt_number",
-                "-id",
+            cls.terminal_for_payment(
+                payment_id,
             )
+            .select_for_update()
         )
 
     @classmethod
@@ -717,61 +761,19 @@ class PaymentAttemptRepository(BaseRepository):
         payment_id: int,
     ) -> PaymentAttempt | None:
         """
-        Retrieve and lock the latest attempt.
+        Lock the latest attempt.
 
-        If synchronization with Payment is required, the caller should
-        already hold the Payment aggregate lock according to the
-        application's canonical lock order.
+        If Payment synchronization is involved, the caller should already
+        hold the Payment aggregate lock.
         """
-        return cls.for_payment_for_update(payment_id).first()
 
-    # ------------------------------------
-    # WORKER / RECONCILIATION LOCKING
-    # ------------------------------------
+        return cls.for_payment_for_update(
+            payment_id,
+        ).first()
 
-    @classmethod
-    def pending_for_update_skip_locked(
-        cls,
-    ) -> QuerySet[PaymentAttempt]:
-        """
-        Return pending attempts using FOR UPDATE SKIP LOCKED.
-
-        Intended for worker/reconciliation workflows.
-
-        Caller owns transaction.atomic().
-        """
-        return (
-            cls.pending_all()
-            .select_for_update(skip_locked=True)
-            .order_by(
-                "started_at",
-                "attempt_number",
-                "id",
-            )
-        )
-
-    @classmethod
-    def terminal_for_update_skip_locked(
-        cls,
-    ) -> QuerySet[PaymentAttempt]:
-        """
-        Return terminal attempts using FOR UPDATE SKIP LOCKED.
-
-        Intended for asynchronous reconciliation/reporting workflows.
-        """
-        return (
-            cls.terminal_all()
-            .select_for_update(skip_locked=True)
-            .order_by(
-                "started_at",
-                "attempt_number",
-                "id",
-            )
-        )
-
-    # ------------------------------------
+    # ================================
     # GLOBAL STATUS QUERIES
-    # ------------------------------------
+    # ================================
 
     @classmethod
     def pending_all(
@@ -817,16 +819,59 @@ class PaymentAttemptRepository(BaseRepository):
     def terminal_all(
         cls,
     ) -> QuerySet[PaymentAttempt]:
+        return cls.queryset().filter(
+            status__in=cls.TERMINAL_STATUSES,
+        )
+
+    # ================================
+    # WORKER / RECONCILIATION LOCKING
+    # ================================
+
+    @classmethod
+    def pending_for_update_skip_locked(
+        cls,
+    ) -> QuerySet[PaymentAttempt]:
+        """
+        Return pending attempts using SKIP LOCKED.
+
+        Caller owns transaction.atomic().
+        """
+
         return (
-            cls.queryset()
-            .filter(
-                status__in=cls._TERMINAL_STATUSES,
+            cls.pending_all()
+            .select_for_update(
+                skip_locked=True,
+            )
+            .order_by(
+                "started_at",
+                "attempt_number",
+                "id",
             )
         )
 
-    # ------------------------------------
+    @classmethod
+    def terminal_for_update_skip_locked(
+        cls,
+    ) -> QuerySet[PaymentAttempt]:
+        """
+        Return terminal attempts using SKIP LOCKED.
+        """
+
+        return (
+            cls.terminal_all()
+            .select_for_update(
+                skip_locked=True,
+            )
+            .order_by(
+                "started_at",
+                "attempt_number",
+                "id",
+            )
+        )
+
+    # ================================
     # ATTEMPT NUMBERING
-    # ------------------------------------
+    # ================================
 
     @classmethod
     def last_attempt_number(
@@ -834,19 +879,26 @@ class PaymentAttemptRepository(BaseRepository):
         payment_id: int,
     ) -> int | None:
         """
-        Return the highest existing attempt number.
+        Return the highest attempt number.
 
         Informational only.
 
-        MUST NOT be used directly as a concurrency-safe allocator.
+        Do not use this method as a standalone concurrency mechanism.
         """
+
         return (
             cls.queryset()
-            .filter(payment_id=payment_id)
-            .aggregate(
-                maximum=Max("attempt_number"),
+            .filter(
+                payment_id=payment_id,
             )
-            .get("maximum")
+            .aggregate(
+                maximum=Max(
+                    "attempt_number",
+                ),
+            )
+            .get(
+                "maximum",
+            )
         )
 
     @classmethod
@@ -857,25 +909,22 @@ class PaymentAttemptRepository(BaseRepository):
         """
         Return the next informational attempt number.
 
-        IMPORTANT:
-
-        This is NOT concurrency-safe.
-
-        The application service must hold the canonical Payment lock
-        before allocating a new attempt number.
-
-        Database uniqueness constraints remain authoritative.
+        The caller must hold the canonical Payment lock before using this
+        number to create an attempt.
         """
-        maximum = cls.last_attempt_number(payment_id)
+
+        maximum = cls.last_attempt_number(
+            payment_id,
+        )
 
         if maximum is None:
             return 1
 
         return maximum + 1
 
-    # ------------------------------------
+    # ================================
     # RETRY CHAIN
-    # ------------------------------------
+    # ================================
 
     @classmethod
     def retries_for(
@@ -885,6 +934,7 @@ class PaymentAttemptRepository(BaseRepository):
         """
         Return direct retries of an attempt.
         """
+
         return (
             cls.queryset()
             .filter(
@@ -901,11 +951,10 @@ class PaymentAttemptRepository(BaseRepository):
         cls,
         attempt_id: int,
     ) -> PaymentAttempt | None:
-        """
-        Return the latest direct retry.
-        """
         return (
-            cls.retries_for(attempt_id)
+            cls.retries_for(
+                attempt_id,
+            )
             .order_by(
                 "-attempt_number",
                 "-id",
@@ -918,12 +967,9 @@ class PaymentAttemptRepository(BaseRepository):
         cls,
         attempt_id: int,
     ) -> int:
-        """
-        Return the number of direct retries.
-
-        Informational only.
-        """
-        return cls.retries_for(attempt_id).count()
+        return cls.retries_for(
+            attempt_id,
+        ).count()
 
     @classmethod
     def find_by_retry_source(
@@ -933,10 +979,13 @@ class PaymentAttemptRepository(BaseRepository):
         retry_of_id: int,
     ) -> QuerySet[PaymentAttempt]:
         """
-        Return direct retries of a source attempt within one Payment.
+        Return direct retries of an attempt within one Payment.
         """
+
         return (
-            cls.for_payment(payment_id)
+            cls.for_payment(
+                payment_id,
+            )
             .filter(
                 retry_of_id=retry_of_id,
             )
@@ -946,9 +995,9 @@ class PaymentAttemptRepository(BaseRepository):
             )
         )
 
-    # ------------------------------------
+    # ================================
     # CREATION
-    # ------------------------------------
+    # ================================
 
     @classmethod
     def create(
@@ -956,38 +1005,26 @@ class PaymentAttemptRepository(BaseRepository):
         **kwargs: Any,
     ) -> PaymentAttempt:
         """
-        Create and persist a PaymentAttempt.
+        Create one PaymentAttempt.
+
+        IntegrityError intentionally propagates.
 
         The caller owns:
+
             - transaction.atomic()
             - Payment locking
             - attempt-number allocation
             - retry policy
             - business validation
-            - gateway workflow
-
-        IntegrityError intentionally propagates.
         """
-        return cls.model.objects.create(**kwargs)
 
-    @classmethod
-    def create_safely(
-        cls,
-        **kwargs: Any,
-    ) -> PaymentAttempt:
-        """
-        Explicit semantic alias for concurrency-sensitive creation.
+        return cls.model.objects.create(
+            **kwargs,
+        )
 
-        IntegrityError intentionally propagates to the application layer.
-        """
-        try:
-            return cls.create(**kwargs)
-        except IntegrityError:
-            raise
-
-    # ------------------------------------
+    # ================================
     # PERSISTENCE
-    # ------------------------------------
+    # ================================
 
     @classmethod
     def save(
@@ -999,8 +1036,7 @@ class PaymentAttemptRepository(BaseRepository):
         """
         Persist an existing PaymentAttempt.
 
-        Structural identity fields cannot be changed through this
-        repository method:
+        Structural identity cannot be modified:
 
             payment
             payment_id
@@ -1008,52 +1044,61 @@ class PaymentAttemptRepository(BaseRepository):
             retry_of
             retry_of_id
 
-        The repository does not implement optimistic locking because
-        PaymentAttempt currently has no version field.
-
-        The caller owns transaction.atomic() where required.
+        PaymentAttempt currently has no version field, so this repository
+        does not implement optimistic concurrency for the attempt itself.
         """
+
         if attempt.pk is None:
             raise ValueError(
-                "Cannot persist an unsaved PaymentAttempt "
-                "through PaymentAttemptRepository.save()."
+                "Cannot persist an unsaved PaymentAttempt."
             )
 
-        if update_fields is None:
-            fields = list(cls._SAFE_UPDATE_FIELDS)
-        else:
-            fields = list(update_fields)
+        fields = (
+            list(cls.SAFE_UPDATE_FIELDS)
+            if update_fields is None
+            else list(update_fields)
+        )
 
-        forbidden = cls._STRUCTURAL_FIELDS.intersection(fields)
+        if not fields:
+            raise ValueError(
+                "PaymentAttemptRepository.save() requires "
+                "at least one update field."
+            )
+
+        forbidden = cls.STRUCTURAL_FIELDS.intersection(
+            fields,
+        )
 
         if forbidden:
-            forbidden_fields = ", ".join(sorted(forbidden))
-
             raise ValueError(
                 "PaymentAttempt structural identity fields cannot "
                 "be modified through PaymentAttemptRepository.save(): "
-                f"{forbidden_fields}"
+                + ", ".join(
+                    sorted(forbidden),
+                )
             )
 
         unsupported = set(fields).difference(
-            cls._SAFE_UPDATE_FIELDS
+            cls.SAFE_UPDATE_FIELDS,
         )
 
         if unsupported:
-            unsupported_fields = ", ".join(sorted(unsupported))
-
             raise ValueError(
                 "Unsupported PaymentAttempt update fields: "
-                f"{unsupported_fields}"
+                + ", ".join(
+                    sorted(unsupported),
+                )
             )
 
-        attempt.save(update_fields=fields)
+        attempt.save(
+            update_fields=fields,
+        )
 
         return attempt
 
-    # ------------------------------------
+    # ================================
     # STATE PERSISTENCE
-    # ------------------------------------
+    # ================================
 
     @classmethod
     def save_state(
@@ -1065,9 +1110,10 @@ class PaymentAttemptRepository(BaseRepository):
 
         State legality belongs to the domain model.
         """
+
         return cls.save(
             attempt,
-            update_fields=cls._STATE_UPDATE_FIELDS,
+            update_fields=cls.STATE_UPDATE_FIELDS,
         )
 
     @classmethod
@@ -1076,8 +1122,9 @@ class PaymentAttemptRepository(BaseRepository):
         attempt: PaymentAttempt,
     ) -> PaymentAttempt:
         """
-        Persist gateway identity and normalized gateway response data.
+        Persist gateway identifiers and normalized gateway response data.
         """
+
         return cls.save(
             attempt,
             update_fields=(
@@ -1095,8 +1142,9 @@ class PaymentAttemptRepository(BaseRepository):
         attempt: PaymentAttempt,
     ) -> PaymentAttempt:
         """
-        Persist failure state and failure evidence.
+        Persist a failed attempt and its gateway evidence.
         """
+
         return cls.save(
             attempt,
             update_fields=(
@@ -1115,8 +1163,9 @@ class PaymentAttemptRepository(BaseRepository):
         attempt: PaymentAttempt,
     ) -> PaymentAttempt:
         """
-        Persist successful attempt state and gateway identities.
+        Persist a successful attempt and gateway identity.
         """
+
         return cls.save(
             attempt,
             update_fields=(
@@ -1132,9 +1181,9 @@ class PaymentAttemptRepository(BaseRepository):
             ),
         )
 
-    # ------------------------------------
-    # REQUEST CONTEXT PERSISTENCE
-    # ------------------------------------
+    # ================================
+    # REQUEST CONTEXT
+    # ================================
 
     @classmethod
     def save_request_context(
@@ -1144,6 +1193,7 @@ class PaymentAttemptRepository(BaseRepository):
         """
         Persist non-financial request context.
         """
+
         return cls.save(
             attempt,
             update_fields=(
@@ -1153,9 +1203,9 @@ class PaymentAttemptRepository(BaseRepository):
             ),
         )
 
-    # ------------------------------------
-    # TIMING PERSISTENCE
-    # ------------------------------------
+    # ================================
+    # TIMING
+    # ================================
 
     @classmethod
     def save_timing(
@@ -1163,8 +1213,9 @@ class PaymentAttemptRepository(BaseRepository):
         attempt: PaymentAttempt,
     ) -> PaymentAttempt:
         """
-        Persist execution timing information.
+        Persist execution timing.
         """
+
         return cls.save(
             attempt,
             update_fields=(
@@ -1173,9 +1224,9 @@ class PaymentAttemptRepository(BaseRepository):
             ),
         )
 
-    # ------------------------------------
-    # CONDITIONAL PERSISTENCE
-    # ------------------------------------
+    # ================================
+    # CONDITIONAL TERMINAL TRANSITION
+    # ================================
 
     @classmethod
     def mark_terminal_if_pending(
@@ -1187,28 +1238,33 @@ class PaymentAttemptRepository(BaseRepository):
         latency_ms: int | None = None,
     ) -> bool:
         """
-        Atomically transition PENDING -> terminal status.
+        Atomically transition:
+
+            PENDING -> terminal status
+
+        Returns True when exactly one row changed.
+
+        Returns False when the attempt is no longer pending.
 
         This is a low-level persistence primitive.
 
-        It does NOT:
-            - validate business eligibility
+        It does not:
+
             - perform gateway reconciliation
+            - validate business policy
             - mutate Payment
-            - decide refund state
-            - dispatch events
-
-        Returns:
-            True:
-                exactly one row was changed.
-
-            False:
-                the attempt was no longer pending.
+            - publish events
         """
-        if status not in cls._TERMINAL_STATUSES:
+
+        if status not in cls.TERMINAL_STATUSES:
             raise ValueError(
                 "mark_terminal_if_pending() requires a terminal "
                 f"status, got: {status!r}"
+            )
+
+        if latency_ms is not None and latency_ms < 0:
+            raise ValueError(
+                "latency_ms cannot be negative."
             )
 
         if finished_at is None:
@@ -1220,11 +1276,6 @@ class PaymentAttemptRepository(BaseRepository):
         }
 
         if latency_ms is not None:
-            if latency_ms < 0:
-                raise ValueError(
-                    "latency_ms cannot be negative."
-                )
-
             update_kwargs["latency_ms"] = latency_ms
 
         rows_affected = (
@@ -1233,14 +1284,16 @@ class PaymentAttemptRepository(BaseRepository):
                 pk=attempt_id,
                 status=PaymentAttemptStatus.PENDING,
             )
-            .update(**update_kwargs)
+            .update(
+                **update_kwargs,
+            )
         )
 
         return rows_affected == 1
 
-    # ------------------------------------
+    # ================================
     # STALE PENDING / RECONCILIATION
-    # ------------------------------------
+    # ================================
 
     @classmethod
     def stale_pending(
@@ -1249,10 +1302,11 @@ class PaymentAttemptRepository(BaseRepository):
         started_before,
     ) -> QuerySet[PaymentAttempt]:
         """
-        Return pending attempts older than the supplied timestamp.
+        Return pending attempts older than a timestamp.
 
-        This is candidate selection only.
+        Candidate selection only.
         """
+
         return (
             cls.pending_all()
             .filter(
@@ -1272,24 +1326,25 @@ class PaymentAttemptRepository(BaseRepository):
         started_before,
     ) -> QuerySet[PaymentAttempt]:
         """
-        Return stale pending attempts using:
-
-            SELECT ... FOR UPDATE SKIP LOCKED
+        Return stale pending attempts with SKIP LOCKED.
 
         Intended for reconciliation workers.
 
         Caller owns transaction.atomic().
         """
+
         return (
             cls.stale_pending(
                 started_before=started_before,
             )
-            .select_for_update(skip_locked=True)
+            .select_for_update(
+                skip_locked=True,
+            )
         )
 
-    # ------------------------------------
+    # ================================
     # REPRESENTATION
-    # ------------------------------------
+    # ================================
 
     def __repr__(self) -> str:
         return (

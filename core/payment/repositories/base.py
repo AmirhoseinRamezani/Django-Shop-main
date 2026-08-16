@@ -1,33 +1,156 @@
-# payment/repositories/base.py
+# core/payment/repositories/base.py
 
-class BaseRepository:
+from __future__ import annotations
 
-    model = None
+from typing import Any, ClassVar, Generic, TypeVar
+
+from django.db import models
+
+
+ModelT = TypeVar(
+    "ModelT",
+    bound=models.Model,
+)
+
+
+class BaseRepository(
+    Generic[ModelT],
+):
+    """
+    Minimal ORM repository foundation.
+
+    Responsibilities
+    ----------------
+    This class provides only low-level ORM primitives that are safe to
+    reuse across payment repositories.
+
+    It intentionally does not own:
+
+        - transaction boundaries
+        - domain policies
+        - business validation
+        - state transitions
+        - authorization
+        - idempotency rules
+        - provider/gateway logic
+
+    Concrete repositories remain responsible for domain-specific queries.
+
+    Locking
+    -------
+    ``lock()`` uses ``select_for_update()`` but does not create a
+    transaction. The caller is responsible for executing it inside an
+    appropriate transaction.atomic() boundary.
+    """
+
+    model: ClassVar[type[ModelT]]
+
+    # ============================
+    # QUERYSET
+    # ============================
 
     @classmethod
     def queryset(cls):
+        """
+        Return the base queryset for the repository model.
+        """
+
         return cls.model.objects.all()
 
-    @classmethod
-    def get(cls, pk):
-        return cls.queryset().get(pk=pk)
+    # ============================
+    # READ
+    # ============================
 
     @classmethod
-    def create(cls, **kwargs):
-        return cls.model.objects.create(**kwargs)
-    
+    def get(
+        cls,
+        pk: Any,
+    ) -> ModelT:
+        """
+        Return one model instance by primary key.
+
+        Django's DoesNotExist exception is intentionally preserved.
+
+        Domain-specific repositories may translate that exception when
+        their application contract requires a different error type.
+        """
+
+        return cls.queryset().get(
+            pk=pk,
+        )
+
+    # ============================
+    # CREATE
+    # ============================
+
     @classmethod
-    def lock(cls, pk):
+    def create(
+        cls,
+        **kwargs: Any,
+    ) -> ModelT:
+        """
+        Create and return one model instance.
+
+        Database constraints remain authoritative.
+        """
+
+        return cls.model.objects.create(
+            **kwargs,
+        )
+
+    # ============================
+    # LOCK
+    # ============================
+
+    @classmethod
+    def lock(
+        cls,
+        pk: Any,
+    ) -> ModelT:
+        """
+        Lock one model row for update.
+
+        IMPORTANT:
+
+        This method does not create a transaction.
+
+        The caller MUST execute this operation inside
+        ``transaction.atomic()`` when row-level locking is required.
+
+        The lock remains useful only for the lifetime of the surrounding
+        database transaction.
+        """
 
         return (
             cls.model.objects
             .select_for_update()
-            .get(pk=pk)
+            .get(
+                pk=pk,
+            )
         )
 
+    # ============================
+    # SAVE
+    # ============================
+
     @classmethod
-    def save(cls, instance, update_fields=None):
-        instance.save(update_fields=update_fields)
+    def save(
+        cls,
+        instance: ModelT,
+        *,
+        update_fields: tuple[str, ...] | list[str] | None = None,
+    ) -> ModelT:
+        """
+        Persist an existing model instance.
+        ``update_fields`` is forwarded directly to Django's model.save().
+
+        Concrete repositories should prefer explicit update_fields for
+        financial state transitions so unrelated model fields cannot be
+        accidentally overwritten.
+        """
+
+        instance.save(
+            update_fields=update_fields,
+        )
+
         return instance
-    
-    
