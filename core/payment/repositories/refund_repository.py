@@ -1,4 +1,5 @@
 # core/payment/repositories/refund_repository.py
+# core/payment/repositories/refund_repository.py
 
 from __future__ import annotations
 
@@ -47,6 +48,7 @@ class RefundRepository(
     RefundRepository does not implicitly lock Payment.
 
     RefundService is responsible for:
+
         transaction.atomic()
             ->
         PaymentRepository.get_for_update()
@@ -62,7 +64,6 @@ class RefundRepository(
     Idempotency
     -----------
     The database uniqueness constraint on idempotency_key is authoritative.
-
     Repository-level lookup is used for reconciliation, while the database
     remains the final concurrency authority.
 
@@ -229,7 +230,6 @@ class RefundRepository(
     ) -> Refund:
         """
         Lock one Refund.
-
         Caller owns transaction.atomic().
         """
 
@@ -584,42 +584,6 @@ class RefundRepository(
             cls.successful_for_payment(
                 payment_id,
             )
-            .aggregate(
-                total=Sum(
-                    "amount",
-                ),
-            )
-        )
-
-        total = result.get(
-            "total",
-        )
-
-        if total is None:
-            return Decimal("0")
-
-        return Decimal(
-            total,
-        )
-
-    @classmethod
-    def successful_amount_for_payment_for_update(
-        cls,
-        payment_id: int,
-    ) -> Decimal:
-        """
-        Return successful refund total while locking matching Refund rows.
-
-        This method is provided for reconciliation/maintenance workflows.
-
-        Normal refund authorization should still lock Payment first.
-        """
-
-        result = (
-            cls.successful_for_payment(
-                payment_id,
-            )
-            .select_for_update()
             .aggregate(
                 total=Sum(
                     "amount",

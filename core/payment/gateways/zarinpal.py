@@ -25,7 +25,6 @@ from payment.providers.base import (
     GatewayVerificationResult,
 )
 
-
 class ZarinPalGateway(BaseGateway):
     """
     ZarinPal V4 gateway adapter.

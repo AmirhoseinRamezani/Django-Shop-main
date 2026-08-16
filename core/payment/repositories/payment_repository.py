@@ -642,8 +642,6 @@ class PaymentRepository(
         # Build update payload
         # --------------------------------------------
 
-        from django.utils import timezone
-
         update_kwargs = {
             field: getattr(
                 payment,

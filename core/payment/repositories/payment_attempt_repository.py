@@ -1303,7 +1303,6 @@ class PaymentAttemptRepository(
     ) -> QuerySet[PaymentAttempt]:
         """
         Return pending attempts older than a timestamp.
-
         Candidate selection only.
         """
 
@@ -1327,9 +1326,7 @@ class PaymentAttemptRepository(
     ) -> QuerySet[PaymentAttempt]:
         """
         Return stale pending attempts with SKIP LOCKED.
-
         Intended for reconciliation workers.
-
         Caller owns transaction.atomic().
         """
 

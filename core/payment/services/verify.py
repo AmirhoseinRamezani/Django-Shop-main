@@ -16,7 +16,6 @@ from payment.policies import PaymentPolicy
 from payment.repositories.payment_repository import PaymentRepository
 from payment.services.gateway_service import GatewayService
 
-
 @transaction.atomic
 def verify_payment(
     *,
@@ -207,11 +206,11 @@ def verify_payment(
     # Gateway financial identity
     # ------------------------------------
 
-    gateway_reference = cls_normalize_optional(
+    gateway_reference = _normalize_optional(
         result.gateway_reference,
     )
 
-    gateway_transaction_id = cls_normalize_optional(
+    gateway_transaction_id = _normalize_optional(
         result.gateway_transaction_id,
     )
 
@@ -251,7 +250,7 @@ def verify_payment(
     # Callback/reference reconciliation
     # ------------------------------------
 
-    normalized_ref_id = cls_normalize_optional(
+    normalized_ref_id = _normalize_optional(
         ref_id,
     )
 
@@ -341,7 +340,7 @@ def verify_payment(
     return payment
 
 
-def cls_normalize_optional(
+def _normalize_optional(
     value: Any,
 ) -> str:
     """
