@@ -17,7 +17,7 @@ class PaymentFactory:
         response_payload=None,
         meta=None,
         gateway=None,
-        status=PaymentStatusType.pending,
+        status=PaymentStatusType.PENDING,
     ):
         """
         Create a new payment record with a secure authority_id.

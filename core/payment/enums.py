@@ -42,8 +42,8 @@ class PaymentGateway(models.TextChoices):
 
 class Currency(models.TextChoices):
     IRR = "IRR", "IRR"
-    IRT = "IRT", "IRT"
-    USD = "USD", "USD"
+    # IRT = "IRT", "IRT"
+    # USD = "USD", "USD"
     
 class RefundReason(models.TextChoices):
     CUSTOMER_REQUEST = "customer_request", _("Customer Request")

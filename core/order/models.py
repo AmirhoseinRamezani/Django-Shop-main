@@ -4,7 +4,7 @@ from django.conf import settings
 from django.utils import timezone
 from datetime import timedelta
 from decimal import Decimal
-from django.core.validators import MinValueValidator
+from django.core.validators import MinValueValidator, MaxValueValidator
 from django.utils.translation import gettext_lazy as _
 # from payment.models import PaymentStatusType
 from payment.enums import PaymentStatusType
@@ -49,8 +49,8 @@ class CouponModel(models.Model):
     
     discount_percent = models.PositiveSmallIntegerField(
         validators=[
-            models.Min(0),
-            models.Max(100),
+            MinValueValidator(0),
+            MaxValueValidator(100),
         ],
     )
 
@@ -367,11 +367,8 @@ class OrderModel(models.Model):
         constraints = [
 
             models.CheckConstraint(
-                condition=(
-                    F("discount_amount")
-                    <= F("subtotal_price")
-                ),
-                name="order_discount_lte_subtotal",
+                condition=Q(discount_amount__lte=F("subtotal_price")),
+                name="discount_less_than_subtotal",
             ),
 
             # models.CheckConstraint(

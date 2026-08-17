@@ -1,5 +1,5 @@
 # core/payment/managers.py
-# ================================
+# ===============================
 # Payment Query / Manager Layer
 # Architectural Contract
 # ----------------------
@@ -34,7 +34,6 @@
 #
 # Persistence boundaries belong to:
 #     payment/repositories/
-#
 # ================================
 
 from __future__ import annotations
@@ -49,20 +48,16 @@ from payment.enums import (
     RefundStatus,
 )
 
-
 # ================================
 # Payment QuerySet
 # ================================
 
-
 class PaymentQuerySet(models.QuerySet):
     """
     Query composition API for PaymentModel.
-
     This class contains persistence-level predicates only.
-
+    
     No method in this QuerySet should answer questions such as:
-
         can this payment be paid?
         can this payment be retried?
         can this payment be refunded?
@@ -105,7 +100,6 @@ class PaymentQuerySet(models.QuerySet):
     def consumed(self) -> "PaymentQuerySet":
         """
         Return payments that have been consumed.
-
         This is intentionally a simple persistence predicate.
         It does not determine whether consumption was valid.
         """
@@ -153,7 +147,6 @@ class PaymentQuerySet(models.QuerySet):
         Therefore this method MUST NOT reference closed_date.
 
         For the current Payment state machine:
-
             PENDING = open
             SUCCESS = terminal
             FAILED  = terminal
@@ -161,11 +154,9 @@ class PaymentQuerySet(models.QuerySet):
         This method intentionally remains a persistence query.
 
         It does NOT mean:
-
             "payment is legally payable"
 
         or:
-
             "payment can be initiated"
 
         Those decisions belong to PaymentPolicy.
@@ -177,9 +168,7 @@ class PaymentQuerySet(models.QuerySet):
     def completed(self) -> "PaymentQuerySet":
         """
         Return payments that reached successful + consumed state.
-
         This is a structural query predicate.
-
         It does NOT determine whether the payment is eligible
         for any further business operation.
         """
@@ -200,11 +189,9 @@ class PaymentQuerySet(models.QuerySet):
         Return payments belonging to an Order.
 
         Accepts either:
-
             OrderModel instance
 
         or:
-
             order primary key
         """
         if hasattr(order, "pk"):
@@ -252,10 +239,8 @@ class PaymentQuerySet(models.QuerySet):
     def newest_first(self) -> "PaymentQuerySet":
         """
         Deterministic newest-first ordering.
-
         created_date alone is not sufficient for deterministic
         ordering when timestamps collide.
-
         Therefore id is used as a stable tie-breaker.
         """
         return self.order_by(
@@ -279,9 +264,7 @@ class PaymentQuerySet(models.QuerySet):
     def for_update(self) -> "PaymentQuerySet":
         """
         Apply SELECT ... FOR UPDATE.
-
         Transaction ownership remains with the caller.
-
         This method does NOT call transaction.atomic().
         """
         return self.select_for_update()
@@ -289,9 +272,7 @@ class PaymentQuerySet(models.QuerySet):
     def for_update_skip_locked(self) -> "PaymentQuerySet":
         """
         Apply SELECT ... FOR UPDATE SKIP LOCKED.
-
         Intended for worker/reconciliation style processing.
-
         Transaction ownership remains with the caller.
         """
         return self.select_for_update(
@@ -305,30 +286,25 @@ class PaymentQuerySet(models.QuerySet):
     def with_order(self) -> "PaymentQuerySet":
         """
         Load Order using SELECT RELATED.
-
         This is a query optimization only.
         """
         return self.select_related(
             "order",
         )
 
-
 # ================================
 # Payment Manager
 # ================================
-
 
 class PaymentManager(
     models.Manager.from_queryset(PaymentQuerySet),
 ):
     """
     Manager for PaymentModel.
-
     Business logic MUST NOT be placed here.
-
+    
     Keeping the Manager intentionally empty also makes the
     architectural boundary obvious:
-
         QuerySet -> query composition
         Manager -> entry point
         Repository -> persistence boundary
@@ -338,16 +314,13 @@ class PaymentManager(
 
     pass
 
-
 # ================================
 # PaymentAttempt QuerySet
 # ================================
 
-
 class PaymentAttemptQuerySet(models.QuerySet):
     """
     Persistence/query API for PaymentAttempt.
-
     PaymentAttempt is a child entity of Payment.
 
     No method here may:
@@ -412,7 +385,6 @@ class PaymentAttemptQuerySet(models.QuerySet):
         Return attempts in any terminal state.
 
         Terminal states:
-
             SUCCESS
             FAILED
             TIMEOUT
@@ -439,11 +411,9 @@ class PaymentAttemptQuerySet(models.QuerySet):
         Return attempts belonging to a Payment.
 
         Accepts either:
-
             PaymentModel instance
 
         or:
-
             payment primary key.
         """
         if hasattr(payment, "pk"):
@@ -473,9 +443,7 @@ class PaymentAttemptQuerySet(models.QuerySet):
     def ordered_latest(self) -> "PaymentAttemptQuerySet":
         """
         Return newest attempt first.
-
         attempt_number is the logical sequence.
-
         id is retained as a deterministic tie-breaker.
         """
         return self.order_by(
@@ -502,9 +470,7 @@ class PaymentAttemptQuerySet(models.QuerySet):
     ) -> "PaymentAttemptQuerySet":
         """
         Filter by gateway authority.
-
         This is only a query predicate.
-
         It does NOT assume global uniqueness.
         """
         return self.filter(
@@ -566,11 +532,9 @@ class PaymentAttemptQuerySet(models.QuerySet):
             "payment",
         )
 
-
 # ================================
 # PaymentAttempt Manager
 # ================================
-
 
 class PaymentAttemptManager(
     models.Manager.from_queryset(
@@ -579,7 +543,6 @@ class PaymentAttemptManager(
 ):
     """
     Manager for PaymentAttempt.
-
     Intentionally contains no business workflow.
     """
 
@@ -594,7 +557,6 @@ class PaymentAttemptManager(
 class RefundQuerySet(models.QuerySet):
     """
     Query composition API for Refund.
-
     Refund business rules belong to RefundPolicy / RefundService.
     """
 
@@ -772,11 +734,9 @@ class RefundQuerySet(models.QuerySet):
             "payment",
         )
 
-
 # ================================
 # Refund Manager
 # ================================
-
 
 class RefundManager(
     models.Manager.from_queryset(
@@ -785,24 +745,19 @@ class RefundManager(
 ):
     """
     Manager for Refund.
-
     Intentionally contains no business workflow.
     """
 
     pass
 
-
 # ================================
 # GatewayLog QuerySet
 # ================================
 
-
 class GatewayLogQuerySet(models.QuerySet):
     """
     Persistence/query API for GatewayLog.
-
     GatewayLog is an audit record.
-
     QuerySet methods may classify records by technical
     direction/type, but must not execute gateway behavior.
     """
@@ -962,11 +917,9 @@ class GatewayLogQuerySet(models.QuerySet):
             "id",
         )
 
-
 # ================================
 # GatewayLog Manager
 # ================================
-
 
 class GatewayLogManager(
     models.Manager.from_queryset(
@@ -975,8 +928,7 @@ class GatewayLogManager(
 ):
     """
     Manager for GatewayLog.
-
     Intentionally contains no gateway behavior.
     """
-
+    
     pass
