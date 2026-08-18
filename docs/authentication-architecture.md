@@ -148,14 +148,58 @@ Financial Aggregate Root.
             │               │
             │               │
             └──────┬────────┘
-                ▼
+                   ▼
+                GatewayLog
+                    │
+                    ▼
+                OutboxEvent
 
-            GatewayLog
-
-                │
-                ▼
-
-            OutboxEvent
+                         ┌─────────────────┐
+                         │     Order       │
+                         └────────┬────────┘
+                                  │
+                                  │ 1:N
+                                  ▼
+                         ┌─────────────────┐
+                         │     Payment     │
+                         │                 │
+                         │ amount          │
+                         │ currency        │
+                         │ gateway         │
+                         │ status          │
+                         │ version         │
+                         │ consumed        │
+                         │ fully_refunded  │
+                         └───────┬─────────┘
+                                 │
+                    ┌────────────┴────────────┐
+                    │                         │
+                   1:N                       1:N
+                    │                         │
+                    ▼                         ▼
+          ┌──────────────────┐      ┌──────────────────┐
+          │ PaymentAttempt   │      │      Refund      │
+          │                  │      │                  │
+          │ attempt_number   │      │ amount           │
+          │ authority        │      │ currency         │
+          │ reference        │      │ idempotency_key  │
+          │ transaction_id   │      │ reference        │
+          │ lifecycle        │      │ transaction_id   │
+          └────────┬─────────┘      └────────┬─────────┘
+                   │                         │
+                  1:N                       1:N
+                   │                         │
+                   └────────────┬────────────┘
+                                ▼
+                       ┌──────────────────┐
+                       │    GatewayLog    │
+                       │                  │
+                       │ exactly ONE      │
+                       │ owner            │
+                       │                  │
+                       │ Attempt XOR      │
+                       │ Refund           │
+                       └──────────────────┘
 
 Payment Responsibility
 A payment should only answer these questions:

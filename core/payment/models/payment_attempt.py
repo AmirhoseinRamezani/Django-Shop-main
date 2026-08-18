@@ -459,7 +459,6 @@ class PaymentAttempt(models.Model):
         Return the strongest known gateway identity.
 
         Priority:
-
             gateway_transaction_id
                 ↓
             gateway_reference

@@ -1,8 +1,11 @@
-# payment/models/gateway_log.py
+# core/payment/models/gateway_log.py
+
 from __future__ import annotations
 
+from django.core.exceptions import ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models
+from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
 from payment.enums import (
@@ -12,62 +15,61 @@ from payment.enums import (
 )
 from payment.managers import GatewayLogManager
 
+
 class GatewayLog(models.Model):
     """
     Immutable Gateway Communication Audit Entity.
 
-    GatewayLog stores the complete technical audit trail of
-    communication between the application and an external
-    payment gateway.
+    GatewayLog represents exactly one technical communication
+    between the application and an external payment gateway.
+
+    Ownership invariant
+    -------------------
+    Every GatewayLog MUST belong to exactly one financial operation:
+
+        PaymentAttempt XOR Refund
+
+    Therefore:
+
+        attempt != NULL AND refund == NULL
+        OR
+        attempt == NULL AND refund != NULL
+
+    The following states are forbidden:
+
+        attempt == NULL AND refund == NULL
+        attempt != NULL AND refund != NULL
+
+    GatewayLog is an immutable append-only audit record.
 
     Responsibilities
     ----------------
-    GatewayLog is responsible for:
-
-        - Auditing gateway communication.
-        - Storing raw request payloads.
-        - Storing raw response payloads.
-        - Storing HTTP transport metadata.
-        - Storing normalized gateway results.
-        - Storing technical exceptions.
-        - Storing client metadata.
+    - Audit gateway communication.
+    - Store sanitized transport evidence.
+    - Store normalized gateway results.
+    - Store technical exceptions.
+    - Store request context.
+    - Preserve historical gateway evidence.
 
     Explicitly NOT responsible for
-    ------------------------------
-    GatewayLog must NOT:
+    --------------------------------
+    - Payment state transitions.
+    - PaymentAttempt state transitions.
+    - Refund state transitions.
+    - Gateway execution.
+    - HTTP requests.
+    - Business rules.
+    - Repository operations.
+    - Transaction orchestration.
+    - Reconciliation decisions.
+    - Event publication.
 
-        - Change Payment state.
-        - Change PaymentAttempt state.
-        - Change Refund state.
-        - Execute gateway requests.
-        - Execute HTTP requests.
-        - Execute business rules.
-        - Perform repository operations.
-        - Implement application workflows.
-
-    GatewayLog is an immutable audit record.
-
-    Raw gateway payloads MUST exist only inside GatewayLog.
-
-    Every request, callback, verification, webhook,
-    refund request and refund response should create
-    a new GatewayLog instance instead of updating an
-    existing one.
+    Financial aggregate ownership remains outside this model.
     """
 
-    # ==========================================================
+    # ================================
     # Ownership
-    # ==========================================================
-    #
-    # GatewayLog belongs to exactly one business operation.
-    #
-    # Current owners:
-    #
-    #     • PaymentAttempt
-    #     • Refund
-    #
-    # Never directly to Payment.
-    # ==========================================================
+    # ================================
 
     attempt = models.ForeignKey(
         "payment.PaymentAttempt",
@@ -76,8 +78,7 @@ class GatewayLog(models.Model):
         on_delete=models.PROTECT,
         related_name="gateway_logs",
         help_text=_(
-            "Payment attempt associated with this "
-            "gateway communication."
+            "Payment attempt associated with this gateway communication."
         ),
     )
 
@@ -88,26 +89,20 @@ class GatewayLog(models.Model):
         on_delete=models.PROTECT,
         related_name="gateway_logs",
         help_text=_(
-            "Refund associated with this gateway "
-            "communication."
+            "Refund associated with this gateway communication."
         ),
     )
 
-    # ==========================================================
+    # ================================
     # Gateway Context
-    # ==========================================================
-    #
-    # Describes what happened,
-    # not the payload itself.
-    # ==========================================================
+    # ================================
 
     gateway = models.CharField(
         max_length=32,
         choices=PaymentGateway.choices,
         db_index=True,
         help_text=_(
-            "Payment gateway involved in this "
-            "communication."
+            "Payment gateway involved in this communication."
         ),
     )
 
@@ -125,21 +120,13 @@ class GatewayLog(models.Model):
         choices=GatewayLogDirection.choices,
         db_index=True,
         help_text=_(
-            "Direction of communication between "
-            "application and gateway."
+            "Direction of communication between application and gateway."
         ),
     )
-        # ==========================================================
+
+    # ================================
     # HTTP Metadata
-    # ==========================================================
-    #
-    # Technical transport information.
-    #
-    # These fields describe how the gateway
-    # communication was performed.
-    #
-    # They do NOT contain business data.
-    # ==========================================================
+    # ================================
 
     request_url = models.URLField(
         max_length=2048,
@@ -175,27 +162,24 @@ class GatewayLog(models.Model):
         ),
     )
 
-    # ==========================================================
-    # Raw Transport Data
-    # ==========================================================
+    # ================================
+    # Raw / Sanitized Transport Data
+    # ================================
     #
-    # Gateway payloads are intentionally stored
-    # without normalization.
+    # IMPORTANT:
+    # These fields are audit evidence.
     #
-    # They are forensic evidence and may be required
-    # for reconciliation, dispute resolution,
-    # incident investigation and debugging.
+    # They MUST be sanitized before entering this model.
     #
-    # These payloads MUST NOT be modified after
-    # persistence.
-    # ==========================================================
+    # The model itself must not attempt to sanitize secrets.
+    # ================================
 
     request_headers = models.JSONField(
         default=dict,
         blank=True,
         encoder=DjangoJSONEncoder,
         help_text=_(
-            "Raw HTTP request headers sent to the gateway."
+            "Sanitized HTTP request headers sent to the gateway."
         ),
     )
 
@@ -204,7 +188,7 @@ class GatewayLog(models.Model):
         blank=True,
         encoder=DjangoJSONEncoder,
         help_text=_(
-            "Raw request payload sent to the gateway."
+            "Sanitized request payload sent to the gateway."
         ),
     )
 
@@ -213,7 +197,7 @@ class GatewayLog(models.Model):
         blank=True,
         encoder=DjangoJSONEncoder,
         help_text=_(
-            "Raw HTTP response headers returned by the gateway."
+            "Sanitized HTTP response headers returned by the gateway."
         ),
     )
 
@@ -222,22 +206,13 @@ class GatewayLog(models.Model):
         blank=True,
         encoder=DjangoJSONEncoder,
         help_text=_(
-            "Raw response payload returned by the gateway."
+            "Sanitized response payload returned by the gateway."
         ),
     )
-        # ==========================================================
+
+    # ================================
     # Normalized Gateway Result
-    # ==========================================================
-    #
-    # These fields contain normalized information extracted
-    # from the raw gateway response.
-    #
-    # The original payload always remains unchanged inside
-    # request_payload / response_payload.
-    #
-    # These fields exist only to simplify querying,
-    # monitoring and reconciliation.
-    # ==========================================================
+    # ================================
 
     response_code = models.CharField(
         max_length=64,
@@ -275,24 +250,15 @@ class GatewayLog(models.Model):
         ),
     )
 
-    # ==========================================================
+    # ================================
     # Client Metadata
-    # ==========================================================
-    #
-    # Request context useful for auditing.
-    #
-    # These values are optional because many gateway
-    # communications are initiated internally
-    # (verification workers, reconciliation jobs,
-    # webhook processing, scheduled tasks, etc.).
-    # ==========================================================
+    # ================================
 
     ip_address = models.GenericIPAddressField(
         null=True,
         blank=True,
         help_text=_(
-            "Client IP address associated with this "
-            "gateway communication."
+            "Client IP address associated with this gateway communication."
         ),
     )
 
@@ -300,8 +266,7 @@ class GatewayLog(models.Model):
         blank=True,
         default="",
         help_text=_(
-            "Client user-agent associated with this "
-            "gateway communication."
+            "Client user-agent associated with this gateway communication."
         ),
     )
 
@@ -310,14 +275,13 @@ class GatewayLog(models.Model):
         blank=True,
         encoder=DjangoJSONEncoder,
         help_text=_(
-            "Additional non-sensitive structured "
-            "audit metadata."
+            "Additional non-sensitive structured audit metadata."
         ),
     )
 
-    # ==========================================================
+    # ================================
     # Timestamp
-    # ==========================================================
+    # ================================
 
     created_date = models.DateTimeField(
         auto_now_add=True,
@@ -328,43 +292,168 @@ class GatewayLog(models.Model):
         ),
     )
 
-    # ==========================================================
+    # ================================
     # Manager
-    # ==========================================================
+    # ================================
 
     objects = GatewayLogManager()
-    
-    
-        # ===========================
+
+    # ================================
+    # Meta
+    # ================================
+
+    class Meta:
+        verbose_name = _("Gateway Log")
+        verbose_name_plural = _("Gateway Logs")
+
+        ordering = (
+            "-created_date",
+            "-id",
+        )
+
+        constraints = [
+
+            # ================================
+            # CRITICAL OWNERSHIP INVARIANT
+            # ================================
+            #
+            # Exactly one owner:
+            #     attempt XOR refund
+            #
+            # Allowed:
+            #     attempt != NULL
+            #     refund  == NULL
+            #
+            # OR
+            #
+            #     attempt == NULL
+            #     refund  != NULL
+            #
+            # Forbidden:
+            #     both NULL
+            #     both NOT NULL
+            #
+            # This is deliberately enforced at the DATABASE level.
+            # ================================
+
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        attempt__isnull=False,
+                        refund__isnull=True,
+                    )
+                    |
+                    Q(
+                        attempt__isnull=True,
+                        refund__isnull=False,
+                    )
+                ),
+                name="gateway_log_exactly_one_owner",
+            ),
+
+            # ================================
+            # HTTP STATUS
+            # ================================
+
+            models.CheckConstraint(
+                condition=(
+                    Q(http_status__isnull=True)
+                    |
+                    Q(
+                        http_status__gte=100,
+                        http_status__lte=599,
+                    )
+                ),
+                name="gateway_log_http_status_valid",
+            ),
+
+            # ================================
+            # LATENCY
+            # ================================
+
+            models.CheckConstraint(
+                condition=Q(latency_ms__isnull=True)
+                | Q(latency_ms__gte=0),
+                name="gateway_log_latency_non_negative",
+            ),
+        ]
+
+        indexes = [
+
+            models.Index(
+                fields=(
+                    "attempt",
+                    "-created_date",
+                ),
+                name="gw_log_attempt_created_idx",
+            ),
+
+            models.Index(
+                fields=(
+                    "refund",
+                    "-created_date",
+                ),
+                name="gw_log_refund_created_idx",
+            ),
+
+            models.Index(
+                fields=(
+                    "gateway",
+                    "log_type",
+                    "-created_date",
+                ),
+                name="gw_log_gateway_type_idx",
+            ),
+
+            models.Index(
+                fields=(
+                    "gateway",
+                    "is_success",
+                    "-created_date",
+                ),
+                name="gw_log_gateway_success_idx",
+            ),
+        ]
+
+    # ================================
     # Validation
-    # ===========================
+    # ================================
 
     def clean(self) -> None:
         """
         Validate GatewayLog invariants.
 
-        This method is intentionally side-effect free.
+        Database constraints remain the final integrity barrier.
 
-        It:
-            - Does not query the database.
-            - Does not save the model.
-            - Does not mutate the model.
-            - Does not perform network operations.
-            - Does not execute business workflows.
+        This method exists for:
+            - developer feedback,
+            - service-layer validation,
+            - admin/forms,
+            - deterministic model validation.
+
+        It is NOT considered a replacement for DB constraints.
         """
 
         super().clean()
 
-        if (
-            self.attempt_id is None
-            and self.refund_id is None
-        ):
+        # ------------------------------------------------------
+        # Exactly one owner
+        # ------------------------------------------------------
+
+        has_attempt = self.attempt_id is not None
+        has_refund = self.refund_id is not None
+
+        if has_attempt == has_refund:
             raise ValidationError(
                 _(
-                    "Gateway log must belong to "
-                    "a payment attempt or a refund."
+                    "Gateway log must belong to exactly one "
+                    "payment attempt or refund."
                 )
             )
+
+        # ------------------------------------------------------
+        # HTTP status
+        # ------------------------------------------------------
 
         if (
             self.http_status is not None
@@ -379,6 +468,10 @@ class GatewayLog(models.Model):
                 }
             )
 
+        # ------------------------------------------------------
+        # Latency
+        # ------------------------------------------------------
+
         if (
             self.latency_ms is not None
             and self.latency_ms < 0
@@ -391,7 +484,12 @@ class GatewayLog(models.Model):
                 }
             )
 
+        # ------------------------------------------------------
+        # HTTP method normalization
+        # ------------------------------------------------------
+
         if self.request_method:
+
             normalized_method = (
                 self.request_method.strip().upper()
             )
@@ -401,7 +499,8 @@ class GatewayLog(models.Model):
                     {
                         "request_method": _(
                             "HTTP method must be normalized "
-                            "to uppercase without surrounding whitespace."
+                            "to uppercase without surrounding "
+                            "whitespace."
                         )
                     }
                 )
@@ -414,10 +513,10 @@ class GatewayLog(models.Model):
                         )
                     }
                 )
-                
-        # ===========================
+
+    # ================================
     # Persistence
-    # ===========================
+    # ================================
 
     def save(self, *args, **kwargs):
         """
@@ -425,10 +524,13 @@ class GatewayLog(models.Model):
 
         GatewayLog is immutable.
 
-        A persisted GatewayLog must never be updated through the normal
-        model save API.
+        Once persisted:
+            - no update
+            - no overwrite
+            - no mutation through save()
 
-        Domain validation is always executed before persistence.
+        Every new gateway communication must create
+        a new GatewayLog record.
         """
 
         if self.pk is not None:
@@ -445,15 +547,15 @@ class GatewayLog(models.Model):
             **kwargs,
         )
 
-    # ===========================
+    # ================================
     # Deletion Protection
-    # ===========================
+    # ================================
 
     def delete(self, *args, **kwargs):
         """
-        Prevent deletion of gateway audit records.
+        GatewayLog records are historical audit evidence.
 
-        Gateway logs are historical audit records and must be retained.
+        They must not be deleted through the domain model.
         """
 
         raise ValidationError(
@@ -462,11 +564,12 @@ class GatewayLog(models.Model):
             )
         )
 
-    # ===========================
+    # ================================
     # Representation
-    # ===========================
+    # ================================
 
     def __str__(self) -> str:
+
         owner = (
             f"attempt={self.attempt_id}"
             if self.attempt_id is not None
