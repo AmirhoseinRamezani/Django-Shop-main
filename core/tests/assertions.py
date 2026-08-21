@@ -1,7 +1,7 @@
 # tests/assertions.py
 
 from order.models import OrderStatusType
-from payment.models import PaymentStatusType
+from payment.enums import PaymentStatusType
 from events.models import OutboxStatus
 
 
@@ -49,19 +49,19 @@ def assert_order_item_created(order, count=1):
 def assert_payment_pending(payment):
     refresh(payment)
 
-    assert payment.status == PaymentStatusType.pending
+    assert payment.status == PaymentStatusType.PENDING
 
 
 def assert_payment_success(payment):
     refresh(payment)
 
-    assert payment.status == PaymentStatusType.success
+    assert payment.status == PaymentStatusType.SUCCESS
 
 
 def assert_payment_failed(payment):
     refresh(payment)
 
-    assert payment.status == PaymentStatusType.failed
+    assert payment.status == PaymentStatusType.FAILED
 
 
 def assert_payment_consumed(payment):

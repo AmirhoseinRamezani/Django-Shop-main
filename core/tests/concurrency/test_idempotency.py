@@ -5,7 +5,6 @@ from django.core.exceptions import ValidationError
 
 from payment.services.verify import verify_payment
 
-
 pytestmark = pytest.mark.django_db
 
 

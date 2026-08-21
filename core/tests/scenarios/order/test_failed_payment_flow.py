@@ -9,9 +9,7 @@ from order.models import (
     OrderStatusType,
 )
 
-from payment.models import (
-    PaymentStatusType,
-)
+from payment.enums import PaymentStatusType
 
 pytestmark = pytest.mark.django_db
 

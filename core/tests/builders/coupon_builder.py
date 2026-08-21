@@ -4,7 +4,6 @@ from datetime import timedelta
 
 from tests.factories.shop import CouponFactory
 
-
 class CouponBuilder:
 
     def __init__(self):

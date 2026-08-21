@@ -1,107 +1,4 @@
-# # tests/builders/scenario_builder.py
-# from tests.factories.accounts import UserFactory
-
-# from tests.factories.shop import (
-#     ProductFactory,
-#     CouponFactory,
-#     AddressFactory,
-# )
-
-# from tests.factories.cart import (
-#     CartFactory,
-#     CartItemFactory,
-# )
-
-# from .base import BaseBuilder
-
-
-# class ScenarioBuilder(BaseBuilder):
-
-#     def __init__(self):
-
-#         super().__init__()
-
-#         self.user = UserFactory()
-
-#         self.address = AddressFactory(
-#             user=self.user
-#         )
-
-#         self.cart = CartFactory(
-#             user=self.user
-#         )
-
-#         self.products = []
-
-#         self.coupon = None
-
-#     # ---------------------
-
-#     def with_product(
-#         self,
-#         product=None,
-#         quantity=1,
-#         **traits
-#     ):
-
-#         if product is None:
-
-#             product = ProductFactory(
-#                 **traits
-#             )
-
-#         CartItemFactory(
-
-#             cart=self.cart,
-
-#             product=product,
-
-#             quantity=quantity,
-
-#         )
-
-#         self.products.append(product)
-
-#         return self
-
-#     # ---------------------
-
-#     def with_coupon(
-#         self,
-#         coupon=None,
-#         **traits
-#     ):
-
-#         if coupon is None:
-
-#             coupon = CouponFactory(
-#                 **traits
-#             )
-
-#         self.coupon = coupon
-
-#         return self
-
-#     # ---------------------
-
-#     def build(self):
-
-#         data = {
-
-#             "user": self.user,
-
-#             "cart": self.cart,
-
-#             "address": self.address,
-
-#         }
-
-#         if self.coupon:
-
-#             data["coupon"] = self.coupon
-
-#         return data
-
+# tests/builders/scenario_builder.py
 from tests.builders import (
     UserBuilder,
     ProductBuilder,
@@ -189,7 +86,7 @@ class OrderScenario:
 
             OrderBuilder()
 
-            .for_user(self.user)
+            .with_user(self.user)
 
             .with_cart(self.cart)
 

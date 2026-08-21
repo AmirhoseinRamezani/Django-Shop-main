@@ -1,6 +1,6 @@
 # tests/helpers/payments.py
 
-from payment.models import (
+from payment.enums import (
     PaymentStatusType,
 )
 
@@ -12,7 +12,7 @@ def assert_pending(payment):
     assert (
         payment.status
         ==
-        PaymentStatusType.pending
+        PaymentStatusType.PENDING
     )
 
 
@@ -23,7 +23,7 @@ def assert_success(payment):
     assert (
         payment.status
         ==
-        PaymentStatusType.success
+        PaymentStatusType.SUCCESS
     )
 
 
@@ -34,5 +34,5 @@ def assert_failed(payment):
     assert (
         payment.status
         ==
-        PaymentStatusType.failed
+        PaymentStatusType.FAILED
     )

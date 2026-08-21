@@ -1,56 +1,9 @@
 # # tests/builders/payment_builder.py
-# from payment.models import PaymentStatusType
-# from tests.factories.payment import PaymentFactory
-
-
-# class PaymentBuilder():
-
-#     def __init__(self, order):
-#         self.order = order
-#         self.kwargs = {}
-
-#     @classmethod
-#     def for_order(cls, order):
-#         return cls(order)
-
-#     def pending(self):
-#         self.kwargs["status"] = PaymentStatusType.pending
-#         return self
-
-#     def success(self):
-#         # self.kwargs["status"] = PaymentStatusType.success
-#         self.kwargs.update(
-#             status=PaymentStatusType.success,
-#             ref_id=999999,
-#         )
-#         return self
-
-#     def failed(self):
-#         self.kwargs["status"] = PaymentStatusType.failed
-#         return self
-
-#     def consumed(self):
-#         self.kwargs["is_consumed"] = True
-#         return self
-    
-#     def refunded(self):
-#         self.kwargs["is_refunded"] = True
-#         return self
-
-#     def amount(self, amount):
-#         self.kwargs["amount"] = amount
-#         return self
-
-#     def build(self):
-#         return PaymentFactory(
-#             order=self.order,
-#             **self.kwargs,
-#         )
 from __future__ import annotations
 
 from django.utils import timezone
 
-from payment.models import (
+from payment.enums import (
     PaymentStatusType,
 )
 
@@ -132,7 +85,7 @@ class PaymentBuilder(BaseBuilder):
     def pending(self):
 
         return self.with_attrs(
-            status=PaymentStatusType.pending,
+            status=PaymentStatusType.PENDING,
             paid_date=None,
         )
 
@@ -142,7 +95,7 @@ class PaymentBuilder(BaseBuilder):
 
         return self.with_attrs(
 
-            status=PaymentStatusType.success,
+            status=PaymentStatusType.SUCCESS,
 
             paid_date=timezone.now(),
         )
@@ -153,7 +106,7 @@ class PaymentBuilder(BaseBuilder):
 
         return self.with_attrs(
 
-            status=PaymentStatusType.failed,
+            status=PaymentStatusType.FAILED,
 
             paid_date=None,
         )
@@ -187,7 +140,7 @@ class PaymentBuilder(BaseBuilder):
 
         return self.with_attrs(
 
-            status=PaymentStatusType.success,
+            status=PaymentStatusType.SUCCESS,
 
             is_refunded=True,
 

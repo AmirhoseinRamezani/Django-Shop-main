@@ -4,10 +4,12 @@ import pytest
 from django.core.exceptions import ValidationError
 
 from order.models import OrderStatusType
-from payment.models import PaymentStatusType
+from payment.enums import (
+    PaymentStatusType,
+)
 
 from order.services.state_machine import OrderStateMachine
-from payment.services.refund import refund_payment
+from payment.services.refund import RefundService
 
 pytestmark = pytest.mark.django_db
 
@@ -21,10 +23,8 @@ class TestRefundFlow:
         admin_user,
     ):
 
-        refund_payment(
-            payment=success_payment,
-            actor=admin_user,
-        )
+        service = RefundService()
+        result = service.execute_refund(payment_id=payment.id, reason="Customer request")
 
         success_payment.refresh_from_db()
         paid_order.refresh_from_db()
@@ -46,7 +46,7 @@ class TestRefundFlow:
 
         success_payment.refresh_from_db()
 
-        assert success_payment.status == PaymentStatusType.success
+        assert success_payment.status == PaymentStatusType.SUCCESS
 
     def test_order_state_changed(
         self,

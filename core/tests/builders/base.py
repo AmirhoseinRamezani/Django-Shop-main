@@ -6,22 +6,15 @@ from typing import Any
 class BaseBuilder:
     """
     Base Builder.
-
     Every Builder in tests inherits from this class.
 
     Features
     --------
-
     • fluent API
-
     • immutable style
-
     • default values
-
     • override values
-
     • reset()
-
     • build()
 
     """

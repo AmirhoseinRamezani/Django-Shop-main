@@ -2,8 +2,7 @@
 import pytest
 
 from order.models import OrderStatusType
-from payment.models import PaymentStatusType
-
+from payment.enums import PaymentStatusType
 from order.services.order import OrderService
 from payment.services.services import PaymentService
 from payment.services.payment_flow import handle_successful_payment
@@ -65,5 +64,5 @@ class TestCustomerCheckout:
         payment.refresh_from_db()
 
         assert order.status == OrderStatusType.paid
-        assert payment.status == PaymentStatusType.success
+        assert payment.status == PaymentStatusType.SUCCESS
         assert payment.is_consumed

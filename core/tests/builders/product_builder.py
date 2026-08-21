@@ -1,33 +1,5 @@
-# # tests/builders/product_builder.py
-# from tests.factories.shop import ProductFactory
-# from shop.constants import ProductStatusType
-
-# class ProductBuilder:
-
-#     def __init__(self):
-
-#         self.kwargs = {}
-
-#     def stock(self, amount):
-
-#         self.kwargs["stock"] = amount
-#         return self
-
-#     def discounted(self):
-
-#         self.kwargs["discount_percent"] = 20
-#         return self
-
-#     def unpublished(self):
-
-#         self.kwargs["status"] = ProductStatusType.DRAFT
-#         return self
-
-#     def build(self):
-
-#         return ProductFactory(**self.kwargs)
+# tests/builders/product_builder.py
 from tests.factories.shop import ProductFactory
-
 
 class ProductBuilder:
 

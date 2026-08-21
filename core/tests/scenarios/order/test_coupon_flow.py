@@ -8,9 +8,7 @@ from order.models import (
     OrderStatusType,
 )
 
-from payment.models import (
-    PaymentStatusType,
-)
+from payment.enums import PaymentStatusType
 
 pytestmark = pytest.mark.django_db
 
@@ -38,7 +36,7 @@ class TestCouponCheckout:
 
         payment_factory(
             order=order,
-            status=PaymentStatusType.success,
+            status=PaymentStatusType.SUCCESS,
         )
 
         confirm_order_payment(order.id)

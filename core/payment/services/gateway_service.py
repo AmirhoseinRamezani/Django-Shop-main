@@ -1,3 +1,4 @@
+# core/payment/services/gateway_service.py
 from __future__ import annotations
 
 from decimal import Decimal
@@ -5,7 +6,7 @@ from typing import Any, Mapping
 
 from django.conf import settings
 
-from payment.enums import Currency, PaymentAttemptStatus, PaymentGateway
+from payment.enums import Currency, PaymentGateway
 from payment.exceptions import (
     PaymentAmountMismatchError,
     PaymentCurrencyMismatchError,
@@ -33,51 +34,11 @@ from payment.providers.base import (
 
 class GatewayService:
     """
-    Provider-independent gateway orchestration facade.
+    Single provider-independent facade for external payment gateways.
 
-    ================================
-    ARCHITECTURAL RESPONSIBILITY
-    ================================
-
-    This service is the boundary between the Payment application layer
-    and concrete gateway providers.
-
-    Responsibilities
-    ----------------
-    - gateway normalization
-    - gateway resolution
-    - gateway client construction
-    - provider-independent request construction
-    - provider operation execution
-    - normalized result contract validation
-    - gateway identity validation
-    - gateway amount/currency evidence validation
-    - infrastructure exception normalization
-    - capability validation
-
-    Non-responsibilities
-    --------------------
-    - database access
-    - transaction.atomic()
-    - repository access
-    - select_for_update()
-    - Payment persistence
-    - Payment state transitions
-    - PaymentAttempt persistence
-    - Refund persistence
-    - refund authorization
-    - Order mutation
-    - coupon mutation
-    - inventory mutation
-    - event publication
-    - outbox creation
-    - idempotency persistence
-    - retry scheduling
-    - business authorization
-    - provider-specific parsing
-
-    Canonical architecture
-    ----------------------
+    ------------------------------------
+    ARCHITECTURAL BOUNDARY
+    ------------------------------------
 
         Application Service
                 |
@@ -88,39 +49,99 @@ class GatewayService:
         GatewayRegistry
                 |
                 v
-        Concrete BaseGateway
+        Concrete Gateway Adapter
                 |
                 v
         External Provider
 
-    IMPORTANT
-    ---------
+    ------------------------------------
+    RESPONSIBILITIES
+    ------------------------------------
 
-    Payment is the financial aggregate.
+    GatewayService owns:
 
-    PaymentAttempt owns gateway execution identity:
+    - gateway normalization
+    - gateway resolution
+    - gateway client construction
+    - request DTO construction
+    - provider invocation
+    - capability checks
+    - provider exception normalization
+    - typed result validation
+    - financial evidence validation
+    - gateway identity validation
+    - callback normalization
+
+    ------------------------------------
+    EXPLICIT NON-RESPONSIBILITIES
+    ------------------------------------
+
+    GatewayService MUST NOT:
+
+    - access ORM
+    - open database transactions
+    - use repositories
+    - use select_for_update()
+    - mutate Payment
+    - mutate PaymentAttempt
+    - mutate Refund
+    - mutate Order
+    - authorize refunds
+    - calculate refundable balance
+    - publish events
+    - create outbox records
+    - persist idempotency keys
+    - schedule retries
+    - perform reconciliation
+    - perform business authorization
+    - mutate financial state
+
+    ------------------------------------
+    PAYMENT / ATTEMPT BOUNDARY
+    ------------------------------------
+
+    Payment owns:
+
+        amount
+        currency
+        order
+        historical gateway selection
+
+    PaymentAttempt owns:
 
         authority_id
         gateway_reference
         gateway_transaction_id
 
-    Therefore historical gateway operations MUST NOT obtain
-    authority_id from Payment.
+    Therefore:
 
-    For verification/refund:
+        Payment.gateway
+            = historical provider selection
 
-        Payment
-            +
-        PaymentAttempt
-            |
-            +--> gateway identity
+        PaymentAttempt.authority_id
+            = execution identity
 
-    This prevents the Payment aggregate from becoming polluted
-    with attempt-level gateway execution state.
+    GatewayService MUST NEVER read:
+
+        payment.authority_id
+
+    for verify/refund.
+
+    ------------------------------------
+    RESULT CONTRACT
+    ------------------------------------
+
+    Concrete gateway adapters MUST return normalized DTOs defined by
+    payment.providers.base.
+
+    Provider-specific dictionaries/payloads MUST NOT cross this boundary.
+
+    GatewayService rejects malformed provider results before returning
+    them to application services.
     """
 
     # ================================
-    # CONSTANTS
+    # OPERATIONS
     # ================================
 
     _OP_INITIATE = "initiate_payment"
@@ -141,10 +162,10 @@ class GatewayService:
         """
         Return the configured default gateway.
 
-        This method is valid only for operations that do not yet have
-        a historical gateway snapshot.
+        This is only valid before a Payment has acquired a historical
+        gateway snapshot.
 
-        Historical Payment operations MUST use Payment.gateway.
+        Existing Payments MUST use Payment.gateway.
         """
 
         configured = getattr(
@@ -163,11 +184,10 @@ class GatewayService:
         """
         Normalize a gateway identifier.
 
-        None means:
+        None means DEFAULT_PAYMENT_GATEWAY.
 
-            DEFAULT_PAYMENT_GATEWAY
-
-        Unknown values are rejected.
+        Existing historical Payment operations must explicitly provide
+        their stored gateway through Payment.gateway.
         """
 
         if gateway is None:
@@ -191,7 +211,9 @@ class GatewayService:
             return gateway
 
         try:
-            return PaymentGateway(str(gateway).strip())
+            return PaymentGateway(
+                str(gateway).strip(),
+            )
         except (TypeError, ValueError) as exc:
             raise PaymentGatewayNotSupportedError(
                 "Unsupported payment gateway.",
@@ -206,22 +228,14 @@ class GatewayService:
         gateway: PaymentGateway | str | None,
     ) -> bool:
         """
-        Return whether a concrete implementation is registered.
+        Return whether a concrete gateway implementation is registered.
 
-        This is an availability/registration check.
-
-        It does NOT mean that the gateway is operationally healthy.
+        This does not represent operational health.
         """
 
         try:
             normalized = cls._normalize_gateway(gateway)
-        except PaymentGatewayError:
-            return False
-
-        try:
-            return GatewayRegistry.is_registered(
-                normalized,
-            )
+            return GatewayRegistry.is_registered(normalized)
         except PaymentGatewayError:
             return False
 
@@ -230,7 +244,7 @@ class GatewayService:
         cls,
     ) -> tuple[PaymentGateway, ...]:
         """
-        Return all currently registered gateways.
+        Return all registered gateway identifiers.
         """
 
         return GatewayRegistry.gateways()
@@ -238,21 +252,16 @@ class GatewayService:
     @classmethod
     def _client(
         cls,
-        gateway: PaymentGateway | str | None = None,
+        gateway: PaymentGateway | str | None,
     ) -> Any:
         """
-        Resolve and instantiate the concrete gateway client.
+        Resolve and instantiate a concrete gateway adapter.
 
-        The registry returns a class.
-
-        GatewayService owns client construction.
-
-        No database access occurs here.
+        No database access.
+        No persistence.
         """
 
-        normalized = cls._normalize_gateway(
-            gateway,
-        )
+        normalized = cls._normalize_gateway(gateway)
 
         try:
             client_class = GatewayRegistry.resolve(
@@ -271,7 +280,7 @@ class GatewayService:
             ) from exc
 
         try:
-            client = client_class()
+            return client_class()
         except PaymentGatewayError:
             raise
         except Exception as exc:
@@ -284,8 +293,6 @@ class GatewayService:
                 retryable=False,
             ) from exc
 
-        return client
-
     @classmethod
     def _require_capability(
         cls,
@@ -295,17 +302,15 @@ class GatewayService:
         operation: str,
     ) -> None:
         """
-        Verify optional gateway capability.
+        Require an adapter capability before invoking it.
 
-        BaseGateway exposes supports(), but this helper also protects
-        the service from malformed/non-conforming clients.
+        Particularly important for refund so that an unsupported
+        operation can never be interpreted as a financial success.
         """
 
         try:
             supported = bool(
-                client.supports(
-                    operation,
-                )
+                client.supports(operation),
             )
         except Exception as exc:
             raise PaymentGatewayError(
@@ -343,13 +348,11 @@ class GatewayService:
         gateway: PaymentGateway | str | None = None,
     ) -> GatewayPaymentResult:
         """
-        Initiate a new gateway payment.
+        Initiate a payment at the external gateway.
 
-        IMPORTANT:
+        This method does NOT create or mutate Payment/PaymentAttempt.
 
-        This method does NOT create Payment or PaymentAttempt.
-
-        The application service is responsible for:
+        The application workflow owns:
 
             Payment creation
                 ->
@@ -358,18 +361,10 @@ class GatewayService:
             gateway initiation
                 ->
             Attempt identity persistence
-
-        The returned authority/reference must be persisted into the
-        corresponding PaymentAttempt by the application workflow.
         """
 
-        normalized_gateway = cls._normalize_gateway(
-            gateway,
-        )
-
-        client = cls._client(
-            normalized_gateway,
-        )
+        normalized_gateway = cls._normalize_gateway(gateway)
+        client = cls._client(normalized_gateway)
 
         normalized_amount = cls._normalize_amount(
             amount,
@@ -437,7 +432,6 @@ class GatewayService:
         cls._validate_payment_result(
             result=result,
             expected_gateway=normalized_gateway,
-            operation=cls._OP_INITIATE,
         )
 
         return result
@@ -454,15 +448,13 @@ class GatewayService:
         gateway: PaymentGateway | str | None = None,
     ) -> str:
         """
-        Build the user-facing gateway payment URL.
+        Build the user-facing payment URL.
 
         No database access.
         No state mutation.
         """
 
-        normalized_gateway = cls._normalize_gateway(
-            gateway,
-        )
+        normalized_gateway = cls._normalize_gateway(gateway)
 
         normalized_authority = cls._normalize_required_string(
             authority,
@@ -493,10 +485,7 @@ class GatewayService:
                 retryable=False,
             ) from exc
 
-        if not isinstance(
-            result,
-            str,
-        ):
+        if not isinstance(result, str):
             raise PaymentGatewayError(
                 "Gateway returned an invalid payment URL.",
                 details={
@@ -532,33 +521,29 @@ class GatewayService:
         attempt: Any,
     ) -> GatewayVerificationResult:
         """
-        Verify a Payment through its historical PaymentAttempt.
+        Verify a Payment through its authoritative PaymentAttempt.
 
-        CRITICAL ARCHITECTURAL RULE
-        ---------------------------
+        IMPORTANT:
 
-        authority_id belongs to PaymentAttempt.
+            payment.gateway
+                -> selects historical provider
 
-        NEVER:
+            attempt.authority_id
+                -> selects gateway execution identity
+
+        NEVER read:
 
             payment.authority_id
 
-        ALWAYS:
+        This method performs external I/O only.
 
-            attempt.authority_id
+        It does not:
 
-        Payment provides the immutable financial snapshot:
-
-            amount
-            currency
-            order
-
-        PaymentAttempt provides gateway execution identity:
-
-            authority_id
-
-        The application service remains responsible for locking and
-        persistence around this operation.
+            - open transactions
+            - lock rows
+            - mutate Payment
+            - mutate PaymentAttempt
+            - persist verification
         """
 
         cls._validate_payment_attempt_pair(
@@ -566,12 +551,12 @@ class GatewayService:
             attempt=attempt,
         )
 
-        normalized_gateway = cls._payment_gateway(
+        gateway = cls._payment_gateway(
             payment,
         )
 
         client = cls._client(
-            normalized_gateway,
+            gateway,
         )
 
         amount = cls._normalize_amount(
@@ -617,7 +602,7 @@ class GatewayService:
             raise PaymentGatewayError(
                 "Payment gateway verification failed.",
                 details={
-                    "gateway": normalized_gateway.value,
+                    "gateway": gateway.value,
                     "operation": cls._OP_VERIFY,
                     "payment_id": getattr(
                         payment,
@@ -636,7 +621,7 @@ class GatewayService:
         cls._require_result_type(
             result=result,
             expected_type=GatewayVerificationResult,
-            gateway=normalized_gateway,
+            gateway=gateway,
             operation=cls._OP_VERIFY,
             payment_id=getattr(
                 payment,
@@ -654,7 +639,7 @@ class GatewayService:
             result=result,
             payment=payment,
             attempt=attempt,
-            expected_gateway=normalized_gateway,
+            expected_gateway=gateway,
         )
 
         return result
@@ -673,27 +658,23 @@ class GatewayService:
         gateway: PaymentGateway | str | None = None,
     ) -> GatewayRefundResult:
         """
-        Execute a refund through the historical payment gateway.
+        Execute a gateway refund.
 
-        Gateway identity source:
+        GatewayService only performs gateway communication and evidence
+        validation.
 
-            Payment.gateway
+        It does NOT authorize the refund amount.
 
-        Gateway execution identity source:
+        Refund authorization belongs to the application refund workflow
+        while Payment is locked.
+
+        Authority source:
 
             PaymentAttempt.authority_id
 
-        Refund itself supplies:
+        Historical gateway source:
 
-            amount
-            currency
-            refund reference
-
-        This method does NOT authorize whether the refund amount is
-        available.
-
-        Cumulative refund authorization belongs to the Refund Service
-        while the canonical Payment row is locked.
+            Payment.gateway
         """
 
         cls._validate_payment_attempt_pair(
@@ -705,6 +686,11 @@ class GatewayService:
             payment,
         )
 
+        # ------------------------------------------------------------
+        # Optional explicit gateway is only a consistency assertion.
+        # It must never override historical Payment.gateway.
+        # ------------------------------------------------------------
+
         if gateway is not None:
             requested_gateway = cls._normalize_gateway(
                 gateway,
@@ -712,7 +698,8 @@ class GatewayService:
 
             if requested_gateway != payment_gateway:
                 raise PaymentGatewayMismatchError(
-                    "Refund gateway does not match the historical Payment gateway.",
+                    "Refund gateway does not match the historical "
+                    "Payment gateway.",
                     details={
                         "payment_id": getattr(
                             payment,
@@ -725,16 +712,21 @@ class GatewayService:
                     },
                 )
 
-        normalized_gateway = payment_gateway
-
         client = cls._client(
-            normalized_gateway,
+            payment_gateway,
         )
+
+        # ------------------------------------------------------------
+        # CRITICAL:
+        #
+        # Check refund support BEFORE creating request / calling
+        # provider.
+        # ------------------------------------------------------------
 
         cls._require_capability(
             client=client,
-            gateway=normalized_gateway,
-            operation="refund",
+            gateway=payment_gateway,
+            operation=cls._OP_REFUND,
         )
 
         amount = cls._normalize_amount(
@@ -764,7 +756,7 @@ class GatewayService:
 
         if refund_currency != payment_currency:
             raise PaymentCurrencyMismatchError(
-                "Refund currency must match the Payment currency.",
+                "Refund currency must match Payment currency.",
                 details={
                     "payment_id": getattr(
                         payment,
@@ -813,7 +805,7 @@ class GatewayService:
             raise PaymentGatewayError(
                 "Payment gateway refund failed.",
                 details={
-                    "gateway": normalized_gateway.value,
+                    "gateway": payment_gateway.value,
                     "operation": cls._OP_REFUND,
                     "payment_id": getattr(
                         payment,
@@ -837,7 +829,7 @@ class GatewayService:
         cls._require_result_type(
             result=result,
             expected_type=GatewayRefundResult,
-            gateway=normalized_gateway,
+            gateway=payment_gateway,
             operation=cls._OP_REFUND,
             payment_id=getattr(
                 payment,
@@ -858,7 +850,7 @@ class GatewayService:
 
         cls._validate_refund_result(
             result=result,
-            expected_gateway=normalized_gateway,
+            expected_gateway=payment_gateway,
             payment=payment,
             refund=refund,
         )
@@ -880,10 +872,11 @@ class GatewayService:
         gateway: PaymentGateway | str | None = None,
     ) -> GatewaySettlementResult:
         """
-        Execute optional gateway settlement.
+        Execute an optional gateway settlement operation.
 
-        Settlement is a gateway capability, not a Payment domain
-        transition.
+        Settlement is a provider capability.
+
+        It is NOT a Payment state transition.
         """
 
         normalized_gateway = cls._normalize_gateway(
@@ -897,7 +890,7 @@ class GatewayService:
         cls._require_capability(
             client=client,
             gateway=normalized_gateway,
-            operation="settlement",
+            operation=cls._OP_SETTLEMENT,
         )
 
         request = GatewaySettlementRequest(
@@ -974,7 +967,7 @@ class GatewayService:
         gateway: PaymentGateway | str | None = None,
     ) -> GatewayReverseResult:
         """
-        Execute optional gateway reversal.
+        Execute an optional gateway reversal.
         """
 
         normalized_gateway = cls._normalize_gateway(
@@ -988,7 +981,7 @@ class GatewayService:
         cls._require_capability(
             client=client,
             gateway=normalized_gateway,
-            operation="reverse",
+            operation=cls._OP_REVERSE,
         )
 
         request = GatewayReverseRequest(
@@ -1065,9 +1058,9 @@ class GatewayService:
         gateway: PaymentGateway | str | None = None,
     ) -> GatewayInquiryResult:
         """
-        Query current/known gateway transaction state.
+        Query gateway transaction state.
 
-        Inquiry is deliberately separate from verification.
+        Inquiry is evidence retrieval only.
         """
 
         normalized_gateway = cls._normalize_gateway(
@@ -1081,7 +1074,7 @@ class GatewayService:
         cls._require_capability(
             client=client,
             gateway=normalized_gateway,
-            operation="inquiry",
+            operation=cls._OP_INQUIRY,
         )
 
         normalized_amount = (
@@ -1150,7 +1143,7 @@ class GatewayService:
         return result
 
     # ================================
-    # CALLBACK
+    # CALLBACK NORMALIZATION
     # ================================
 
     @classmethod
@@ -1161,26 +1154,25 @@ class GatewayService:
         gateway: PaymentGateway | str,
     ) -> GatewayCallback:
         """
-        Parse a provider callback.
+        Normalize an untrusted provider callback.
 
         IMPORTANT:
 
-        This method ONLY normalizes provider input.
+        This method does not:
 
-        It does NOT:
+        - identify Payment
+        - identify PaymentAttempt
+        - lock rows
+        - verify amount against Payment
+        - mutate state
+        - persist anything
+        - consume Payment
+        - publish events
 
-            - identify Payment
-            - identify PaymentAttempt
-            - lock anything
-            - verify amount
-            - mutate state
-            - persist callback
-            - consume Payment
-            - publish events
+        It only converts provider input into the normalized callback DTO.
 
-        The callback/application service performs those operations.
-
-        Treat callback data as untrusted evidence.
+        The application verification workflow remains responsible for
+        financial verification.
         """
 
         normalized_gateway = cls._normalize_gateway(
@@ -1207,7 +1199,7 @@ class GatewayService:
         cls._require_capability(
             client=client,
             gateway=normalized_gateway,
-            operation="callback",
+            operation=cls._OP_CALLBACK,
         )
 
         try:
@@ -1243,7 +1235,7 @@ class GatewayService:
         return result
 
     # ================================
-    # PAYMENT / ATTEMPT VALIDATION
+    # PAYMENT / ATTEMPT CONSISTENCY
     # ================================
 
     @classmethod
@@ -1254,13 +1246,13 @@ class GatewayService:
         attempt: Any,
     ) -> None:
         """
-        Ensure that PaymentAttempt belongs to Payment.
+        Ensure that the supplied attempt belongs to the supplied Payment.
 
-        This is an object consistency check.
+        This is a consistency check only.
 
-        It does NOT provide concurrency protection.
+        It is NOT a concurrency primitive.
 
-        The application service remains responsible for locking.
+        Locking remains owned by the application service.
         """
 
         if payment is None:
@@ -1314,7 +1306,7 @@ class GatewayService:
             )
 
     # ================================
-    # PAYMENT GATEWAY SNAPSHOT
+    # HISTORICAL PAYMENT GATEWAY
     # ================================
 
     @classmethod
@@ -1323,11 +1315,9 @@ class GatewayService:
         payment: Any,
     ) -> PaymentGateway:
         """
-        Resolve the immutable gateway snapshot stored on Payment.
+        Resolve the historical gateway stored on Payment.
 
-        Payment.gateway is authoritative for historical operations.
-
-        DEFAULT_PAYMENT_GATEWAY is NEVER used for an existing Payment.
+        DEFAULT_PAYMENT_GATEWAY is never used for an existing Payment.
         """
 
         gateway = getattr(
@@ -1353,7 +1343,7 @@ class GatewayService:
         )
 
     # ================================
-    # PAYMENT ATTEMPT IDENTITY
+    # PAYMENT ATTEMPT AUTHORITY
     # ================================
 
     @staticmethod
@@ -1363,10 +1353,7 @@ class GatewayService:
         operation: str,
     ) -> str:
         """
-        Resolve the historical gateway authority from PaymentAttempt.
-
-        This is the authoritative location of gateway execution
-        identity.
+        Resolve gateway authority exclusively from PaymentAttempt.
         """
 
         authority = getattr(
@@ -1389,7 +1376,7 @@ class GatewayService:
         )
 
     # ================================
-    # PAYMENT ORDER ID
+    # ORDER ID
     # ================================
 
     @staticmethod
@@ -1397,11 +1384,9 @@ class GatewayService:
         payment: Any,
     ) -> str:
         """
-        Resolve stable Order identifier.
+        Resolve the stable Order identifier.
 
-        The Order object is read only.
-
-        No query is performed here.
+        No database query is performed.
         """
 
         order_id = getattr(
@@ -1445,11 +1430,10 @@ class GatewayService:
         refund: Any,
     ) -> str | None:
         """
-        Return the internal Refund identifier as provider-neutral
-        correlation/reference data.
+        Return an internal Refund identifier as provider-neutral
+        correlation data.
 
-        Provider-specific refund identities must be generated by the
-        provider implementation.
+        Provider-specific refund identities are generated by adapters.
         """
 
         value = getattr(
@@ -1464,7 +1448,7 @@ class GatewayService:
         return str(value)
 
     # ================================
-    # FINANCIAL NORMALIZATION
+    # AMOUNT NORMALIZATION
     # ================================
 
     @staticmethod
@@ -1476,12 +1460,10 @@ class GatewayService:
         """
         Normalize a financial amount without floating-point arithmetic.
 
-        Rules:
+        Requirements:
 
-            amount must be finite
-            amount must be > 0
-
-        Currency conversion is deliberately outside GatewayService.
+        - finite
+        - strictly positive
         """
 
         try:
@@ -1521,14 +1503,18 @@ class GatewayService:
 
         return normalized
 
+    # ================================
+    # CURRENCY NORMALIZATION
+    # ================================
+
     @staticmethod
     def _normalize_currency(
         currency: str | None,
     ) -> str:
         """
-        Normalize currency identifier.
+        Normalize a currency identifier.
 
-        No FX or currency conversion is performed.
+        No FX conversion is performed.
         """
 
         normalized = str(
@@ -1558,9 +1544,8 @@ class GatewayService:
         details: Mapping[str, Any] | None = None,
     ) -> str:
         """
-        Normalize a required textual field.
-
-        No sensitive values are copied into exception details.
+        Normalize and require a textual value.
+        Sensitive provider data must never be placed in exception details.
         """
 
         normalized = str(
@@ -1596,7 +1581,9 @@ class GatewayService:
         **details: Any,
     ) -> None:
         """
-        Enforce typed provider result contract.
+        Enforce the typed gateway result contract.
+
+        Provider dictionaries are rejected here.
         """
 
         if isinstance(
@@ -1605,20 +1592,18 @@ class GatewayService:
         ):
             return
 
-        error_details = {
-            "gateway": gateway.value,
-            "operation": operation,
-            **details,
-        }
-
         raise PaymentGatewayError(
             "Gateway returned an invalid result.",
-            details=error_details,
+            details={
+                "gateway": gateway.value,
+                "operation": operation,
+                **details,
+            },
             retryable=False,
         )
 
     # ================================
-    # RESULT GATEWAY VALIDATION
+    # GENERIC RESULT GATEWAY VALIDATION
     # ================================
 
     @staticmethod
@@ -1629,11 +1614,7 @@ class GatewayService:
         operation: str,
     ) -> None:
         """
-        Ensure provider result identifies the gateway that was actually
-        called.
-
-        A provider must never be allowed to return evidence belonging
-        to another gateway.
+        Ensure returned evidence belongs to the gateway actually called.
         """
 
         result_gateway = getattr(
@@ -1653,8 +1634,10 @@ class GatewayService:
             )
 
         try:
-            normalized_result_gateway = GatewayService._normalize_gateway(
-                result_gateway,
+            normalized_result_gateway = (
+                GatewayService._normalize_gateway(
+                    result_gateway,
+                )
             )
         except PaymentGatewayError as exc:
             raise PaymentGatewayError(
@@ -1686,19 +1669,15 @@ class GatewayService:
         *,
         result: GatewayPaymentResult,
         expected_gateway: PaymentGateway,
-        operation: str,
     ) -> None:
         """
         Validate payment initiation evidence.
-
-        A successful initiation must provide an authority because
-        subsequent payment URL / verification operations require it.
         """
 
         cls._validate_generic_result_gateway(
             result=result,
             expected_gateway=expected_gateway,
-            operation=operation,
+            operation=cls._OP_INITIATE,
         )
 
         if not result.success:
@@ -1713,7 +1692,7 @@ class GatewayService:
                 "Successful gateway payment initiation requires an authority.",
                 details={
                     "gateway": expected_gateway.value,
-                    "operation": operation,
+                    "operation": cls._OP_INITIATE,
                 },
                 retryable=False,
             )
@@ -1732,12 +1711,9 @@ class GatewayService:
         expected_gateway: PaymentGateway,
     ) -> None:
         """
-        Validate normalized verification evidence against immutable
-        Payment financial snapshots and historical Attempt identity.
+        Validate normalized verification evidence.
 
-        This is evidence validation only.
-
-        It does NOT mutate Payment.
+        This method never changes financial state.
         """
 
         cls._validate_generic_result_gateway(
@@ -1769,8 +1745,7 @@ class GatewayService:
         )
 
         # ------------------------------------------------------------
-        # If gateway reports amount, it becomes evidence that MUST
-        # match the immutable Payment snapshot.
+        # Amount evidence
         # ------------------------------------------------------------
 
         if result.amount is not None:
@@ -1798,7 +1773,7 @@ class GatewayService:
                 )
 
         # ------------------------------------------------------------
-        # If gateway reports currency, it MUST match Payment currency.
+        # Currency evidence
         # ------------------------------------------------------------
 
         if result.currency is not None:
@@ -1825,19 +1800,20 @@ class GatewayService:
                 )
 
         # ------------------------------------------------------------
-        # Successful verification must contain gateway financial
-        # identity.
+        # Successful verification MUST have gateway identity.
         # ------------------------------------------------------------
 
         if result.success:
-            if not (
+            has_identity = bool(
                 str(
                     result.gateway_reference or "",
                 ).strip()
                 or str(
                     result.gateway_transaction_id or "",
                 ).strip()
-            ):
+            )
+
+            if not has_identity:
                 raise PaymentGatewayError(
                     "Successful gateway verification requires gateway identity.",
                     details={
@@ -1857,14 +1833,11 @@ class GatewayService:
                     retryable=False,
                 )
 
-            # The request authority is the historical attempt authority.
+            # --------------------------------------------------------
+            # Authority is already required from PaymentAttempt.
             #
-            # GatewayVerificationResult does not currently expose an
-            # authority field, therefore the actual authority correlation
-            # remains the responsibility of the application verification
-            # workflow / gateway implementation.
-            #
-            # We intentionally do NOT invent or mutate authority here.
+            # GatewayService intentionally does not mutate it.
+            # --------------------------------------------------------
 
             if not expected_authority:
                 raise PaymentGatewayError(
@@ -1904,12 +1877,12 @@ class GatewayService:
 
         GatewayService does NOT calculate refundable balance.
 
-        It only verifies:
+        It validates only:
 
-            provider identity
-            gateway identity
-            currency consistency
-            successful refund identity
+        - provider identity
+        - gateway identity
+        - currency consistency
+        - successful refund identity
         """
 
         cls._validate_generic_result_gateway(
@@ -1952,17 +1925,32 @@ class GatewayService:
                 },
             )
 
+        # ------------------------------------------------------------
+        # Provider explicitly rejected the refund.
+        #
+        # Application service decides the domain state.
+        # ------------------------------------------------------------
+
         if not result.success:
             return
 
-        if not (
+        # ------------------------------------------------------------
+        # CRITICAL:
+        #
+        # A successful refund without provider identity is never
+        # accepted as financial evidence.
+        # ------------------------------------------------------------
+
+        has_identity = bool(
             str(
                 result.gateway_reference or "",
             ).strip()
             or str(
                 result.gateway_transaction_id or "",
             ).strip()
-        ):
+        )
+
+        if not has_identity:
             raise PaymentGatewayError(
                 "Successful gateway refund requires gateway identity.",
                 details={
@@ -1994,10 +1982,11 @@ class GatewayService:
         expected_gateway: PaymentGateway,
     ) -> None:
         """
-        Validate normalized callback envelope.
+        Validate normalized callback evidence.
 
-        Callback data remains untrusted until the application service
-        correlates it with Payment/Attempt and performs verification.
+        Callback remains untrusted until application-level verification.
+
+        No state transition occurs here.
         """
 
         cls._validate_generic_result_gateway(
@@ -2006,38 +1995,33 @@ class GatewayService:
             operation=cls._OP_CALLBACK,
         )
 
-        # A successful callback should normally carry at least one
-        # stable gateway identity.
-        #
-        # We intentionally do not require success=True here because
-        # failed callbacks may legitimately contain no financial
-        # reference depending on provider behavior.
+        if not result.success:
+            return
 
-        if result.success:
-            has_identity = bool(
-                str(
-                    result.authority or "",
-                ).strip()
-                or str(
-                    result.gateway_reference or "",
-                ).strip()
-                or str(
-                    result.gateway_transaction_id or "",
-                ).strip()
+        has_identity = bool(
+            str(
+                result.authority or "",
+            ).strip()
+            or str(
+                result.gateway_reference or "",
+            ).strip()
+            or str(
+                result.gateway_transaction_id or "",
+            ).strip()
+        )
+
+        if not has_identity:
+            raise PaymentGatewayError(
+                "Successful gateway callback requires gateway identity.",
+                details={
+                    "gateway": expected_gateway.value,
+                    "operation": cls._OP_CALLBACK,
+                },
+                retryable=False,
             )
 
-            if not has_identity:
-                raise PaymentGatewayError(
-                    "Successful gateway callback requires gateway identity.",
-                    details={
-                        "gateway": expected_gateway.value,
-                        "operation": cls._OP_CALLBACK,
-                    },
-                    retryable=False,
-                )
-
     # ================================
-    # HISTORICAL ATTEMPT HELPERS
+    # ATTEMPT HELPERS
     # ================================
 
     @staticmethod
@@ -2045,11 +2029,9 @@ class GatewayService:
         attempt: Any,
     ) -> bool:
         """
-        Small pure helper for callers/tests.
+        Pure compatibility helper.
 
-        This method does not authorize refund.
-
-        Refund application policy remains outside GatewayService.
+        This does not authorize refunds.
         """
 
         status = getattr(
@@ -2058,4 +2040,9 @@ class GatewayService:
             None,
         )
 
-        return status == PaymentAttemptStatus.SUCCESS
+        try:
+            from payment.enums import PaymentAttemptStatus
+
+            return status == PaymentAttemptStatus.SUCCESS
+        except ImportError:
+            return False

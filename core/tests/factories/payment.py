@@ -5,9 +5,10 @@ from tests.base import BaseFactory
 
 from payment.models import (
     PaymentModel,
+)
+from payment.enums import (
     PaymentStatusType,
 )
-
 from tests.factories.order import OrderFactory
 
 
@@ -30,7 +31,7 @@ class PaymentFactory(BaseFactory):
         "order.total_price"
     )
 
-    status = PaymentStatusType.pending
+    status = PaymentStatusType.PENDING
     
     response_json = factory.LazyFunction(dict)
 
@@ -39,22 +40,22 @@ class PaymentFactory(BaseFactory):
     class Params:
 
         success = factory.Trait(
-            status=PaymentStatusType.success,
+            status=PaymentStatusType.SUCCESS,
             ref_id=factory.Sequence(
                 lambda n: 100000 + n
             ),
         )
 
         failed = factory.Trait(
-            status=PaymentStatusType.failed,
+            status=PaymentStatusType.FAILED,
         )
 
         pending = factory.Trait(
-            status=PaymentStatusType.pending,
+            status=PaymentStatusType.PENDING,
         )
             
         consumed = factory.Trait(
-            status=PaymentStatusType.success,
+            status=PaymentStatusType.SUCCESS,
             is_consumed=True,
             ref_id=factory.Sequence(
                 lambda n: 100000 + n

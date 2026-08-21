@@ -2,7 +2,7 @@
 import pytest
 
 from order.models import OrderStatusType
-from payment.models import PaymentStatusType
+from payment.enums import PaymentStatusType
 
 from order.services.order import OrderService
 from payment.services.services import PaymentService

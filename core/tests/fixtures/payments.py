@@ -6,6 +6,8 @@ from tests.factories.payment import PaymentFactory
 
 from payment.models import (
     PaymentModel,
+)
+from payment.enums import (
     PaymentStatusType,
 )
 
@@ -17,7 +19,7 @@ def success_payment(order):
         authority_id="AUTH-123",
         amount=order.total_price,
         ref_id=123456,
-        status=PaymentStatusType.success,
+        status=PaymentStatusType.SUCCESS,
     )
     
 @pytest.fixture
@@ -40,7 +42,7 @@ def failed_payment(order):
         order=order,
         authority_id="FAILED",
         amount=order.total_price,
-        status=PaymentStatusType.failed,
+        status=PaymentStatusType.FAILED,
     )
 
 @pytest.fixture
@@ -50,7 +52,7 @@ def pending_payment(order):
         order=order,
         authority_id="PENDING",
         amount=order.total_price,
-        status=PaymentStatusType.pending,
+        status=PaymentStatusType.PENDING,
     )
 
 @pytest.fixture
@@ -69,35 +71,3 @@ def successful_payment(order):
         order=order,
         success=True,
     )
-
-
-# @pytest.fixture
-# def failed_payment(order):
-#     return PaymentFactory(
-#         order=order,
-#         failed=True,
-#     )
-
-
-# @pytest.fixture
-# def consumed_payment(order):
-#     return PaymentFactory(
-#         order=order,
-#         consumed=True,
-#     )
-    
-# @pytest.fixture
-# def refunded_payment(
-#     success_payment,
-# ):
-#     success_payment.status = PaymentStatusType.refunded
-#     success_payment.is_refunded = True
-
-#     success_payment.save(
-#         update_fields=[
-#             "status",
-#             "is_refunded",
-#         ]
-#     )
-
-#     return success_payment

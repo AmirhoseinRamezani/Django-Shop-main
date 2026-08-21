@@ -2,7 +2,7 @@
 import pytest
 
 
-from tests.assertions.events import (
+from tests.assertions import (
     assert_event_pending,
     assert_event_processed,
     assert_event_failed,

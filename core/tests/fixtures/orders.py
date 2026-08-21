@@ -20,9 +20,10 @@ from order.models import (
 
 from payment.models import (
     PaymentModel,
+)
+from payment.enums import (
     PaymentStatusType,
 )
-
 # @pytest.fixture
 # def order(db, user):
 #     return OrderFactory(user=user)

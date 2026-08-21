@@ -1,15 +1,4 @@
-# # tests/factories/base.py
-# import factory
-
-# from factory.django import DjangoModelFactory
-
-
-# class BaseFactory(factory.django.DjangoModelFactory):
-
-#     class Meta:
-#         abstract = True
-#         skip_postgeneration_save=True 
-
+# tests/factories/base.py
 import factory
 
 from tests.base import BaseFactory

@@ -1,6 +1,6 @@
 # tests/factories/accounts.py
 import factory
-from tests.base import BaseFactory
+from tests.factories.base import BaseFactory
 
 from accounts.models import (
     UserManager,
@@ -52,8 +52,7 @@ class UserFactory(BaseFactory):
     
     # is_active = True => status = ProductStatusType.PUBLISH
     is_verified = True
-    
-    
+
         
     class Params:
 
