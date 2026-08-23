@@ -1,11 +1,12 @@
 # tests/factories/order.py
 from datetime import timedelta
+from decimal import Decimal
 
 import factory
 from factory import fuzzy
 from django.utils import timezone
 
-from tests.base import BaseFactory
+from tests.factories.base import BaseFactory
 
 from order.models import (
     OrderModel,
@@ -22,26 +23,32 @@ from tests.factories.shop import (
     ProductFactory,
 )
 
-
 class OrderFactory(BaseFactory):
 
     class Meta:
         model = OrderModel
 
     user = factory.SubFactory(UserFactory)
-
     sale_type = SaleType.ONLINE
-
     status = OrderStatusType.pending
 
-    total_price = fuzzy.FuzzyInteger(100000, 5000000)
+    # total_price = factory.Faker("pydecimal", left_digits=5, right_digits=2, positive=True)
+    # Legacy gross total kept because it is still a real model field.
+    total_price = Decimal("100000")
 
-    # full_name = factory.Faker("name")
+    # Pricing snapshot
+    subtotal_price = Decimal("100000")
+    discount_amount = Decimal("0")
+    shipping_price = Decimal("0")
+    tax_amount = Decimal("0")
+    payable_price = Decimal("100000")
+
+    # Buyer snapshot
     full_name = factory.LazyAttribute(
         lambda o: o.user.profile.get_fullname()
     )
 
-    # phone = '09123456789'
+
     phone = factory.LazyAttribute(
         lambda o: o.user.profile.phone_number
     )
@@ -50,19 +57,19 @@ class OrderFactory(BaseFactory):
         lambda o: o.user.email
     )
 
+    # Address snapshot
     address = "Test Address"
-
     city = "Tehran"
-
     state = "Tehran"
-
     zip_code = "1111111111"
-
     coupon = None
-
     coupon_code = None
-
     coupon_discount_percent = None
+    
+    # Datetime fields (Constraint enforcement)
+    paid_date = None
+    completed_date = None
+    cancelled_date = None
 
     expire_at = factory.LazyFunction(
         lambda: timezone.now() + timedelta(minutes=15)
@@ -72,49 +79,60 @@ class OrderFactory(BaseFactory):
 
         failed = factory.Trait(
             status=OrderStatusType.failed,
+            # paid_date=factory.LazyFunction(timezone.now),
         )
 
         paid = factory.Trait(
             status=OrderStatusType.paid,
+            paid_date=factory.LazyFunction(timezone.now),
         )
 
         processing = factory.Trait(
             status=OrderStatusType.processing,
+            paid_date=factory.LazyFunction(timezone.now),
         )
 
         shipped = factory.Trait(
             status=OrderStatusType.shipped,
+            paid_date=factory.LazyFunction(timezone.now),
         )
 
         delivered = factory.Trait(
             status=OrderStatusType.delivered,
+            paid_date=factory.LazyFunction(timezone.now),
+            completed_date=factory.LazyFunction(timezone.now),
         )
 
         return_requested = factory.Trait(
             status=OrderStatusType.return_requested,
+            paid_date=factory.LazyFunction(timezone.now),
         )
 
         returned = factory.Trait(
             status=OrderStatusType.returned,
+            paid_date=factory.LazyFunction(timezone.now),
         )
 
         refunded = factory.Trait(
             status=OrderStatusType.refunded,
+            paid_date=factory.LazyFunction(timezone.now),
         )
 
         cancelled = factory.Trait(
             status=OrderStatusType.cancelled,
+            paid_date=None,
+            cancelled_date=factory.LazyFunction(timezone.now),
         )
 
         with_coupon = factory.Trait(
             coupon=factory.SubFactory(CouponFactory),
 
             coupon_code=factory.SelfAttribute(
-                "..coupon.code"
+                "coupon.code"
             ),
 
             coupon_discount_percent=factory.SelfAttribute(
-                "..coupon.discount_percent"
+                "coupon.discount_percent"
             ),
         )
 
@@ -148,7 +166,10 @@ class OrderItemFactory(BaseFactory):
 
 
 class OrderWithItemsFactory(OrderFactory):
-
+    
+    class Meta:
+        skip_postgeneration_save = True
+        
     @factory.post_generation
     def items(self, create, extracted, **kwargs):
 

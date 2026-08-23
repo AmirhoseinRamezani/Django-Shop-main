@@ -2,24 +2,18 @@
 
 from events.models import OutboxEvent
 
-class OutboxEventBuilder:
+class EventBuilder:
     """
     Fluent builder for event scenarios.
 
     Usage:
-
     OutboxEventBuilder()
-
         .topic("order.created")
-
         .payload({...})
-
         .pending()
-
         .build()
 
     """
-
 
     def __init__(self):
 

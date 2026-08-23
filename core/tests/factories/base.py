@@ -1,21 +1,14 @@
 # tests/factories/base.py
 import factory
+from factory.django import DjangoModelFactory
 
-from tests.base import BaseFactory
-
-
-class DomainFactory(BaseFactory):
+class BaseFactory(DjangoModelFactory):
     """
     Root factory for every domain factory.
+    Provides common helpers and uniform factory behavior.
 
-    Provides common traits.
-
-    UserFactory
-    ProductFactory
-    CouponFactory
-    OrderFactory
-
-    all inherit this class.
+    UserFactory, ProductFactory, CouponFactory, OrderFactory, PaymentFactory, etc.
+    all inherit from this class.
     """
 
     class Meta:
@@ -23,15 +16,16 @@ class DomainFactory(BaseFactory):
 
     @classmethod
     def create_batch_for(cls, size, **kwargs):
+        """Creates a batch of saved model instances."""
         return cls.create_batch(size=size, **kwargs)
 
     @classmethod
     def one(cls, **kwargs):
+        """Convenience single instance builder (persisted)."""
         return cls.create(**kwargs)
 
     @classmethod
     def build_one(cls, **kwargs):
+        """Convenience single instance builder (in-memory)."""
         return cls.build(**kwargs)
-        
-        
         

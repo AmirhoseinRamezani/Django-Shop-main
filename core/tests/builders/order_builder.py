@@ -1,5 +1,5 @@
 # tests/builders/order_builder.py
-    
+from typing import Any, Optional
 from datetime import timedelta
 
 from django.utils import timezone
@@ -15,25 +15,24 @@ from tests.factories.order import (
     OrderItemFactory,
 )
 
-
 class OrderBuilder(BaseBuilder):
 
     factory = OrderFactory
 
+    def __init__(self)-> None:
+        self._attrs: dict[str, Any] = {}
     # --------------------------------------------------
 
-    def pending(self):
+    def pending(self)-> "OrderBuilder":
+        self._attrs["status"] = OrderStatusType.pending
+        self._attrs["paid_date"] = None
+        return self
 
-        return self.with_attrs(
-            status=OrderStatusType.pending
-        )
-
-    def paid(self):
-
-        return self.with_attrs(
-            status=OrderStatusType.paid
-        )
-
+    def paid(self)-> "OrderBuilder":
+        self._attrs["status"] = OrderStatusType.paid
+        self._attrs["paid_date"] = timezone.now()
+        return self
+        
     def failed(self):
 
         return self.with_attrs(
@@ -95,23 +94,22 @@ class OrderBuilder(BaseBuilder):
     # --------------------------------------------------
 
     def with_user(self, user):
-
         return self.with_attrs(
             user=user,
         )
+    
+    def for_user(self, user: Any) -> "OrderBuilder":
+        self._attrs["user"] = user
+        return self
 
     # --------------------------------------------------
 
     def with_address(self, address):
 
         return self.with_attrs(
-
             address=address.address,
-
             city=address.city,
-
             state=address.state,
-
             zip_code=address.zip_code,
         )
 
@@ -143,15 +141,10 @@ class OrderBuilder(BaseBuilder):
     # --------------------------------------------------
 
     def with_item(
-
         self,
-
         product,
-
         quantity=1,
-
         price=None,
-
     ):
 
         items = self._attrs.setdefault(
@@ -162,11 +155,8 @@ class OrderBuilder(BaseBuilder):
         items.append(
 
             dict(
-
                 product=product,
-
                 quantity=quantity,
-
                 price=price or product.final_price,
             )
 
@@ -199,13 +189,9 @@ class OrderBuilder(BaseBuilder):
         for item in items:
 
             OrderItemFactory(
-
                 order=order,
-
                 product=item["product"],
-
                 quantity=item["quantity"],
-
                 price=item["price"],
             )
 

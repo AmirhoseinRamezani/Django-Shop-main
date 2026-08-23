@@ -3,23 +3,12 @@ import factory
 from tests.factories.base import BaseFactory
 
 from accounts.models import (
-    UserManager,
-    User,
     Profile,
     DeviceSession,
     RefreshToken,
 )
 
-
 from django.contrib.auth import get_user_model
-
-# from tests.factories.shop import ProductFactory
-
-# from tests.factories.shop import (
-#     AddressFactory,
-#     CouponFactory,
-#     ProductFactory,
-# )
 
 
 User = get_user_model()
@@ -28,32 +17,25 @@ class UserFactory(BaseFactory):
 
     class Meta:
         model = User
+        skip_postgeneration_save = True
 
     email = factory.Sequence(
         lambda n: f"user{n}@test.com"
     )
-    # username = factory.Sequence(
-    #     lambda n: f"user{n}"
-    # )
 
-    # email = factory.LazyAttribute(
-    #     lambda o: f"{o.username}@test.com"
-    # )
+    @factory.post_generation
+    def password(self, create, extracted, **kwargs):
+        """Set user password properly after creation."""
+        raw_password = extracted or "password123"
+        self.set_password(raw_password)
+        if create:
+            self.save(update_fields=["password"])
 
-    # phone = factory.Sequence(
-    #     lambda n: f"0912000{n:04}"
-    # )
-
-    password = factory.PostGenerationMethodCall(
-        "set_password",
-        "password123",
-    )
-
-    
-    # is_active = True => status = ProductStatusType.PUBLISH
+    is_staff = False
+    is_superuser = False
+    is_active = True
     is_verified = True
 
-        
     class Params:
 
         admin = factory.Trait(
@@ -65,74 +47,79 @@ class UserFactory(BaseFactory):
             is_superuser=True,
         )
 
-
         unverified = factory.Trait(
             is_verified=False,
         )
         
     @factory.post_generation
     def profile(self, create, extracted, **kwargs):
-        # phone_number = factory.Sequence(
-        #     lambda n: f"0912000{n:04}"
-        # )
-        
+        """
+        Populate defaults on the auto-generated profile created by post_save signal.
+        Allows custom profile fields via kwargs or extracted dict without overriding user.profile attribute name.
+        """
         if not create:
             return
-        
-        profile = self.profile
-        
-        if not profile.first_name:
-            profile.first_name = "Test"
 
-        if not profile.last_name:
-            profile.last_name = "User"
-        
-        if not profile.phone_number:
-            profile.phone_number = "09123456789"
-        
-        
-        if extracted:
+        # Fetch signal-created profile
+        user_profile = getattr(self, "profile", None)
+        if not user_profile:
+            return
 
-            for k, v in extracted.items():
-                setattr(profile, k, v)
+        updated = False
 
-        profile.save()
-    # @factory.post_generation
-    # def profile(self, create, extracted, **kwargs):
+        # Apply default mock values if empty
+        if not user_profile.first_name:
+            user_profile.first_name = "Test"
+            updated = True
+        if not user_profile.last_name:
+            user_profile.last_name = "User"
+            updated = True
+        if not user_profile.phone_number:
+            user_profile.phone_number = "09123456789"
+            updated = True
 
-    #     if not create:
-    #         return
+        # Apply explicitly passed dictionary profile overrides
+        if extracted and isinstance(extracted, dict):
+            for key, val in extracted.items():
+                setattr(user_profile, key, val)
+            updated = True
 
-    #     profile = self.profile
-
-    #     if not profile.phone_number:
-    #         profile.phone_number = "09123456789"
-
-    #     if not profile.first_name:
-    #         profile.first_name = "Test"
-
-    #     if not profile.last_name:
-    #         profile.last_name = "User"
-
-    #     if extracted:
-    #         for k, v in extracted.items():
-    #             setattr(profile, k, v)
-
-    #     profile.save()
+        if updated:
+            user_profile.save()
         
 class ProfileFactory(BaseFactory):
-
+    """
+    Factory for Profile model.
+    Utilizes UserFactory and updates the signal-created profile instance.
+    """
     class Meta:
         model = Profile
+        skip_postgeneration_save = True
 
-    user = factory.LazyFunction(UserFactory)
-
+    user = factory.SubFactory(UserFactory)
     first_name = factory.Faker("first_name")
-
     last_name = factory.Faker("last_name")
-
     phone_number = "09123456789"
+    
+    @classmethod
+    def _create(cls, model_class, *args, **kwargs):
+        """
+        Prevent Duplicate Key IntegrityError caused by Django post_save signal.
+        The user creation fires signal -> Profile.objects.create(user=user).
+        We catch that profile and update its attributes.
+        """
+        user = kwargs.pop("user", None)
+        if user is None:
+            user = UserFactory.create()
 
+        # Get or create safety net
+        profile, _ = model_class.objects.get_or_create(user=user)
+
+        for attr, value in kwargs.items():
+            setattr(profile, attr, value)
+
+        profile.save()
+        return profile
 
 class DeviceSessionFactory(BaseFactory):
 
