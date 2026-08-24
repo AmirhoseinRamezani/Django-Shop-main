@@ -1,8 +1,8 @@
 # tests/builders/scenario_builder.py
 from tests.builders.cart_builder import CartBuilder
 from tests.builders.coupon_builder import CouponBuilder
-from tests.builders.order_builder import OrderBuilder
-from tests.builders.payment_builder import PaymentBuilder
+from tests.builders.order_builder import OrderScenarioBuilder
+from tests.builders.payment_builder import PaymentScenarioBuilder
 from tests.builders.product_builder import ProductBuilder
 from tests.builders.user_builder import UserBuilder
 
@@ -18,8 +18,8 @@ class ScenarioBuilder:
     def __init__(self):
         self.user_builder = UserBuilder()
         self.cart_builder = CartBuilder()
-        self.order_builder = OrderBuilder()
-        self.payment_builder = PaymentBuilder()
+        self.order_builder = OrderScenarioBuilder()
+        self.payment_builder = PaymentScenarioBuilder()
         self.product_builder = ProductBuilder()
         self.coupon_builder = CouponBuilder()
 
@@ -98,7 +98,7 @@ class OrderScenario:
 
         self.order = (
 
-            OrderBuilder()
+            OrderScenarioBuilder()
             .with_user(self.user)
             .with_cart(self.cart)
             .with_address()
@@ -112,7 +112,7 @@ class OrderScenario:
 
         self.payment = (
 
-            PaymentBuilder(self.order)
+            PaymentScenarioBuilder(self.order)
             .start()
             .build()
         )
@@ -121,11 +121,11 @@ class OrderScenario:
 
     def verify(self):
 
-        PaymentBuilder(
+        PaymentScenarioBuilder(
             self.order
         ).start()
 
-        PaymentBuilder(
+        PaymentScenarioBuilder(
             self.order
         ).verify()
 

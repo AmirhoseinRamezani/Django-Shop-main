@@ -1,4 +1,4 @@
-# tests/builders/scenario_builder.py
+# tests/builders/scenario.py
 from dataclasses import dataclass
 
 from accounts.models import User

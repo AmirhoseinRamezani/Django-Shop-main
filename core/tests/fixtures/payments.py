@@ -1,5 +1,4 @@
 # tests/fixtures/payments.py
-
 import pytest
 
 from tests.factories.payment import PaymentFactory
@@ -26,9 +25,7 @@ def success_payment(order):
 def consumed_payment(
     success_payment,
 ):
-
     success_payment.is_consumed = True
-
     success_payment.save(
         update_fields=["is_consumed"]
     )
@@ -63,7 +60,6 @@ def payment_factory():
 @pytest.fixture
 def payment(order):
     return PaymentFactory(order=order)
-
 
 @pytest.fixture
 def successful_payment(order):

@@ -1,7 +1,7 @@
 # tests/builders/checkout_builder.py
 
 from tests.builders.cart_builder import CartBuilder
-from tests.builders.order_builder import OrderBuilder
+from tests.builders.order_builder import OrderScenarioBuilder
 from tests.builders.user_builder import UserBuilder
 
 
@@ -13,7 +13,7 @@ class CheckoutBuilder:
     def __init__(self):
         self._user_builder = UserBuilder()
         self._cart_builder = CartBuilder()
-        self._order_builder = OrderBuilder()
+        self._order_builder = OrderScenarioBuilder()
 
     def for_user(self, user):
         self._user_builder._attrs['user'] = user

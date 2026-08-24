@@ -5,9 +5,9 @@ from payment.enums import PaymentStatusType
 from events.models import OutboxStatus
 
 
-# --------------------------------------------------
+# ------------------------------------
 # refresh
-# --------------------------------------------------
+# ------------------------------------
 
 def refresh(*objects):
     for obj in objects:
@@ -15,9 +15,9 @@ def refresh(*objects):
             obj.refresh_from_db()
 
 
-# --------------------------------------------------
+# ------------------------------------
 # Orders
-# --------------------------------------------------
+# ------------------------------------
 
 def assert_order_created(order):
     refresh(order)
@@ -42,9 +42,9 @@ def assert_order_item_created(order, count=1):
     assert order.order_items.count() == count
 
 
-# --------------------------------------------------
+# ------------------------------------
 # Payment
-# --------------------------------------------------
+# ------------------------------------
 
 def assert_payment_pending(payment):
     refresh(payment)
@@ -70,9 +70,9 @@ def assert_payment_consumed(payment):
     assert payment.is_consumed
 
 
-# --------------------------------------------------
+# ------------------------------------
 # Coupon
-# --------------------------------------------------
+# ------------------------------------
 
 def assert_coupon_used(coupon, count=1):
     refresh(coupon)
@@ -80,9 +80,9 @@ def assert_coupon_used(coupon, count=1):
     assert coupon.used_count == count
 
 
-# --------------------------------------------------
+# ------------------------------------
 # Stock
-# --------------------------------------------------
+# ------------------------------------
 
 def assert_stock_decreased(
     product,
@@ -103,9 +103,9 @@ def assert_stock_restored(
     assert product.stock == old_stock
 
 
-# --------------------------------------------------
+# ------------------------------------
 # Outbox
-# --------------------------------------------------
+# ------------------------------------
 
 def assert_processed(event):
     refresh(event)

@@ -1,20 +1,4 @@
-# # tests/fixtures/events.py
-# import pytest
-
-# from tests.factories.events import (
-#     OutboxEventFactory,
-# )
-
-# @pytest.fixture
-# def outbox_event(db):
-#     return OutboxEventFactory()
-
-
-# @pytest.fixture
-# def paid_outbox_event(db):
-#     return OutboxEventFactory(
-#         order_paid=True,
-#     )
+# tests/fixtures/events.py
 
 import pytest
 
@@ -23,21 +7,15 @@ from tests.factories.events import (
     OutboxEventFactory,
 )
 
-
-
 @pytest.fixture
 def event_factory():
 
     return OutboxEventFactory
 
-
-
 @pytest.fixture
 def pending_event(db):
 
     return OutboxEventFactory()
-
-
 
 @pytest.fixture
 def processed_event(db):
@@ -45,8 +23,6 @@ def processed_event(db):
     return OutboxEventFactory(
         processed=True
     )
-
-
 
 @pytest.fixture
 def failed_event(db):

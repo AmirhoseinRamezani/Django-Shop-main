@@ -94,34 +94,3 @@ class BaseTest:
     Parent class for test classes.
     """
     pass
-
-# from tests.assertions import (
-#     refresh,
-#     assert_order_created,
-#     assert_order_paid,
-#     assert_payment_success,
-#     assert_payment_pending,
-#     assert_processed,
-# )
-
-
-# class BaseTestCase:
-
-#     refresh = staticmethod(refresh)
-
-#     assert_order_created = staticmethod(assert_order_created)
-
-#     assert_order_paid = staticmethod(assert_order_paid)
-
-#     assert_payment_success = staticmethod(assert_payment_success)
-
-#     assert_payment_pending = staticmethod(assert_payment_pending)
-
-#     assert_processed = staticmethod(assert_processed)
-
-
-# class BaseFactory:
-#     """
-#     Parent class for all Builders/Factories.
-#     """
-#     pass

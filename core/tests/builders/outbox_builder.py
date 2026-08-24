@@ -1,4 +1,4 @@
-# tests/builders/outbox.py
+# tests/builders/outbox_builder.py
 from tests.builders.base import BaseBuilder
 
 from tests.factories.events import (

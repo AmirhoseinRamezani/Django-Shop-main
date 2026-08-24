@@ -24,9 +24,7 @@ from payment.models import (
 from payment.enums import (
     PaymentStatusType,
 )
-# @pytest.fixture
-# def order(db, user):
-#     return OrderFactory(user=user)
+
 @pytest.fixture
 def order(
     user,
@@ -36,7 +34,6 @@ def order(
     """
     Standard pending order.
     """
-
     order = OrderModel.objects.create(
         user=user,
         sale_type=SaleType.ONLINE,
@@ -77,45 +74,34 @@ def paid_order(order):
     return order
 
 
-# @pytest.fixture
-# def processing_order():
-#     return OrderFactory(processing=True)
 @pytest.fixture
 def processing_order(order):
     order.status = OrderStatusType.processing
     order.save(update_fields=["status"])
     return order
 
-# @pytest.fixture
-# def shipped_order():
-#     return OrderFactory(shipped=True)
+
 @pytest.fixture
 def shipped_order(processing_order):
     processing_order.status = OrderStatusType.shipped
     processing_order.save(update_fields=["status"])
     return processing_order
 
-# @pytest.fixture
-# def delivered_order():
-#     return OrderFactory(delivered=True)
+
 @pytest.fixture
 def delivered_order(shipped_order):
     shipped_order.status = OrderStatusType.delivered
     shipped_order.save(update_fields=["status"])
     return shipped_order
 
-# @pytest.fixture
-# def failed_order():
-#     return OrderFactory(failed=True)
+
 @pytest.fixture
 def failed_order(order):
     order.status = OrderStatusType.failed
     order.save(update_fields=["status"])
     return order
 
-# @pytest.fixture
-# def cancelled_order():
-#     return OrderFactory(cancelled=True)
+
 @pytest.fixture
 def cancelled_order(order):
     order.status = OrderStatusType.cancelled
@@ -132,9 +118,6 @@ def return_requested_order():
     return OrderFactory(return_requested=True)
 
 
-# @pytest.fixture
-# def refunded_order():
-#     return OrderFactory(refunded=True)
 @pytest.fixture
 def refunded_order(paid_order):
     paid_order.status = OrderStatusType.refunded
@@ -246,9 +229,7 @@ def order_with_two_products(
 def paid_order_with_two_products(
     order_with_two_products,
 ):
-
     order_with_two_products.status = OrderStatusType.paid
-
     order_with_two_products.save(
         update_fields=["status"]
     )
@@ -260,7 +241,6 @@ def paid_order_with_two_products(
 def expired_order(order):
 
     order.expire_at = timezone.now() - timedelta(minutes=10)
-
     order.save(update_fields=["expire_at"])
 
     return order

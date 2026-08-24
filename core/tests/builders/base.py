@@ -1,86 +1,69 @@
+# core/tests/builders/base.py
+"""
+Base infrastructure for test scenario builders.
+
+Builders are test-only composition tools built on top of Factory Boy.
+
+Responsibilities:
+    - hold builder state
+    - enforce single-use construction
+    - provide a small common contract
+
+Builders must NOT:
+    - contain production business logic
+    - replace Factory Boy
+    - manage transactions
+    - access production services
+"""
 from __future__ import annotations
 
-from typing import Any
+from abc import ABC, abstractmethod
+from typing import Generic, TypeVar
 
 
-class BaseBuilder:
+TScenario = TypeVar("TScenario")
+
+
+class BaseBuilder(ABC, Generic[TScenario]):
     """
-    Base Builder.
-    Every Builder in tests inherits from this class.
+    Minimal base class for domain scenario builders.
 
-    Features
-    --------
-    • fluent API
-    • immutable style
-    • default values
-    • override values
-    • reset()
-    • build()
+    Lifecycle:
+        configure
+            ↓
+        build()
+            ↓
+        scenario
 
+    A builder instance is intentionally single-use.
     """
 
-    factory = None
+    __slots__ = ("_is_built",)
 
-    def __init__(self, **defaults):
+    def __init__(self) -> None:
+        self._is_built = False
 
-        self._attrs = {}
+    def _mark_built(self) -> None:
+        """
+        Mark this builder as consumed.
 
-        self._attrs.update(defaults)
-
-    # ---------------------------------------------------------
-    # generic attribute setter
-    # ---------------------------------------------------------
-
-    def with_attrs(self, **kwargs):
-
-        self._attrs.update(kwargs)
-
-        return self
-
-    # ---------------------------------------------------------
-
-    def reset(self):
-
-        self._attrs.clear()
-
-        return self
-
-    # ---------------------------------------------------------
-
-    def clone(self):
-
-        builder = self.__class__()
-
-        builder._attrs = self._attrs.copy()
-
-        return builder
-
-    # ---------------------------------------------------------
-
-    def build(self, **override):
-
-        if self.factory is None:
+        Builders are intentionally single-use so a partially configured
+        builder cannot accidentally be reused for another scenario.
+        """
+        if self._is_built:
             raise RuntimeError(
-                f"{self.__class__.__name__} has no factory"
+                f"{self.__class__.__name__} instances are single-use. "
+                "Create a new builder instance for another scenario."
             )
 
-        attrs = self._attrs.copy()
+        self._is_built = True
 
-        attrs.update(override)
+    @property
+    def is_built(self) -> bool:
+        """Return whether this builder has already been built."""
+        return self._is_built
 
-        return self.factory(**attrs)
-
-    # ---------------------------------------------------------
-
-    def create(self, **override):
-        """
-        alias
-        """
-
-        return self.build(**override)
-
-    # ---------------------------------------------------------
-
-    def __call__(self, **override):
-
-        return self.build(**override)
+    @abstractmethod
+    def build(self) -> TScenario:
+        """Construct and return the configured scenario."""
+        raise NotImplementedError
