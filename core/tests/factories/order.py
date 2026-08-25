@@ -45,12 +45,20 @@ class OrderFactory(BaseFactory):
 
     # Buyer snapshot
     full_name = factory.LazyAttribute(
-        lambda o: o.user.profile.get_fullname()
+        lambda o: (
+            o.user.profile.get_fullname()
+            if hasattr(o.user, "profile") and o.user.profile
+            else "Test User"
+        )
     )
 
 
     phone = factory.LazyAttribute(
-        lambda o: o.user.profile.phone_number
+        lambda o: (
+            o.user.profile.phone_number
+            if hasattr(o.user, "profile") and o.user.profile
+            else "09123456789"
+        )
     )
 
     email = factory.LazyAttribute(

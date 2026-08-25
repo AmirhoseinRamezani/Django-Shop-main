@@ -55,12 +55,18 @@ class UserFactory(BaseFactory):
     def profile(self, create, extracted, **kwargs):
         """
         Populate defaults on the auto-generated profile created by post_save signal.
-        Allows custom profile fields via kwargs or extracted dict without overriding user.profile attribute name.
+        Supports both build() and create() strategies seamlessly.
         """
         if not create:
+            # حالت build: سیگنال اجرا نشده، پس Profile را به صورت build به کاربر متصل می‌کنیم
+            profile_instance = ProfileFactory.build(user=self)
+            if extracted and isinstance(extracted, dict):
+                for key, val in extracted.items():
+                    setattr(profile_instance, key, val)
+            self.profile = profile_instance
             return
 
-        # Fetch signal-created profile
+        # حالت create: profile توسط سیگنال post_save ساخته شده است
         user_profile = getattr(self, "profile", None)
         if not user_profile:
             return
