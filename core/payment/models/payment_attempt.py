@@ -1228,15 +1228,46 @@ class PaymentAttempt(models.Model):
     def _validate_retry_chain(self) -> None:
         """
         Validate retry relationship invariants.
+
+        Retry semantics:
+
+            First attempt:
+                attempt_number = 1
+                retry_count = 1
+                retry_of = None
+
+            Retry attempt N:
+                attempt_number = N
+                retry_count = N
+                retry_of = attempt N-1
+
+        The retry chain must remain inside the same Payment aggregate.
+
+        This validation is intentionally model-level/domain validation.
+        Persistence/concurrency guarantees belong to the repository/database
+        layer and must not be implemented here.
         """
 
-        # First attempt.
+        # --------------------------------
+        # First attempt
+        # --------------------------------
+
         if self.retry_of_id is None:
+            if self.attempt_number != 1:
+                raise ValidationError(
+                    {
+                        "attempt_number": _(
+                            "The first payment attempt must have "
+                            "attempt number 1."
+                        )
+                    }
+                )
+
             if self.retry_count != 1:
                 raise ValidationError(
                     {
                         "retry_count": _(
-                            "The first attempt must have "
+                            "The first payment attempt must have "
                             "retry count 1."
                         )
                     }
@@ -1244,27 +1275,126 @@ class PaymentAttempt(models.Model):
 
             return
 
-        # Self-reference.
+        # --------------------------------
+        # Retry attempt
+        # --------------------------------
+
         if self.pk is not None and self.retry_of_id == self.pk:
             raise ValidationError(
                 {
                     "retry_of": _(
-                        "An attempt cannot retry itself."
+                        "A payment attempt cannot retry itself."
                     )
                 }
             )
 
-        # Retry attempts must have retry_count >= 2.
-        if self.retry_count < 2:
+        if self.attempt_number < 2:
             raise ValidationError(
                 {
-                    "retry_count": _(
-                        "Retry attempts must have retry count "
+                    "attempt_number": _(
+                        "A retry attempt must have an attempt number "
                         "greater than one."
                     )
                 }
             )
 
+        if self.retry_count != self.attempt_number:
+            raise ValidationError(
+                {
+                    "retry_count": _(
+                        "Retry count must match the attempt number."
+                    )
+                }
+            )
+
+        # --------------------------------
+        # Unsaved retry parent
+        # --------------------------------
+
+        if not self.retry_of_id:
+            return
+
+        # --------------------------------
+        # Load retry parent
+        # --------------------------------
+
+        try:
+            previous_attempt = (
+                type(self)
+                .objects
+                .only(
+                    "id",
+                    "payment_id",
+                    "attempt_number",
+                    "retry_count",
+                )
+                .get(
+                    pk=self.retry_of_id,
+                )
+            )
+        except type(self).DoesNotExist:
+            raise ValidationError(
+                {
+                    "retry_of": _(
+                        "The referenced retry attempt does not exist."
+                    )
+                }
+            )
+
+        # --------------------------------
+        # Same Payment aggregate
+        # --------------------------------
+
+        if (
+            self.payment_id is not None
+            and previous_attempt.payment_id != self.payment_id
+        ):
+            raise ValidationError(
+                {
+                    "retry_of": _(
+                        "A retry attempt must reference an attempt "
+                        "belonging to the same payment."
+                    )
+                }
+            )
+
+        # --------------------------------
+        # Sequential retry chain
+        # --------------------------------
+
+        expected_previous_attempt_number = (
+            self.attempt_number - 1
+        )
+
+        if (
+            previous_attempt.attempt_number
+            != expected_previous_attempt_number
+        ):
+            raise ValidationError(
+                {
+                    "retry_of": _(
+                        "A retry attempt must reference the "
+                        "immediately previous payment attempt."
+                    )
+                }
+            )
+
+        # --------------------------------
+        # Previous retry count consistency
+        # --------------------------------
+
+        if (
+            previous_attempt.retry_count
+            != self.retry_count - 1
+        ):
+            raise ValidationError(
+                {
+                    "retry_of": _(
+                        "The retry chain contains an invalid "
+                        "retry count sequence."
+                    )
+                }
+            )
     def _validate_latency(self) -> None:
         if (
             self.latency_ms is not None

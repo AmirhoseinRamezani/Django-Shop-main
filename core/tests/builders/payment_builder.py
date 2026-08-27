@@ -1,19 +1,15 @@
-# core/tests/builders/payment_builder.py
 """
 Payment domain scenario builders.
 
 These builders compose the existing payment factories into explicit,
 meaningful financial test scenarios.
 
-They do not implement production payment business rules.
-They only validate the consistency of the requested test scenario
-before delegating object creation to Factory Boy.
+They do not implement payment business rules.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Optional
 
 from accounts.models import User
@@ -40,44 +36,13 @@ from tests.factories.payment import (
 )
 
 
-class _PaymentScenarioState(StrEnum):
-    """
-    Internal semantic payment state requested by the scenario builder.
-
-    This state is intentionally independent from Factory Boy trait names.
-
-    The builder keeps requested state separate from effective state so
-    that scenario composition remains explicit and conflicts cannot be
-    silently overwritten.
-    """
-
-    PENDING = "pending"
-    SUCCESS = "success"
-    FAILED = "failed"
-    CONSUMED = "consumed"
-    REFUNDED = "refunded"
-
-
-class _RefundScenarioState(StrEnum):
-    """
-    Internal semantic refund state.
-
-    PENDING is explicit here even though RefundFactory represents it
-    through its default state.
-    """
-
-    PENDING = "pending"
-    SUCCESS = "success"
-    FAILED = "failed"
-
-
 @dataclass(frozen=True)
 class PaymentScenario:
     """
     Result of a payment-domain scenario.
 
-    Collections are tuples so the scenario container cannot be
-    accidentally mutated after construction.
+    Collections are tuples so that the returned scenario cannot be
+    accidentally mutated at the container level by a test.
     """
 
     user: User
@@ -92,30 +57,24 @@ class PaymentScenarioBuilder(BaseBuilder[PaymentScenario]):
     """
     High-level builder for payment scenarios.
 
-    Composition:
+    The builder composes:
 
         User
-          ↓
         Order
-          ↓
         Payment
-         ↙ ↘
-    Attempt Refund
-          ↘
+        PaymentAttempt
+        Refund
         GatewayLog
 
-    All persistence is delegated to existing factories.
-
-    This builder does not implement production payment business rules.
-    Its validation only protects test scenarios from being internally
-    inconsistent.
+    It does not implement payment state transitions or gateway logic.
     """
 
     __slots__ = (
         "_user",
         "_order",
-        "_payment_states",
-        "_attempt_states",
+        "_payment_state",
+        "_payment_state_conflict",
+        "_attempt_traits",
         "_refund_states",
         "_payment_log_requested",
         "_refund_log_requested",
@@ -127,32 +86,34 @@ class PaymentScenarioBuilder(BaseBuilder[PaymentScenario]):
         self._user: Optional[User] = None
         self._order: Optional[OrderModel] = None
 
-        self._payment_states: list[_PaymentScenarioState] = []
-        self._attempt_states: list[str] = []
-        self._refund_states: list[_RefundScenarioState] = []
+        # None means "use the PaymentFactory default".
+        self._payment_state: Optional[str] = None
+        self._payment_state_conflict: Optional[tuple[str, str]] = None
+
+        self._attempt_traits: list[str] = []
+        self._refund_states: list[str] = []
 
         self._payment_log_requested = False
         self._refund_log_requested = False
 
     # ================================
-    # Context
+    # CONTEXT
     # ================================
 
     def with_user(self, user: User) -> PaymentScenarioBuilder:
         """
-        Reuse an externally-created user.
+        Use an externally-created user.
+
+        The supplied user is reused and never replaced silently.
         """
         self._user = user
         return self
 
-    def with_order(
-        self,
-        order: OrderModel,
-    ) -> PaymentScenarioBuilder:
+    def with_order(self, order: OrderModel) -> PaymentScenarioBuilder:
         """
-        Reuse an externally-created order.
+        Use an externally-created order.
 
-        If no user has explicitly been supplied, the order owner becomes
+        If no user was supplied explicitly, the order's user becomes
         the scenario user.
         """
         self._order = order
@@ -163,181 +124,123 @@ class PaymentScenarioBuilder(BaseBuilder[PaymentScenario]):
         return self
 
     # ================================
-    # Payment scenarios
+    # PAYMENT STATES
     # ================================
-
-    def _request_payment_state(
-        self,
-        state: _PaymentScenarioState,
-    ) -> PaymentScenarioBuilder:
-        self._payment_states.append(state)
-        return self
 
     def pending_payment(self) -> PaymentScenarioBuilder:
-        return self._request_payment_state(
-            _PaymentScenarioState.PENDING,
-        )
+        """
+        Configure a pending payment.
+
+        This is also the PaymentFactory default state.
+        """
+        self._set_payment_state("pending")
+        return self
 
     def successful_payment(self) -> PaymentScenarioBuilder:
-        return self._request_payment_state(
-            _PaymentScenarioState.SUCCESS,
-        )
+        """Configure a successful payment."""
+        self._set_payment_state("success")
+        return self
 
     def failed_payment(self) -> PaymentScenarioBuilder:
-        return self._request_payment_state(
-            _PaymentScenarioState.FAILED,
-        )
+        """Configure a failed payment."""
+        self._set_payment_state("failed")
+        return self
 
     def consumed_payment(self) -> PaymentScenarioBuilder:
-        return self._request_payment_state(
-            _PaymentScenarioState.CONSUMED,
-        )
+        """
+        Configure a successful, consumed payment.
+        """
+        self._set_payment_state("consumed")
+        return self
 
     def refunded_payment(self) -> PaymentScenarioBuilder:
-        return self._request_payment_state(
-            _PaymentScenarioState.REFUNDED,
+        """
+        Configure a successful, consumed and refunded payment.
+        """
+        self._set_payment_state("refunded")
+        return self
+
+    def _set_payment_state(self, state: str) -> None:
+        """
+        Set the requested payment scenario.
+
+        A builder must not silently replace one explicitly requested
+        payment state with another.
+        """
+        if self._payment_state is None:
+            self._payment_state = state
+            return
+
+        if self._payment_state == state:
+            return
+
+        self._payment_state_conflict = (
+            self._payment_state,
+            state,
         )
 
-    def _resolve_payment_state(self) -> _PaymentScenarioState:
-        """
-        Resolve the explicitly requested payment state.
-
-        Multiple different payment states are always rejected.
-
-        This prevents accidental silent overrides such as:
-
-            successful_payment().failed_payment()
-        """
-        if not self._payment_states:
-            return _PaymentScenarioState.PENDING
-
-        unique_states = set(self._payment_states)
-
-        if len(unique_states) > 1:
-            names = ", ".join(
-                state.value
-                for state in self._payment_states
-            )
-
-            raise ValueError(
-                "Conflicting payment states requested: "
-                f"{names}."
-            )
-
-        return self._payment_states[0]
-
-    def _effective_payment_state(self) -> _PaymentScenarioState:
-        """
-        Resolve the final semantic payment state after considering
-        dependent scenario components.
-
-        A Refund transaction requires a consumed successful Payment.
-
-        Therefore:
-
-            successful_payment()
-            + refund
-
-        semantically becomes:
-
-            consumed_payment()
-            + refund
-
-        This is scenario composition, not production business logic.
-        """
-        requested_state = self._resolve_payment_state()
-
-        if (
-            self._refund_states
-            and requested_state == _PaymentScenarioState.SUCCESS
-        ):
-            return _PaymentScenarioState.CONSUMED
-
-        return requested_state
-
     # ================================
-    # Attempts
+    # PAYMENT ATTEMPTS
     # ================================
 
     def successful_attempt(self) -> PaymentScenarioBuilder:
-        """
-        Create one successful payment attempt.
-        """
-        self._attempt_states.append("success")
+        """Add a successful payment attempt."""
+        self._attempt_traits.append("success")
         return self
 
     def failed_attempt(self) -> PaymentScenarioBuilder:
-        """
-        Create one failed payment attempt.
-        """
-        self._attempt_states.append("failed")
+        """Add a failed payment attempt."""
+        self._attempt_traits.append("failed")
         return self
 
     def timeout_attempt(self) -> PaymentScenarioBuilder:
-        """
-        Create one timed-out payment attempt.
-        """
-        self._attempt_states.append("timeout")
+        """Add a timeout payment attempt."""
+        self._attempt_traits.append("timeout")
         return self
 
     def cancelled_attempt(self) -> PaymentScenarioBuilder:
-        """
-        Create one cancelled payment attempt.
-        """
-        self._attempt_states.append("cancelled")
+        """Add a cancelled payment attempt."""
+        self._attempt_traits.append("cancelled")
         return self
 
     # ================================
-    # Refunds
+    # REFUNDS
     # ================================
 
     def pending_refund(self) -> PaymentScenarioBuilder:
         """
-        Create one pending refund.
+        Add a pending refund.
+
+        Pending is the default RefundFactory state, so no fake
+        ``pending`` Factory trait is passed.
         """
-        self._refund_states.append(
-            _RefundScenarioState.PENDING,
-        )
+        self._refund_states.append("pending")
         return self
 
     def successful_refund(self) -> PaymentScenarioBuilder:
-        """
-        Create one successful refund.
-
-        The effective payment state will automatically become CONSUMED
-        when the explicitly requested payment state is SUCCESS.
-        """
-        self._refund_states.append(
-            _RefundScenarioState.SUCCESS,
-        )
+        """Add a successful refund."""
+        self._refund_states.append("success")
         return self
 
     def failed_refund(self) -> PaymentScenarioBuilder:
-        """
-        Create one failed refund.
-
-        The effective payment state will automatically become CONSUMED
-        when the explicitly requested payment state is SUCCESS.
-        """
-        self._refund_states.append(
-            _RefundScenarioState.FAILED,
-        )
+        """Add a failed refund."""
+        self._refund_states.append("failed")
         return self
 
     # ================================
-    # Gateway logs
+    # GATEWAY LOGS
     # ================================
 
     def payment_log(self) -> PaymentScenarioBuilder:
         """
-        Request gateway request logs for payment attempts.
+        Request a gateway request log for every configured attempt.
         """
         self._payment_log_requested = True
         return self
 
     def refund_log(self) -> PaymentScenarioBuilder:
         """
-        Request gateway refund logs for refunds.
+        Request a gateway refund log for every configured refund.
         """
         self._refund_log_requested = True
         return self
@@ -351,12 +254,12 @@ class PaymentScenarioBuilder(BaseBuilder[PaymentScenario]):
         return self
 
     # ================================
-    # Build
+    # BUILD
     # ================================
 
     def build(self) -> PaymentScenario:
         """
-        Build the complete payment scenario.
+        Construct the configured payment scenario.
         """
         self._mark_built()
 
@@ -384,21 +287,17 @@ class PaymentScenarioBuilder(BaseBuilder[PaymentScenario]):
         )
 
     # ================================
-    # Resolution
+    # ORDER RESOLUTION
     # ================================
 
     def _resolve_order(self) -> tuple[User, OrderModel]:
         """
-        Resolve the order without replacing an explicitly supplied order.
+        Resolve the order/user context.
+
+        An externally supplied order is always reused.
         """
         if self._order is not None:
             user = self._user or self._order.user
-
-            if user.pk != self._order.user_id:
-                raise ValueError(
-                    "The supplied user does not own the supplied order."
-                )
-
             return user, self._order
 
         builder = OrderScenarioBuilder()
@@ -415,105 +314,87 @@ class PaymentScenarioBuilder(BaseBuilder[PaymentScenario]):
         return scenario.user, scenario.order
 
     # ================================
-    # Validation
+    # VALIDATION
     # ================================
 
     def _validate_configuration(self) -> None:
         """
-        Validate the final effective scenario.
+        Validate Builder configuration.
 
-        IMPORTANT:
-
-        Validation MUST use _effective_payment_state(), not
-        _resolve_payment_state().
-
-        Otherwise a successful payment with a refund is incorrectly
-        rejected before the builder gets a chance to promote the
-        effective state to CONSUMED.
+        This is configuration validation only. It does not implement
+        production payment rules.
         """
+        if self._payment_state_conflict is not None:
+            first, second = self._payment_state_conflict
 
-        requested_state = self._resolve_payment_state()
-        effective_state = self._effective_payment_state()
-
-        has_refunds = bool(self._refund_states)
-        has_payment_log = self._payment_log_requested
-        has_refund_log = self._refund_log_requested
-
-        # ------------------------------------
-        # Refund prerequisites
-        # ------------------------------------
-
-        if has_refunds and effective_state != _PaymentScenarioState.CONSUMED:
             raise ValueError(
-                "Refund scenarios require a successful and consumed "
-                "payment."
+                "A payment scenario cannot contain conflicting "
+                f"payment states: {first!r} and {second!r}."
             )
 
-        # ------------------------------------
-        # Refund logs
-        # ------------------------------------
+        payment_state = self._payment_state
 
-        if has_refund_log and not has_refunds:
+        if payment_state in {"consumed", "refunded"}:
+            if payment_state not in {"consumed", "refunded"}:
+                raise ValueError(
+                    "Invalid payment state configuration."
+                )
+
+        if payment_state == "refunded":
+            # A refunded payment is necessarily represented by the
+            # PaymentFactory's refunded trait.
+            pass
+
+        if self._refund_states and payment_state not in {
+            "success",
+            "consumed",
+            "refunded",
+        }:
+            raise ValueError(
+                "Refund scenarios require a successful payment."
+            )
+
+        if self._refund_log_requested and not self._refund_states:
             raise ValueError(
                 "refund_log() requires at least one refund scenario."
             )
 
-        # ------------------------------------
-        # Payment logs
-        # ------------------------------------
-
-        if has_payment_log and not self._attempt_states:
+        if self._payment_log_requested and not self._attempt_traits:
             raise ValueError(
                 "payment_log() requires at least one payment attempt."
             )
 
-        # ------------------------------------
-        # Refunded aggregate vs refund transaction
-        # ------------------------------------
-
-        if (
-            requested_state == _PaymentScenarioState.REFUNDED
-            and has_refunds
-        ):
-            raise ValueError(
-                "A refunded_payment() scenario must not also create "
-                "Refund transactions. Use consumed_payment() when "
-                "Refund objects themselves are under test."
-            )
-
     # ================================
-    # Payment
+    # PAYMENT
     # ================================
 
-    def _build_payment(
-        self,
-        order: OrderModel,
-    ) -> PaymentModel:
+    def _build_payment(self, order: OrderModel) -> PaymentModel:
         """
-        Build the Payment aggregate from the effective scenario state.
+        Build the Payment aggregate through PaymentFactory.
         """
-        state = self._effective_payment_state()
-
         kwargs: dict[str, object] = {
             "order": order,
         }
 
-        if state == _PaymentScenarioState.SUCCESS:
+        state = self._payment_state
+
+        if state == "success":
             kwargs["success"] = True
 
-        elif state == _PaymentScenarioState.FAILED:
+        elif state == "failed":
             kwargs["failed"] = True
 
-        elif state == _PaymentScenarioState.CONSUMED:
+        elif state == "consumed":
             kwargs["consumed"] = True
 
-        elif state == _PaymentScenarioState.REFUNDED:
+        elif state == "refunded":
             kwargs["refunded"] = True
 
+        # ``pending`` and ``None`` intentionally use Factory defaults.
         return PaymentFactory.create(**kwargs)
 
     # ================================
-    # Attempts
+    # ATTEMPTS
     # ================================
 
     def _build_attempts(
@@ -521,22 +402,21 @@ class PaymentScenarioBuilder(BaseBuilder[PaymentScenario]):
         payment: PaymentModel,
     ) -> list[PaymentAttempt]:
         """
-        Build attempts against the already-created payment.
+        Build all requested attempts through PaymentAttemptFactory.
         """
         attempts: list[PaymentAttempt] = []
 
-        for trait in self._attempt_states:
+        for trait in self._attempt_traits:
             attempt = PaymentAttemptFactory.create(
                 payment=payment,
                 **{trait: True},
             )
-
             attempts.append(attempt)
 
         return attempts
 
     # ================================
-    # Refunds
+    # REFUNDS
     # ================================
 
     def _build_refunds(
@@ -544,41 +424,43 @@ class PaymentScenarioBuilder(BaseBuilder[PaymentScenario]):
         payment: PaymentModel,
     ) -> list[Refund]:
         """
-        Build refunds against the already-created payment.
+        Build all requested refunds through RefundFactory.
 
-        PENDING is represented by the RefundFactory default.
-
-        SUCCESS and FAILED use their explicit Factory Boy traits.
+        Important:
+            ``pending`` is the RefundFactory default and is NOT a
+            Factory Boy trait.
         """
         refunds: list[Refund] = []
 
         for state in self._refund_states:
-            kwargs: dict[str, object] = {
-                "payment": payment,
-            }
+            if state == "pending":
+                refund = RefundFactory.create(
+                    payment=payment,
+                )
 
-            if state == _RefundScenarioState.SUCCESS:
-                kwargs["success"] = True
+            elif state == "success":
+                refund = RefundFactory.create(
+                    payment=payment,
+                    success=True,
+                )
 
-            elif state == _RefundScenarioState.FAILED:
-                kwargs["failed"] = True
-
-            elif state == _RefundScenarioState.PENDING:
-                # PENDING is RefundFactory's default state.
-                pass
+            elif state == "failed":
+                refund = RefundFactory.create(
+                    payment=payment,
+                    failed=True,
+                )
 
             else:
                 raise ValueError(
-                    f"Unsupported refund scenario state: {state!r}"
+                    f"Unsupported refund scenario: {state!r}"
                 )
 
-            refund = RefundFactory.create(**kwargs)
             refunds.append(refund)
 
         return refunds
 
     # ================================
-    # Gateway logs
+    # GATEWAY LOGS
     # ================================
 
     def _build_logs(
@@ -588,10 +470,7 @@ class PaymentScenarioBuilder(BaseBuilder[PaymentScenario]):
         refunds: list[Refund],
     ) -> list[GatewayLog]:
         """
-        Build gateway logs only for explicitly requested objects.
-
-        The builder never creates implicit attempts/refunds merely
-        to satisfy a log request.
+        Build gateway logs with explicit attempt/refund ownership.
         """
         logs: list[GatewayLog] = []
 
