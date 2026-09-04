@@ -8,7 +8,7 @@ from django.db.models import F, QuerySet
 from django.utils import timezone
 
 from payment.enums import PaymentStatusType
-from payment.exceptions import PaymentConcurrencyError
+from payment.exceptions import PaymentStaleVersionError
 from payment.models import PaymentModel
 from payment.repositories.base import BaseRepository
 
@@ -610,6 +610,11 @@ class PaymentRepository(
                 )
             )
 
+        if not fields:
+            raise ValueError(
+                "PaymentRepository.save() requires at least one update field."
+            )
+
         # --------------------------------------------
         # Repository-controlled version
         # --------------------------------------------
@@ -682,7 +687,7 @@ class PaymentRepository(
         # --------------------------------------------
 
         if rows_affected != 1:
-            raise PaymentConcurrencyError(
+            raise PaymentStaleVersionError(
                 (
                     "Payment was modified concurrently. "
                     f"payment_id={payment.pk}, "

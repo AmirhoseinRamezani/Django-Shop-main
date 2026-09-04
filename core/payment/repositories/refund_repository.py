@@ -566,6 +566,37 @@ class RefundRepository(BaseRepository[Refund]):
         return Decimal(
             total,
         )
+        
+    @classmethod
+    def reserved_amount_for_payment(
+        cls,
+        payment_id: int,
+    ) -> Decimal:
+        """
+        Return the amount currently consuming refundable capacity.
+
+        SUCCESS + PENDING
+        """
+
+        result = (
+            cls.for_payment(payment_id)
+            .filter(
+                status__in=(
+                    RefundStatus.PENDING,
+                    RefundStatus.SUCCESS,
+                ),
+            )
+            .aggregate(
+                total=Sum("amount"),
+            )
+        )
+
+        total = result.get("total")
+
+        if total is None:
+            return Decimal("0")
+
+        return Decimal(total)
 
     @classmethod
     def successful_count_for_payment(

@@ -19,6 +19,7 @@ from payment.models.refund import Refund
 from payment.policies import PaymentPolicy
 from payment.providers.base import GatewayRefundResult
 from payment.repositories.payment_repository import PaymentRepository
+from payment.repositories.payment_attempt_repository import PaymentAttemptRepository
 from payment.repositories.refund_repository import RefundRepository
 from payment.services.gateway_service import GatewayService
 
@@ -141,6 +142,12 @@ class RefundService:
             payment = PaymentRepository.get_for_update(
                 payment_id,
             )
+            
+            refund = RefundRepository.get_for_update(refund_id)
+            if refund.payment_id != payment.pk:
+                raise PaymentInvariantViolation(
+                    "Refund does not belong to the locked Payment."
+                )
 
             # ================================
             # Idempotency
@@ -168,13 +175,24 @@ class RefundService:
                 payment,
             )
 
+            attempt = (
+                PaymentAttemptRepository
+                .latest_successful_for_payment_for_update(
+                    payment.pk,
+                )
+            )
+
+            if attempt is None:
+                raise PaymentInvariantViolation(
+                    "A refundable Payment must have a successful PaymentAttempt."
+                )
             # ================================
             # V1 currency contract
             # ================================
 
-            cls._validate_v1_currency(
-                payment.currency,
-            )
+            # cls._validate_v1_currency(
+            #     payment.currency,
+            # )
 
             # ================================
             # Cumulative successful refund authorization
@@ -186,11 +204,16 @@ class RefundService:
                 )
             )
 
-            cls._validate_successful_refund_total(
-                successful_refunded=successful_refunded,
-                payment_amount=payment.amount,
+            # cls._validate_successful_refund_total(
+            #     successful_refunded=successful_refunded,
+            #     payment_amount=payment.amount,
+            # )
+            reserved_refunded = (
+                RefundRepository.reserved_amount_for_payment(
+                    payment.pk,
+                )
             )
-
+            
             remaining_refundable = (
                 payment.amount - successful_refunded
             )
@@ -203,48 +226,59 @@ class RefundService:
             # ================================
             # Immutable Refund snapshot
             # ================================
+            refund = RefundRepository.create(
+                payment=payment,
+                amount=normalized_amount,
+                currency=payment.currency,
+                idempotency_key=normalized_key,
+                reason=reason,
+                reason_detail=reason_detail,
+                status=RefundStatus.PENDING,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                meta=meta or {},
+            )
+            # try:
+            #     refund = RefundRepository.create(
+            #         payment=payment,
+            #         amount=normalized_amount,
+            #         currency=payment.currency,
+            #         idempotency_key=normalized_key,
+            #         reason=reason,
+            #         reason_detail=reason_detail,
+            #         status=RefundStatus.PENDING,
+            #         ip_address=ip_address,
+            #         user_agent=user_agent,
+            #         meta=meta or {},
+            #     )
 
-            try:
-                refund = RefundRepository.create(
-                    payment=payment,
-                    amount=normalized_amount,
-                    currency=payment.currency,
-                    idempotency_key=normalized_key,
-                    reason=reason,
-                    reason_detail=reason_detail,
-                    status=RefundStatus.PENDING,
-                    ip_address=ip_address,
-                    user_agent=user_agent,
-                    meta=meta or {},
-                )
+            # except IntegrityError:
+            #     """
+            #     The database uniqueness constraint is authoritative.
 
-            except IntegrityError:
-                """
-                The database uniqueness constraint is authoritative.
+            #     An IntegrityError is treated as an idempotency race only
+            #     when the requested idempotency identity can actually be
+            #     resolved.
 
-                An IntegrityError is treated as an idempotency race only
-                when the requested idempotency identity can actually be
-                resolved.
+            #     Unrelated integrity failures are re-raised.
+            #     """
 
-                Unrelated integrity failures are re-raised.
-                """
+            #     existing = (
+            #         RefundRepository.find_by_idempotency_key_for_update(
+            #             normalized_key,
+            #         )
+            #     )
 
-                existing = (
-                    RefundRepository.find_by_idempotency_key_for_update(
-                        normalized_key,
-                    )
-                )
+            #     if existing is None:
+            #         raise
 
-                if existing is None:
-                    raise
+            #     cls._validate_idempotent_request(
+            #         refund=existing,
+            #         payment=payment,
+            #         amount=normalized_amount,
+            #     )
 
-                cls._validate_idempotent_request(
-                    refund=existing,
-                    payment=payment,
-                    amount=normalized_amount,
-                )
-
-                return existing
+            #     return existing
 
             # ================================
             # Domain financial validation
@@ -275,6 +309,7 @@ class RefundService:
             try:
                 result = GatewayService.refund(
                     payment=payment,
+                    attempt=attempt,
                     refund=refund,
                 )
 

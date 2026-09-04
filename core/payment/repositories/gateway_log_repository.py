@@ -85,6 +85,29 @@ class GatewayLogRepository(BaseRepository[GatewayLog]):
         )
 
     # ================================
+    # Immutable Persistence Boundary
+    # ================================
+
+    @classmethod
+    def save(
+        cls,
+        instance: GatewayLog,
+        update_fields: list[str] | tuple[str, ...] | None = None,
+    ) -> GatewayLog:
+        """
+        Reject mutation explicitly at the repository boundary.
+
+        GatewayLog is append-only evidence. Even though the model also
+        protects immutability, exposing BaseRepository.save() here would
+        make mutation appear to be a supported repository operation.
+        """
+
+        raise ValueError(
+            "GatewayLogRepository does not support mutation of immutable "
+            "GatewayLog records."
+        )
+
+    # ================================
     # Attempt Queries
     # ================================
 
@@ -421,4 +444,27 @@ class GatewayLogRepository(BaseRepository[GatewayLog]):
                 "-id",
             )
             .first()
+        )
+        
+    # ================================
+    # Immutable Persistence Boundary
+    # ================================
+
+    @classmethod
+    def save(
+        cls,
+        instance: GatewayLog,
+        update_fields: list[str] | tuple[str, ...] | None = None,
+    ) -> GatewayLog:
+        """
+        Reject mutation explicitly at the repository boundary.
+
+        GatewayLog is append-only evidence. Even though the model also
+        protects immutability, exposing BaseRepository.save() here would
+        make mutation appear to be a supported repository operation.
+        """
+
+        raise ValueError(
+            "GatewayLogRepository does not support mutation of immutable "
+            "GatewayLog records."
         )

@@ -29,7 +29,7 @@ class PaymentFactory(BaseFactory):
 
     order = factory.SubFactory(OrderFactory)
     amount = factory.LazyAttribute(
-        lambda o: o.order.payable_price
+        lambda o: o.order.payable_price if getattr(o.order, "payable_price", 0) > 0 else 1000
     )
     currency = Currency.IRR
     gateway = PaymentGateway.ZARINPAL

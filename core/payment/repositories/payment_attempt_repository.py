@@ -40,7 +40,7 @@ class PaymentAttemptRepository(
     - currency conversion
     - event publication
 
-    Concurrency contract
+    Concurrency contractlatest_successful_for_payment_for_update
     --------------------
     Payment is the canonical aggregate lock.
 
@@ -410,6 +410,19 @@ class PaymentAttemptRepository(
         return cls.cancelled_for_payment(
             payment_id,
         ).first()
+        
+    @classmethod
+    def latest_successful_for_payment_for_update(
+        cls,
+        payment_id: int,
+    ) -> PaymentAttempt | None:
+        """Return and lock the latest successful attempt for a Payment."""
+
+        return (
+            cls.successful_for_payment(payment_id)
+            .select_for_update()
+            .first()
+        )
 
     # ================================
     # EXISTENCE
@@ -1007,20 +1020,32 @@ class PaymentAttemptRepository(
         """
         Create one PaymentAttempt.
 
-        IntegrityError intentionally propagates.
+        Domain validation is executed before persistence so repository
+        
+        callers cannot accidentally bypass PaymentAttempt invariants by
+        using QuerySet.create() semantics. Database constraints remain
++       authoritative for structural uniqueness and integrity.
 
-        The caller owns:
-
+        The caller still owns:
             - transaction.atomic()
             - Payment locking
             - attempt-number allocation
-            - retry policy
-            - business validation
+            - retry policy / eligibility
+            - application-level orchestration
+
+        The repository deliberately does not allocate attempt numbers or
+        implicitly acquire the canonical Payment lock.
         """
 
-        return cls.model.objects.create(
-            **kwargs,
-        )
+        attempt = cls.model(**kwargs)
+
+        # Run the aggregate's own invariant validation without moving
+        # domain rules into the repository. ``validate_unique=False`` keeps
+        # concurrency-sensitive uniqueness authoritative at the database.
+        attempt.full_clean(validate_unique=False)
+        attempt.save(force_insert=True)
+
+        return attempt
 
     # ================================
     # PERSISTENCE
@@ -1090,6 +1115,13 @@ class PaymentAttemptRepository(
                 )
             )
 
+        # Validate the complete in-memory aggregate before persistence.
+
+        # Uniqueness is intentionally excluded from preflight validation because
+        # concurrent uniqueness is authoritative at the database layer.
+        attempt.full_clean(
+            validate_unique=False,
+        )
         attempt.save(
             update_fields=fields,
         )
