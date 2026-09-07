@@ -1,18 +1,17 @@
-# order/services/state_machine.py
-from PIL.Image import ImagePointTransform
-from django.db import transaction
+# core/order/services/state_machine.py
+from __future__ import annotations
+
 from django.core.exceptions import ValidationError
-from django.db.models import F
+from django.db import transaction
 from django.utils import timezone
 
-from order.models import OrderStatusType
 from order.events.order_event import OrderEventType
+from order.models import OrderStatusType
 from order.services.events import record_order_event
-from shop.models import ProductModel
 from order.services.inventory import InventoryService
 
-class OrderStateMachine:
 
+class OrderStateMachine:
     TRANSITIONS = {
         OrderStatusType.pending: {
             OrderStatusType.paid,
@@ -27,25 +26,20 @@ class OrderStateMachine:
             OrderStatusType.processing,
             OrderStatusType.refunded,
         },
-
         OrderStatusType.processing: {
             OrderStatusType.shipped,
             OrderStatusType.cancelled,
         },
-
         OrderStatusType.shipped: {
             OrderStatusType.delivered,
             OrderStatusType.return_requested,
         },
-
         OrderStatusType.return_requested: {
             OrderStatusType.returned,
         },
-
         OrderStatusType.returned: {
             OrderStatusType.refunded,
         },
-
         OrderStatusType.delivered: set(),
         OrderStatusType.cancelled: set(),
         OrderStatusType.refunded: set(),
@@ -53,14 +47,19 @@ class OrderStateMachine:
 
     @classmethod
     @transaction.atomic
-    def transition(cls, *, order, to_status, actor=None, payload=None):
-
-        # 🔒 lock row
+    def transition(
+        cls,
+        *,
+        order,
+        to_status,
+        actor=None,
+        payload=None,
+    ):
         order = (
             order.__class__
             .objects
             .select_for_update()
-            .get(id=order.id)
+            .get(pk=order.pk)
         )
 
         from_status = order.status
@@ -70,15 +69,35 @@ class OrderStateMachine:
                 f"Illegal transition from {from_status} to {to_status}"
             )
 
-        # 🔥 Domain-specific side effects
-        cls._handle_side_effects(order, from_status, to_status)
+        cls._handle_side_effects(
+            order,
+            from_status,
+            to_status,
+        )
 
         order.status = to_status
-        order.save(update_fields=["status"])
+
+        update_fields = ["status"]
+
+        # DB invariant:
+        # paid-like orders must always have paid_date.
+        if (
+            to_status == OrderStatusType.paid
+            and order.paid_date is None
+        ):
+            order.paid_date = timezone.now()
+            update_fields.append("paid_date")
+
+        order.save(
+            update_fields=update_fields,
+        )
 
         record_order_event(
             order=order,
-            type=cls._map_status_to_event(to_status, payload),
+            type=cls._map_status_to_event(
+                to_status,
+                payload,
+            ),
             actor=actor,
             payload=payload or {},
         )
@@ -86,48 +105,32 @@ class OrderStateMachine:
         return order
 
     @staticmethod
-    def _handle_side_effects(order, from_status, to_status):
-
-        # restore stock when cancelling unpaid order
+    def _handle_side_effects(
+        order,
+        from_status,
+        to_status,
+    ):
         if (
             from_status == OrderStatusType.pending
             and to_status == OrderStatusType.cancelled
         ):
             InventoryService.restore(order)
-            # for item in order.order_items.select_related("product"):
-            #     ProductModel.objects.filter(
-            #         id=item.product_id
-            #     ).update(
-            #         stock=F("stock") + item.quantity
-            #     )
 
     @staticmethod
-    def _map_status_to_event(status, payload=None):
-
+    def _map_status_to_event(
+        status,
+        payload=None,
+    ):
         if status == OrderStatusType.cancelled:
             if payload and payload.get("reason") == "timeout":
                 return OrderEventType.EXPIRED
+
             return OrderEventType.CANCELLED
 
         return {
             OrderStatusType.paid: OrderEventType.PAID,
             OrderStatusType.refunded: OrderEventType.REFUNDED,
-        }.get(status, OrderEventType.ADMIN_NOTE)
-        
-    
-    
-    # if (
-    #     from_status == OrderStatusType.paid
-    #     and
-    #     to_status == OrderStatusType.refunded
-    # ):
-    #     """
-    #     Accounting
-    #     Wallet
-    #     Invoice
-    #     Webhook
-    #     Email
-    #     Notification
-    #     ERP
-    #     """
-    #     pass
+        }.get(
+            status,
+            OrderEventType.ADMIN_NOTE,
+        )

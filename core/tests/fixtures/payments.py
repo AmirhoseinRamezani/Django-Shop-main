@@ -1,25 +1,34 @@
 # tests/fixtures/payments.py
 import pytest
 
-from tests.factories.payment import PaymentFactory
+from tests.factories.payment import PaymentAttemptFactory ,PaymentFactory
 
 from payment.models import (
     PaymentModel,
 )
 from payment.enums import (
     PaymentStatusType,
+    PaymentAttemptStatus,
 )
 
 @pytest.fixture
 def success_payment(order):
 
-    return PaymentModel.objects.create(
+    payment = PaymentFactory(
         order=order,
-        authority_id="AUTH-123",
-        amount=order.total_price,
-        ref_id=123456,
-        status=PaymentStatusType.SUCCESS,
+        success=True,
     )
+
+    PaymentAttemptFactory(
+        payment=payment,
+        attempt_number=1,
+        status=PaymentAttemptStatus.SUCCESS,
+        authority_id="AUTH-123",
+        gateway_reference="REF-123",
+        gateway_transaction_id="123456",
+    )
+
+    return payment
     
 @pytest.fixture
 def consumed_payment(
@@ -35,22 +44,37 @@ def consumed_payment(
 @pytest.fixture
 def failed_payment(order):
 
-    return PaymentModel.objects.create(
+    payment = PaymentFactory(
         order=order,
-        authority_id="FAILED",
-        amount=order.total_price,
-        status=PaymentStatusType.FAILED,
+        failed=True,
     )
+
+    PaymentAttemptFactory(
+        payment=payment,
+        attempt_number=1,
+        status=PaymentAttemptStatus.FAILED,
+        authority_id="FAILED",
+    )
+
+    return payment
 
 @pytest.fixture
 def pending_payment(order):
 
-    return PaymentModel.objects.create(
+    payment = PaymentFactory(
         order=order,
-        authority_id="PENDING",
         amount=order.total_price,
-        status=PaymentStatusType.PENDING,
     )
+
+    PaymentAttemptFactory(
+        payment=payment,
+        attempt_number=1,
+        status=PaymentAttemptStatus.PENDING,
+        authority_id="PENDING",
+    )
+
+    return payment
+        
 
 @pytest.fixture
 def payment_factory():
@@ -59,11 +83,30 @@ def payment_factory():
 
 @pytest.fixture
 def payment(order):
-    return PaymentFactory(order=order)
+    payment = PaymentFactory(
+        order=order,
+        # amount=order.total_price,
+    )
+
+    PaymentAttemptFactory(
+        payment=payment,
+        status=PaymentAttemptStatus.PENDING,
+    )
+
+    return payment
 
 @pytest.fixture
 def successful_payment(order):
-    return PaymentFactory(
+    
+    payment = PaymentFactory(
         order=order,
-        success=True,
     )
+
+    PaymentAttemptFactory(
+        payment=payment,
+        attempt_number=1,
+        status=PaymentAttemptStatus.SUCCESS,
+        authority_id="SUCCESS",
+    )
+
+    return payment

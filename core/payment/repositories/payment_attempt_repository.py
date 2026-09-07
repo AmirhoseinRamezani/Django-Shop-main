@@ -540,7 +540,34 @@ class PaymentAttemptRepository(
             )
             .first()
         )
+        
+    @classmethod
+    def for_authority(
+        cls,
+        authority_id: str,
+    ) -> QuerySet[PaymentAttempt]:
+        """
+        Return attempts carrying the supplied gateway authority.
 
+        This is a persistence lookup only.  It intentionally does not lock
+        rows and does not decide whether a callback is authorized to mutate
+        anything.  The callback application service resolves the identity
+        and the authoritative verification service acquires the canonical
+        Payment -> PaymentAttempt locks before mutation.
+        """
+
+        authority = cls._normalize_identity(authority_id)
+
+        if not authority:
+            return cls.queryset().none()
+
+        return (
+            cls.queryset()
+            .filter(authority_id=authority)
+            .select_related("payment")
+            .order_by("id")
+        )
+        
     @classmethod
     def find_by_reference(
         cls,

@@ -1,113 +1,166 @@
-# order/services/confirm_payment.py
-from django.db import transaction
-from django.core.exceptions import ValidationError
+# core/order/services/confirm_payment.py
+from __future__ import annotations
 
-from order.services.state_machine import OrderStateMachine
-from order.models import OrderModel, OrderStatusType,CouponModel
-from payment.models import PaymentModel
-from payment.enums import PaymentStatusType
-from order.events.order_event import OrderEventType
-from order.services.events import record_order_event
+from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.utils.translation import gettext as _
-from django.db.models import F
+
+from order.models import (
+    OrderModel,
+    OrderStatusType,
+)
+from order.services.coupon import CouponService
+from order.services.state_machine import OrderStateMachine
+
+from payment.enums import PaymentAttemptStatus, PaymentStatusType
+from payment.exceptions import PaymentInvariantViolation
+from payment.models import PaymentAttempt, PaymentModel
+from payment.repositories.payment_repository import PaymentRepository
+
 
 @transaction.atomic
-def confirm_order_payment(order_id: int) -> OrderModel:  #*, payment
+def confirm_order_payment(
+    order_id: int,
+) -> OrderModel:
     """
-    Finalize order after successful payment.
-    Atomic & idempotent.
+    Finalize an Order after successful Payment.
+
+    Lock hierarchy:
+
+        Order
+          ↓
+        Payment
+          ↓
+        PaymentAttempt
+
+    The service is transactional and idempotent.
     """
-    # Lock order
+
+    # ----------------------------------------
+    # 1. Lock Order
+    # ----------------------------------------
+
     order = (
         OrderModel.objects
         .select_for_update()
-        .get(id=order_id)
+        .get(pk=order_id)
     )
 
-    # Order expired
     if order.is_expired():
-        raise ValidationError(_("Order expired"))
+        raise ValidationError(
+            _("Order expired")
+        )
 
-    # Find latest successful payment
+    # ----------------------------------------
+    # 2. Lock latest successful Payment
+    # ----------------------------------------
+
     payment = (
         PaymentModel.objects
         .select_for_update()
         .filter(
-            order=order,
+            order_id=order.pk,
             status=PaymentStatusType.SUCCESS,
         )
-        .order_by("-created_date")
+        .order_by(
+            "-created_date",
+            "-id",
+        )
         .first()
     )
 
-    if not payment:
-        raise ValidationError(_("No successful payment found"))
+    if payment is None:
+        raise ValidationError(
+            _("No successful payment found")
+        )
 
-    # Idempotency
+    # ----------------------------------------
+    # 3. Idempotency
+    # ----------------------------------------
+
     if payment.is_consumed:
-        raise ValidationError(_("Payment already consumed"))
+        raise ValidationError(
+            _("Payment already consumed")
+        )
 
-    # Finalize
-    # payment.is_consumed = True
+    # ----------------------------------------
+    # 4. Lock successful PaymentAttempt
+    # ----------------------------------------
+
+    attempt = (
+        PaymentAttempt.objects
+        .select_for_update()
+        .filter(
+            payment_id=payment.pk,
+            status=PaymentAttemptStatus.SUCCESS,
+        )
+        .order_by(
+            "-attempt_number",
+            "-id",
+        )
+        .first()
+    )
+
+    if attempt is None:
+        raise ValidationError(
+            _("No successful payment attempt found")
+        )
+        
+    # Defensive aggregate consistency check.
+    if attempt.payment_id != payment.pk:
+        raise PaymentInvariantViolation(
+            "PaymentAttempt does not belong to the expected Payment."
+        )
+
+    # ----------------------------------------
+    # 5. Consume Payment
+    # ----------------------------------------
+
     payment.consume()
-    # payment.save(update_fields=["is_consumed"])
 
+    PaymentRepository.save(
+        payment,
+        update_fields=(
+            "is_consumed",
+        ),
+    )
+
+    # ----------------------------------------
+    # 6. Synchronize Order
+    # ----------------------------------------
 
     OrderStateMachine.transition(
         order=order,
         to_status=OrderStatusType.paid,
         actor=order.user,
         payload={
-            "payment_id": payment.id,
-            "ref_id": payment.ref_id,
-            "amount": str(order.final_price),
-        }
+            "payment_id": payment.pk,
+            "attempt_id": attempt.pk,
+            "ref_id": attempt.gateway_reference,
+            "amount": str(payment.amount),
+            "currency": str(payment.currency),
+        },
     )
-    
-    
-    # CouponService.consume_coupon()
-    
-    # CouponModel.objects.filter(
-    #     pk=order.coupon_id
-    # ).update(
-    #     used_count=F("used_count")+1
-    # )
-    
-    if order.coupon:
-        CouponService.consume(order.coupon)
-    
-    
-    # record_order_event(
-    #     order=order,
-    #     type=OrderEventType.PAID,
-    #     actor=order.user,
-    #     payload={
-    #         "payment_id": payment.id,
-    #         "ref_id": payment.ref_id,
-    #         "amount": str(order.final_price()),
-    #     },
-    # )
+
+    # ----------------------------------------
+    # 7. Coupon side effect
+    # ----------------------------------------
+
+    if order.coupon_id:
+        CouponService.consume(
+            order.coupon,
+        )
 
     return order
 
-# -----------------------------
-# Public API (backward compatible)
-# -----------------------------
-def _confirm_order_payment(order_id: int) -> OrderModel:
-    """
-    Adapter for legacy calls & tests.
-    """
-    payment = (
-        PaymentModel.objects
-        .filter(
-            order_id=order_id,
-            status=PaymentStatusType.SUCCESS,
-        )
-        .order_by("-created_date")
-        .first()
+
+# ----------------------------------------
+# Backward-compatible adapter
+# ----------------------------------------
+
+def _confirm_order_payment(
+    order_id: int,
+) -> OrderModel:
+    return confirm_order_payment(
+        order_id=order_id,
     )
-
-    if not payment:
-        raise ValidationError(_("No successful payment found"))
-
-    return confirm_order_payment(order_id) # = order_id

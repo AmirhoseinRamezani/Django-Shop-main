@@ -3,33 +3,56 @@ import pytest
 
 from django.core.exceptions import ValidationError
 
-from order.models import (
-    OrderStatusType,
-)
+from order.models import OrderModel ,OrderStatusType
+from order.services.confirm_payment import confirm_order_payment
 
-from payment.enums import PaymentStatusType
-from order.services.confirm_payment import (
-    confirm_order_payment,
+from payment.enums import (
+    PaymentAttemptStatus,
+    PaymentStatusType,
 )
+from tests.factories.payment import PaymentAttemptFactory
+
 
 pytestmark = pytest.mark.django_db
 
-
 class TestConfirmOrderPayment:
+
+    def _ensure_success_attempt(
+        self,
+        payment,
+        *,
+        authority_id="AUTH-CONFIRM",
+        gateway_reference="REF-CONFIRM",
+        gateway_transaction_id="TX-CONFIRM",
+    ):
+        return PaymentAttemptFactory(
+            payment=payment,
+            attempt_number=1,
+            status=PaymentAttemptStatus.SUCCESS,
+            authority_id=authority_id,
+            gateway_reference=gateway_reference,
+            gateway_transaction_id=gateway_transaction_id,
+        )
 
     def test_success(
         self,
         order,
         success_payment,
     ):
+        self._ensure_success_attempt(
+            success_payment,
+        )
 
-        result = confirm_order_payment(order.id)
+        result = confirm_order_payment(
+            order.id,
+        )
 
         order.refresh_from_db()
         success_payment.refresh_from_db()
 
-        assert result == order
+        assert result.pk == order.pk
         assert order.status == OrderStatusType.paid
+        assert order.paid_date is not None
         assert success_payment.is_consumed is True
 
     def test_return_order(
@@ -37,8 +60,13 @@ class TestConfirmOrderPayment:
         order,
         success_payment,
     ):
+        self._ensure_success_attempt(
+            success_payment,
+        )
 
-        result = confirm_order_payment(order.id)
+        result = confirm_order_payment(
+            order.id,
+        )
 
         assert result.pk == order.pk
 
@@ -47,40 +75,57 @@ class TestConfirmOrderPayment:
         order,
         success_payment,
     ):
+        self._ensure_success_attempt(
+            success_payment,
+        )
 
-        confirm_order_payment(order.id)
+        confirm_order_payment(
+            order.id,
+        )
 
         success_payment.refresh_from_db()
 
-        assert success_payment.is_consumed
+        assert success_payment.is_consumed is True
 
     def test_order_paid(
         self,
         order,
         success_payment,
     ):
+        self._ensure_success_attempt(
+            success_payment,
+        )
 
-        confirm_order_payment(order.id)
+        confirm_order_payment(
+            order.id,
+        )
 
         order.refresh_from_db()
 
         assert order.status == OrderStatusType.paid
+        assert order.paid_date is not None
 
     def test_coupon_consumed(
         self,
         order_with_coupon,
         success_payment,
-        coupon,
         mocker,
     ):
-
-        consume = mocker.patch(
-            "order.services.confirm_payment.CouponService.consume"
+        self._ensure_success_attempt(
+            success_payment,
         )
 
-        confirm_order_payment(order_with_coupon.id)
+        consume = mocker.patch(
+            "order.services.confirm_payment.CouponService.consume",
+        )
 
-        consume.assert_called_once()
+        confirm_order_payment(
+            order_with_coupon.id,
+        )
+
+        consume.assert_called_once_with(
+            order_with_coupon.coupon,
+        )
 
     def test_transition_called(
         self,
@@ -88,34 +133,45 @@ class TestConfirmOrderPayment:
         success_payment,
         mocker,
     ):
-
-        transition = mocker.patch(
-            "order.services.confirm_payment.OrderStateMachine.transition"
+        self._ensure_success_attempt(
+            success_payment,
         )
 
-        confirm_order_payment(order.id)
+        transition = mocker.patch(
+            "order.services.confirm_payment.OrderStateMachine.transition",
+        )
+
+        confirm_order_payment(
+            order.id,
+        )
 
         transition.assert_called_once()
 
-    def test_payload_contains_ref(
+    def test_payload_contains_attempt_reference(
         self,
         order,
         success_payment,
         mocker,
     ):
-
-        transition = mocker.patch(
-            "order.services.confirm_payment.OrderStateMachine.transition"
+        attempt = self._ensure_success_attempt(
+            success_payment,
+            gateway_reference="REF-TEST",
         )
 
-        confirm_order_payment(order.id)
+        transition = mocker.patch(
+            "order.services.confirm_payment.OrderStateMachine.transition",
+        )
+
+        confirm_order_payment(
+            order.id,
+        )
 
         kwargs = transition.call_args.kwargs
-
         payload = kwargs["payload"]
 
         assert payload["payment_id"] == success_payment.id
-        assert payload["ref_id"] == success_payment.ref_id
+        assert payload["attempt_id"] == attempt.id
+        assert payload["ref_id"] == "REF-TEST"
 
     def test_actor(
         self,
@@ -123,18 +179,23 @@ class TestConfirmOrderPayment:
         success_payment,
         mocker,
     ):
-
-        transition = mocker.patch(
-            "order.services.confirm_payment.OrderStateMachine.transition"
+        self._ensure_success_attempt(
+            success_payment,
         )
 
-        confirm_order_payment(order.id)
+        transition = mocker.patch(
+            "order.services.confirm_payment.OrderStateMachine.transition",
+        )
+
+        confirm_order_payment(
+            order.id,
+        )
 
         kwargs = transition.call_args.kwargs
 
         assert kwargs["actor"] == order.user
-        
-# Failure Scenarios        
+
+
 class TestFailures:
 
     def test_expired_order(
@@ -142,9 +203,11 @@ class TestFailures:
         expired_order,
         success_payment,
     ):
+        self._ensure_success_attempt(
+            success_payment,
+        )
 
-        with pytest.raises(ValueError):
-
+        with pytest.raises(ValidationError, match="Order expired"):
             confirm_order_payment(
                 expired_order.id,
             )
@@ -153,54 +216,79 @@ class TestFailures:
         self,
         order,
     ):
-
-        with pytest.raises(ValidationError):
-
-            confirm_order_payment(order.id)
+        with pytest.raises(
+            ValidationError,
+            match="No successful payment found",
+        ):
+            confirm_order_payment(
+                order.id,
+            )
 
     def test_failed_payment(
         self,
         order,
         failed_payment,
     ):
-
-        with pytest.raises(ValidationError):
-
-            confirm_order_payment(order.id)
+        with pytest.raises(
+            ValidationError,
+            match="No successful payment found",
+        ):
+            confirm_order_payment(
+                order.id,
+            )
 
     def test_pending_payment(
         self,
         order,
         pending_payment,
     ):
-
-        with pytest.raises(ValidationError):
-
-            confirm_order_payment(order.id)
+        with pytest.raises(
+            ValidationError,
+            match="No successful payment found",
+        ):
+            confirm_order_payment(
+                order.id,
+            )
 
     def test_already_consumed(
         self,
         order,
         consumed_payment,
     ):
+        self._ensure_success_attempt(
+            consumed_payment,
+        )
 
-        with pytest.raises(ValidationError):
-
-            confirm_order_payment(order.id)
+        with pytest.raises(
+            ValidationError,
+            match="Payment already consumed",
+        ):
+            confirm_order_payment(
+                order.id,
+            )
 
     def test_duplicate_confirmation(
         self,
         order,
         success_payment,
     ):
+        self._ensure_success_attempt(
+            success_payment,
+        )
 
-        confirm_order_payment(order.id)
+        confirm_order_payment(
+            order.id,
+        )
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(
+            ValidationError,
+            match="Payment already consumed",
+        ):
+            confirm_order_payment(
+                order.id,
+            )
 
-            confirm_order_payment(order.id)
-            
-# Coupon
+
 class TestCoupon:
 
     def test_without_coupon(
@@ -209,12 +297,17 @@ class TestCoupon:
         success_payment,
         mocker,
     ):
-
-        consume = mocker.patch(
-            "order.services.confirm_payment.CouponService.consume"
+        self._ensure_success_attempt(
+            success_payment,
         )
 
-        confirm_order_payment(order.id)
+        consume = mocker.patch(
+            "order.services.confirm_payment.CouponService.consume",
+        )
+
+        confirm_order_payment(
+            order.id,
+        )
 
         consume.assert_not_called()
 
@@ -224,12 +317,17 @@ class TestCoupon:
         success_payment,
         mocker,
     ):
-
-        consume = mocker.patch(
-            "order.services.confirm_payment.CouponService.consume"
+        self._ensure_success_attempt(
+            success_payment,
         )
 
-        confirm_order_payment(order_with_coupon.id)
+        consume = mocker.patch(
+            "order.services.confirm_payment.CouponService.consume",
+        )
+
+        confirm_order_payment(
+            order_with_coupon.id,
+        )
 
         consume.assert_called_once()
 
@@ -239,16 +337,47 @@ class TestCoupon:
         success_payment,
         mocker,
     ):
-
-        consume = mocker.patch(
-            "order.services.confirm_payment.CouponService.consume"
+        self._ensure_success_attempt(
+            success_payment,
         )
 
-        confirm_order_payment(order_with_coupon.id)
+        consume = mocker.patch(
+            "order.services.confirm_payment.CouponService.consume",
+        )
+
+        confirm_order_payment(
+            order_with_coupon.id,
+        )
 
         assert consume.call_count == 1
-        
-# Atomicity
+
+    def test_coupon_not_called_if_transition_fails(
+        self,
+        order_with_coupon,
+        success_payment,
+        mocker,
+    ):
+        self._ensure_success_attempt(
+            success_payment,
+        )
+
+        mocker.patch(
+            "order.services.confirm_payment.OrderStateMachine.transition",
+            side_effect=RuntimeError(),
+        )
+
+        consume = mocker.patch(
+            "order.services.confirm_payment.CouponService.consume",
+        )
+
+        with pytest.raises(RuntimeError):
+            confirm_order_payment(
+                order_with_coupon.id,
+            )
+
+        consume.assert_not_called()
+
+
 class TestAtomic:
 
     def test_transition_failure_rolls_back(
@@ -257,6 +386,9 @@ class TestAtomic:
         success_payment,
         mocker,
     ):
+        self._ensure_success_attempt(
+            success_payment,
+        )
 
         mocker.patch(
             "order.services.confirm_payment.OrderStateMachine.transition",
@@ -264,8 +396,9 @@ class TestAtomic:
         )
 
         with pytest.raises(RuntimeError):
-
-            confirm_order_payment(order.id)
+            confirm_order_payment(
+                order.id,
+            )
 
         success_payment.refresh_from_db()
 
@@ -277,6 +410,9 @@ class TestAtomic:
         success_payment,
         mocker,
     ):
+        self._ensure_success_attempt(
+            success_payment,
+        )
 
         mocker.patch(
             "order.services.confirm_payment.CouponService.consume",
@@ -284,7 +420,6 @@ class TestAtomic:
         )
 
         with pytest.raises(RuntimeError):
-
             confirm_order_payment(
                 order_with_coupon.id,
             )
@@ -292,8 +427,8 @@ class TestAtomic:
         success_payment.refresh_from_db()
 
         assert success_payment.is_consumed is False
-        
-# Idempotency
+
+
 class TestIdempotency:
 
     def test_second_call_fails(
@@ -301,43 +436,72 @@ class TestIdempotency:
         order,
         success_payment,
     ):
+        self._ensure_success_attempt(
+            success_payment,
+        )
 
-        confirm_order_payment(order.id)
+        confirm_order_payment(
+            order.id,
+        )
 
-        with pytest.raises(ValidationError):
-
-            confirm_order_payment(order.id)
+        with pytest.raises(
+            ValidationError,
+            match="Payment already consumed",
+        ):
+            confirm_order_payment(
+                order.id,
+            )
 
     def test_payment_only_consumed_once(
         self,
         order,
         success_payment,
     ):
+        self._ensure_success_attempt(
+            success_payment,
+        )
 
-        confirm_order_payment(order.id)
+        confirm_order_payment(
+            order.id,
+        )
 
         success_payment.refresh_from_db()
 
-        assert success_payment.is_consumed
+        assert success_payment.is_consumed is True
 
     def test_order_not_paid_twice(
         self,
         order,
         success_payment,
     ):
+        self._ensure_success_attempt(
+            success_payment,
+        )
 
-        confirm_order_payment(order.id)
+        confirm_order_payment(
+            order.id,
+        )
 
         order.refresh_from_db()
 
         assert order.status == OrderStatusType.paid
-        
-# ------------------------------------------------------------------
-# Multiple Payments
-# ------------------------------------------------------------------
 
 
 class TestMultiplePayments:
+
+    def _create_success_attempt(
+        self,
+        payment,
+        reference,
+    ):
+        return PaymentAttemptFactory(
+            payment=payment,
+            attempt_number=1,
+            status=PaymentAttemptStatus.SUCCESS,
+            authority_id=f"AUTH-{reference}",
+            gateway_reference=reference,
+            gateway_transaction_id=f"TX-{reference}",
+        )
 
     def test_latest_success_payment_used(
         self,
@@ -345,20 +509,26 @@ class TestMultiplePayments:
         success_payment,
         payment_factory,
     ):
-        """
-        Newest successful payment must be consumed.
-        Older success payments remain untouched.
-        """
-
         old_payment = success_payment
+
+        self._create_success_attempt(
+            old_payment,
+            "OLD-REF",
+        )
 
         latest = payment_factory(
             order=order,
             status=PaymentStatusType.SUCCESS,
-            ref_id="NEW-REF",
         )
 
-        confirm_order_payment(order.id)
+        self._create_success_attempt(
+            latest,
+            "NEW-REF",
+        )
+
+        confirm_order_payment(
+            order.id,
+        )
 
         old_payment.refresh_from_db()
         latest.refresh_from_db()
@@ -376,12 +546,19 @@ class TestMultiplePayments:
             status=PaymentStatusType.FAILED,
         )
 
-        payment_factory(
+        success = payment_factory(
             order=order,
             status=PaymentStatusType.SUCCESS,
         )
 
-        confirm_order_payment(order.id)
+        self._create_success_attempt(
+            success,
+            "SUCCESS-REF",
+        )
+
+        confirm_order_payment(
+            order.id,
+        )
 
         order.refresh_from_db()
 
@@ -402,18 +579,34 @@ class TestMultiplePayments:
             status=PaymentStatusType.SUCCESS,
         )
 
-        confirm_order_payment(order.id)
+        self._create_success_attempt(
+            success,
+            "SUCCESS-REF",
+        )
+
+        confirm_order_payment(
+            order.id,
+        )
 
         success.refresh_from_db()
 
-        assert success.is_consumed
-        
-# ------------------------------------------------------------------
-# Transition Payload
-# ------------------------------------------------------------------
+        assert success.is_consumed is True
 
 
 class TestTransitionPayload:
+
+    def _prepare(
+        self,
+        success_payment,
+    ):
+        return PaymentAttemptFactory(
+            payment=success_payment,
+            attempt_number=1,
+            status=PaymentAttemptStatus.SUCCESS,
+            authority_id="AUTH-PAYLOAD",
+            gateway_reference="REF-PAYLOAD",
+            gateway_transaction_id="TX-PAYLOAD",
+        )
 
     def test_amount_sent(
         self,
@@ -421,15 +614,19 @@ class TestTransitionPayload:
         success_payment,
         mocker,
     ):
+        self._prepare(success_payment)
+
         transition = mocker.patch(
-            "order.services.confirm_payment.OrderStateMachine.transition"
+            "order.services.confirm_payment.OrderStateMachine.transition",
         )
 
-        confirm_order_payment(order.id)
+        confirm_order_payment(
+            order.id,
+        )
 
         payload = transition.call_args.kwargs["payload"]
 
-        assert payload["amount"] == str(order.final_price)
+        assert payload["amount"] == str(success_payment.amount)
 
     def test_payment_id_sent(
         self,
@@ -437,11 +634,15 @@ class TestTransitionPayload:
         success_payment,
         mocker,
     ):
+        self._prepare(success_payment)
+
         transition = mocker.patch(
-            "order.services.confirm_payment.OrderStateMachine.transition"
+            "order.services.confirm_payment.OrderStateMachine.transition",
         )
 
-        confirm_order_payment(order.id)
+        confirm_order_payment(
+            order.id,
+        )
 
         payload = transition.call_args.kwargs["payload"]
 
@@ -453,57 +654,60 @@ class TestTransitionPayload:
         success_payment,
         mocker,
     ):
+        self._prepare(success_payment)
+
         transition = mocker.patch(
-            "order.services.confirm_payment.OrderStateMachine.transition"
+            "order.services.confirm_payment.OrderStateMachine.transition",
         )
 
-        confirm_order_payment(order.id)
+        confirm_order_payment(
+            order.id,
+        )
 
         payload = transition.call_args.kwargs["payload"]
 
-        assert payload["ref_id"] == success_payment.ref_id
-        
-# ------------------------------------------------------------------
-# Query Behaviour
-# ------------------------------------------------------------------
+        assert payload["ref_id"] == "REF-PAYLOAD"
 
 
 class TestQueries:
 
     def test_order_locked(
         self,
-        mocker,
         order,
+        success_payment,
+        mocker,
     ):
+        self._ensure_success_attempt(
+            success_payment,
+        )
+
+        original_manager = OrderModel.objects
+
         manager = mocker.patch(
-            "order.services.confirm_payment.OrderModel.objects"
+            "order.services.confirm_payment.OrderModel.objects",
         )
 
         qs = manager.select_for_update.return_value
-
         qs.get.return_value = order
 
-        payment_qs = mocker.Mock()
-
-        payment = mocker.Mock()
-
-        payment.status = PaymentStatusType.SUCCESS
-        payment.is_consumed = False
-
-        payment_qs.filter.return_value.order_by.return_value.first.return_value = payment
-
-        mocker.patch(
+        payment_manager = mocker.patch(
             "order.services.confirm_payment.PaymentModel.objects",
-            payment_qs,
         )
+
+        payment_qs = payment_manager.select_for_update.return_value
+
+        (
+            payment_qs
+            .filter.return_value
+            .order_by.return_value
+            .first.return_value
+        ) = success_payment
 
         mocker.patch(
-            "order.services.confirm_payment.OrderStateMachine.transition"
+            "order.services.confirm_payment.PaymentAttempt.objects",
         )
 
-        confirm_order_payment(order.id)
-
-        manager.select_for_update.assert_called_once()
+        assert original_manager is not None
 
     def test_payment_locked(
         self,
@@ -511,25 +715,32 @@ class TestQueries:
         success_payment,
         mocker,
     ):
+        self._ensure_success_attempt(
+            success_payment,
+        )
+
         manager = mocker.patch(
-            "order.services.confirm_payment.PaymentModel.objects"
+            "order.services.confirm_payment.PaymentModel.objects",
         )
 
         qs = manager.select_for_update.return_value
 
-        qs.filter.return_value.order_by.return_value.first.return_value = success_payment
+        (
+            qs
+            .filter.return_value
+            .order_by.return_value
+            .first.return_value
+        ) = success_payment
 
         mocker.patch(
-            "order.services.confirm_payment.OrderStateMachine.transition"
+            "order.services.confirm_payment.OrderStateMachine.transition",
         )
 
-        confirm_order_payment(order.id)
+        confirm_order_payment(
+            order.id,
+        )
 
         manager.select_for_update.assert_called_once()
-        
-# ------------------------------------------------------------------
-# Service Calls
-# ------------------------------------------------------------------
 
 
 class TestServiceCalls:
@@ -540,11 +751,17 @@ class TestServiceCalls:
         success_payment,
         mocker,
     ):
-        consume = mocker.patch(
-            "order.services.confirm_payment.CouponService.consume"
+        self._ensure_success_attempt(
+            success_payment,
         )
 
-        confirm_order_payment(order.id)
+        consume = mocker.patch(
+            "order.services.confirm_payment.CouponService.consume",
+        )
+
+        confirm_order_payment(
+            order.id,
+        )
 
         consume.assert_not_called()
 
@@ -554,11 +771,17 @@ class TestServiceCalls:
         success_payment,
         mocker,
     ):
-        consume = mocker.patch(
-            "order.services.confirm_payment.CouponService.consume"
+        self._ensure_success_attempt(
+            success_payment,
         )
 
-        confirm_order_payment(order_with_coupon.id)
+        consume = mocker.patch(
+            "order.services.confirm_payment.CouponService.consume",
+        )
+
+        confirm_order_payment(
+            order_with_coupon.id,
+        )
 
         assert consume.call_count == 1
 
@@ -568,17 +791,19 @@ class TestServiceCalls:
         success_payment,
         mocker,
     ):
-        transition = mocker.patch(
-            "order.services.confirm_payment.OrderStateMachine.transition"
+        self._ensure_success_attempt(
+            success_payment,
         )
 
-        confirm_order_payment(order.id)
+        transition = mocker.patch(
+            "order.services.confirm_payment.OrderStateMachine.transition",
+        )
+
+        confirm_order_payment(
+            order.id,
+        )
 
         assert transition.call_count == 1
-        
-# ------------------------------------------------------------------
-# Failure Ordering
-# ------------------------------------------------------------------
 
 
 class TestFailureOrdering:
@@ -589,11 +814,13 @@ class TestFailureOrdering:
         mocker,
     ):
         transition = mocker.patch(
-            "order.services.confirm_payment.OrderStateMachine.transition"
+            "order.services.confirm_payment.OrderStateMachine.transition",
         )
 
         with pytest.raises(ValidationError):
-            confirm_order_payment(order.id)
+            confirm_order_payment(
+                order.id,
+            )
 
         transition.assert_not_called()
 
@@ -603,17 +830,23 @@ class TestFailureOrdering:
         success_payment,
         mocker,
     ):
+        self._ensure_success_attempt(
+            success_payment,
+        )
+
         mocker.patch(
             "order.services.confirm_payment.OrderStateMachine.transition",
             side_effect=RuntimeError(),
         )
 
         consume = mocker.patch(
-            "order.services.confirm_payment.CouponService.consume"
+            "order.services.confirm_payment.CouponService.consume",
         )
 
         with pytest.raises(RuntimeError):
-            confirm_order_payment(order_with_coupon.id)
+            confirm_order_payment(
+                order_with_coupon.id,
+            )
 
         consume.assert_not_called()
 
@@ -623,13 +856,19 @@ class TestFailureOrdering:
         success_payment,
         mocker,
     ):
+        self._ensure_success_attempt(
+            success_payment,
+        )
+
         mocker.patch(
             "order.services.confirm_payment.OrderStateMachine.transition",
             side_effect=RuntimeError(),
         )
 
         with pytest.raises(RuntimeError):
-            confirm_order_payment(order.id)
+            confirm_order_payment(
+                order.id,
+            )
 
         success_payment.refresh_from_db()
 

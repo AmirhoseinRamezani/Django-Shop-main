@@ -1,10 +1,10 @@
+# tests/services/payment/test_payment_flow.py
 import pytest
 
 from payment.services.payment_flow import (
     handle_successful_payment,
 )
-
-from tests.assertions import refresh
+from unittest.mock import patch
 
 pytestmark = pytest.mark.django_db
 
@@ -16,74 +16,66 @@ class DummySession(dict):
 
 class TestPaymentFlow:
 
+    @patch(
+        "payment.services.payment_flow.verify_payment",
+    )
     def test_returns_order(
         self,
+        mock_verify,
         payment,
     ):
         session = DummySession()
-
+        mock_verify.return_value = payment
+    
         order = handle_successful_payment(
-            authority=payment.authority_id,
-            ref_id=111,
+            payment_id=payment.pk,
+            ref_id="REF-TEST",
+            response={"status": "ok"},
+            session=session,
+        )
+        assert order == payment.order
+        mock_verify.assert_called_once_with(
+            payment_id=payment.pk,
+            ref_id="REF-TEST",
+            response={"status": "ok"},
+        )
+
+    def test_clears_coupon_session(self, payment, monkeypatch):
+        
+        session = DummySession()
+        session["coupon_id"] = 123
+        
+        monkeypatch.setattr(
+            "payment.services.payment_flow.verify_payment",
+            lambda *args, **kwargs: payment,
+        )
+        
+        handle_successful_payment(
+            payment_id=payment.id,
+            ref_id="111",
             response={},
             session=session,
         )
+        
+        assert "coupon_id" not in session
+        assert session.modified is True
 
-        refresh(payment)
-
-        assert payment.is_consumed
-        assert order.pk == payment.order_id
-
-    def test_consumes_coupon(
-        self,
-        payment,
-        mocker,
-    ):
+    def test_clear_cart(self, payment, monkeypatch):
         session = DummySession()
 
-        verify = mocker.patch(
-            "payment.services.payment_flow.verify_payment"
-        )
+        def mock_verify(*args, **kwargs):
+            return payment
 
-        verify.return_value = payment
+        monkeypatch.setattr("payment.services.payment_flow.verify_payment", mock_verify)
 
-        coupon = payment.order.coupon
-
-        if coupon:
-            coupon.mark_used = mocker.Mock()
+        cleared = []
+        monkeypatch.setattr("payment.services.payment_flow.CartSession.clear", lambda self: cleared.append(True))
 
         handle_successful_payment(
-            authority="A",
-            ref_id=111,
+            payment_id=payment.id,
+            ref_id="1",
             response={},
             session=session,
         )
 
-        if coupon:
-            coupon.mark_used.assert_called_once()
-
-    def test_clear_cart(
-        self,
-        payment,
-        mocker,
-    ):
-        session = DummySession()
-
-        verify = mocker.patch(
-            "payment.services.payment_flow.verify_payment"
-        )
-
-        verify.return_value = payment
-
-        clear = mocker.patch(
-            "payment.services.payment_flow.CartSession.clear"
-        )
-
-        handle_successful_payment(
-            authority="A",
-            ref_id=1,
-            response={},
-            session=session,
-        )
-
-        clear.assert_called_once()
+        assert len(cleared) == 1

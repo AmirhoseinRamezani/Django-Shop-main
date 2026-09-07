@@ -1,6 +1,7 @@
 from django.views.generic import FormView
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.shortcuts import redirect
+from django.urls import reverse
 from django.core.exceptions import ValidationError
 
 from order.permissions import HasCustomerAccessPermission
@@ -9,8 +10,6 @@ from order.services import OrderService
 from order.models import CouponModel
 from cart.cart import CartSession
 from cart.models import CartModel
-from payment.zarinpal_client import ZarinPalSandbox
-from payment.models import PaymentModel
 from payment.services import PaymentService
 
 class OrderCheckOutView(LoginRequiredMixin, HasCustomerAccessPermission, FormView):
@@ -50,25 +49,10 @@ class OrderCheckOutView(LoginRequiredMixin, HasCustomerAccessPermission, FormVie
             form.add_error(None, e.message)
             return self.form_invalid(form)
         
-        payment_url = PaymentService.start_payment(order=order)
-        return redirect(payment_url)
-
-    def _create_payment_url(self, order):
-        """
-        Create payment request and attach payment to order
-        """
-        zarinpal = ZarinPalSandbox()
-        response = zarinpal.payment_request(order.get_price())
-
-        payment = PaymentModel.objects.create(
-            authority_id=response["Authority"],
-            amount=order.get_price(),
-        )
-
-        payment = PaymentModel.objects.create(
+        payment_url = PaymentService.start_payment(
             order=order,
-            authority_id=response["Authority"],
-            amount=order.get_price(),
+            callback_url=self.request.build_absolute_uri(
+                reverse("payment:verify")
+            ),
         )
-
-        return zarinpal.generate_payment_url(payment.authority_id)
+        return redirect(payment_url)

@@ -1,3 +1,4 @@
+# tests/factories/payment.py
 import factory
 from django.utils import timezone
 
@@ -54,7 +55,6 @@ class PaymentFactory(BaseFactory):
             is_consumed=True,
             is_refunded=True,
         )
-
 
 class PaymentAttemptFactory(BaseFactory):
     """

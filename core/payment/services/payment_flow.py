@@ -1,13 +1,22 @@
 # payment/services/payment_flow.py
 
-from django.db import transaction
-
 from payment.services.verify import verify_payment
 from cart.cart import CartSession
 
-def handle_successful_payment(*, authority, ref_id, response, session):
+def handle_successful_payment(
+    *,
+    payment_id,
+    ref_id=None,
+    response=None,
+    session,
+):
+    """Verify a Payment and perform presentation/session side effects.
+
+    This is no longer a second payment implementation.  All financial
+    verification and lifecycle mutation belongs to ``verify_payment``.
+    """
     payment = verify_payment(
-        authority=authority,
+        payment_id=payment_id,
         ref_id=ref_id,
         response=response,
     )

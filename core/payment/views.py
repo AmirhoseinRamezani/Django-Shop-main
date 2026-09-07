@@ -10,17 +10,8 @@ from django.urls import reverse_lazy
 
 from django.contrib.auth.mixins import LoginRequiredMixin
 
-from django.core.exceptions import (
-    ValidationError,
-)
-
-from payment.models import (
-    PaymentAttempt,
-)
-
-from payment.services.gateway_service import (
-    GatewayService,
-)
+from payment.exceptions import PaymentCallbackError, PaymentGatewayError
+from payment.services.callback import resolve_payment_id
 
 from payment.services.payment_flow import (
     handle_successful_payment,
@@ -28,10 +19,6 @@ from payment.services.payment_flow import (
 
 from payment.services.retry import (
     RetryPaymentService,
-)
-
-from payment.services.services import (
-    PaymentService,
 )
 
 from order.models import (
@@ -52,7 +39,6 @@ class PaymentVerifyView(View):
     Business logic lives inside services.
     """
 
-    @transaction.atomic
     def get(
         self,
         request,
@@ -67,43 +53,36 @@ class PaymentVerifyView(View):
                 reverse_lazy("order:failed")
             )
 
-        attempt = get_object_or_404(
-            PaymentAttempt.objects.select_for_update(),
-            authority_id=authority,
-        )
-
-        payment = attempt.payment
-
-        response = GatewayService.verify(attempt)
-
-        PaymentService.complete(
-            payment=payment,
-            attempt=attempt,
-            gateway_response=response,
-        )
-
         try:
 
-            handle_successful_payment(
+            payment_id = resolve_payment_id(
                 authority=authority,
-                ref_id=response.get("RefID"),
-                response=response,
-                session=request.session,
             )
-
-            return redirect(
-                reverse_lazy("order:completed")
-            )
-
-        except ValidationError:
-
-            payment.mark_failed(
-                response=response,
-            )
-
+            
+        except PaymentCallbackError:
+            
             return redirect(
                 reverse_lazy("order:failed")
             )
+        
+        try:
+            handle_successful_payment(
+                payment_id=payment_id,
+                ref_id=request.GET.get("RefID"),
+                response=request.GET.dict(),
+                session=request.session,
+            )
+        except PaymentGatewayError as exc:
+            # An unknown gateway outcome must not be presented as a confirmed
+            # financial failure.  The authoritative service keeps Payment
+            # pending and the exception is intentionally allowed to reach the
+            # application's error handling / retry surface.
+            if exc.retryable:
+                raise
+
+            return redirect(reverse_lazy("order:failed"))
+
+        return redirect(reverse_lazy("order:completed"))
 
 
 class RetryPaymentView(

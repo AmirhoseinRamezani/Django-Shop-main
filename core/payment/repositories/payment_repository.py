@@ -538,9 +538,22 @@ class PaymentRepository(
         IntegrityError is intentionally preserved.
         """
 
-        return cls.model.objects.create(
-            **kwargs,
+        # return cls.model.objects.create(
+        #     **kwargs,
+        # )
+        payment = cls.model(**kwargs)
+
+        # Validate aggregate-local invariants before INSERT. Uniqueness and
+        # other concurrency-sensitive structural constraints remain
+        # authoritative at the database layer.
+        payment.full_clean(
+            validate_unique=False,
         )
+        payment.save(
+            force_insert=True,
+        )
+
+        return payment
 
     # ================================
     # OPTIMISTIC CONCURRENCY
