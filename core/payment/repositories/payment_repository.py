@@ -527,33 +527,27 @@ class PaymentRepository(
     ) -> PaymentModel:
         """
         Create and persist a Payment.
+        The repository deliberately does NOT call full_clean().
+
+        Database constraints are the final authority for structural
+        invariants such as:
+            - one pending Payment per Order
+            - foreign-key integrity
+            - check constraints
+            - unique constraints
 
         The caller owns:
-
             - transaction.atomic()
             - business validation
             - policy decisions
             - idempotency decisions
 
-        IntegrityError is intentionally preserved.
+        IntegrityError is intentionally preserved and propagated.
         """
 
-        # return cls.model.objects.create(
-        #     **kwargs,
-        # )
-        payment = cls.model(**kwargs)
-
-        # Validate aggregate-local invariants before INSERT. Uniqueness and
-        # other concurrency-sensitive structural constraints remain
-        # authoritative at the database layer.
-        payment.full_clean(
-            validate_unique=False,
+        return cls.model.objects.create(
+            **kwargs,
         )
-        payment.save(
-            force_insert=True,
-        )
-
-        return payment
 
     # ================================
     # OPTIMISTIC CONCURRENCY

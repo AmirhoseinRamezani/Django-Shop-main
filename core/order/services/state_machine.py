@@ -12,6 +12,7 @@ from order.services.inventory import InventoryService
 
 
 class OrderStateMachine:
+
     TRANSITIONS = {
         OrderStatusType.pending: {
             OrderStatusType.paid,
@@ -55,18 +56,33 @@ class OrderStateMachine:
         actor=None,
         payload=None,
     ):
+        """
+        Atomically transition an Order between valid states.
+
+        The database row is re-locked here because the state machine
+        is the final authority for concurrent status transitions.
+
+        Paid-like statuses require paid_date to be populated.
+        """
+
         order = (
             order.__class__
             .objects
             .select_for_update()
-            .get(pk=order.pk)
+            .get(
+                id=order.id,
+            )
         )
 
         from_status = order.status
 
-        if to_status not in cls.TRANSITIONS.get(from_status, set()):
+        if to_status not in cls.TRANSITIONS.get(
+            from_status,
+            set(),
+        ):
             raise ValidationError(
-                f"Illegal transition from {from_status} to {to_status}"
+                f"Illegal transition from "
+                f"{from_status} to {to_status}"
             )
 
         cls._handle_side_effects(
@@ -77,10 +93,23 @@ class OrderStateMachine:
 
         order.status = to_status
 
-        update_fields = ["status"]
+        update_fields = [
+            "status",
+        ]
 
-        # DB invariant:
-        # paid-like orders must always have paid_date.
+        # --------------------------------------------------------
+        # Paid lifecycle invariant
+        # --------------------------------------------------------
+        #
+        # Database constraint:
+        #
+        #     paid-like status <=> paid_date IS NOT NULL
+        #
+        # The state machine owns status transitions, therefore it
+        # must maintain this invariant for every pending -> paid
+        # transition.
+        # --------------------------------------------------------
+
         if (
             to_status == OrderStatusType.paid
             and order.paid_date is None
@@ -110,6 +139,10 @@ class OrderStateMachine:
         from_status,
         to_status,
     ):
+        """
+        Execute synchronous state-transition side effects.
+        """
+
         if (
             from_status == OrderStatusType.pending
             and to_status == OrderStatusType.cancelled
@@ -122,7 +155,10 @@ class OrderStateMachine:
         payload=None,
     ):
         if status == OrderStatusType.cancelled:
-            if payload and payload.get("reason") == "timeout":
+            if (
+                payload
+                and payload.get("reason") == "timeout"
+            ):
                 return OrderEventType.EXPIRED
 
             return OrderEventType.CANCELLED
