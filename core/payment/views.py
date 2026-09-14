@@ -1,12 +1,10 @@
 # payment/views.py
-from django.db import transaction
-
 from django.views import View
 from django.shortcuts import (
     get_object_or_404,
     redirect,
 )
-from django.urls import reverse_lazy
+from django.urls import reverse, reverse_lazy
 
 from django.contrib.auth.mixins import LoginRequiredMixin
 
@@ -92,9 +90,6 @@ class PaymentVerifyView(View):
             )
 
         except PaymentGatewayError as exc:
-            # A transport/unknown gateway outcome must never be presented
-            # as a confirmed financial failure.  The authoritative service
-            # leaves the Payment pending for later reconciliation.
             if exc.retryable:
                 raise
 
@@ -107,26 +102,17 @@ class PaymentVerifyView(View):
         )
 
 
-
 class RetryPaymentView(
     LoginRequiredMixin,
     View,
 ):
     """
-    Restart payment for an existing order.
+    Retry the existing Payment through a new PaymentAttempt.
 
-    Thin View.
-
-    Responsibilities
-
-    - authenticate user
-    - lock order
-    - ownership check
-    - call RetryPaymentService
-    - redirect to gateway
+    The view performs authentication/ownership and constructs the callback
+    URL. Transaction boundaries and retry orchestration belong to the service.
     """
 
-    @transaction.atomic
     def post(
         self,
         request,
@@ -134,17 +120,21 @@ class RetryPaymentView(
         *args,
         **kwargs,
     ):
-
         order = get_object_or_404(
-            OrderModel.objects
-            .select_for_update(),
+            OrderModel,
             pk=order_id,
             user=request.user,
         )
 
+        callback_url = request.build_absolute_uri(
+            reverse("payment:verify"),
+        )
+
         payment_url = RetryPaymentService.retry(
             order=order,
+            callback_url=callback_url,
+            ip_address=request.META.get("REMOTE_ADDR"),
+            user_agent=request.META.get("HTTP_USER_AGENT", ""),
         )
 
         return redirect(payment_url)
-
