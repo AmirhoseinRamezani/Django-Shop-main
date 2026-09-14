@@ -1,276 +1,199 @@
-from unittest.mock import patch
-
 import pytest
-from django.core.exceptions import ValidationError
 
+from payment.enums import PaymentAttemptStatus, PaymentGateway, PaymentStatusType
+from payment.exceptions import PaymentGatewayError, PaymentInvariantViolation
+from payment.models import PaymentAttempt
+from payment.providers.base import GatewayPaymentResult
 from payment.services.retry import RetryPaymentService
-from payment.enums import PaymentStatusType ,PaymentAttemptStatus
-from order.models import OrderStatusType
+
+from tests.factories.payment import PaymentAttemptFactory
+
 
 pytestmark = pytest.mark.django_db
 
 
-class TestRetryPayment:
-    
-    def test_retry_uses_same_payment_and_creates_new_attempt(
-        self,
-        payment,
-        mocker,
-    ):
-        first_attempt = PaymentAttemptFactory(
-            payment=payment,
-            attempt_number=1,
-            retry_count=1,
-            status=PaymentAttemptStatus.FAILED,
-        )
+def failed_attempt(payment, *, number=1):
+    return PaymentAttemptFactory(
+        payment=payment,
+        attempt_number=number,
+        retry_count=number,
+        status=PaymentAttemptStatus.FAILED,
+        failure_reason="Gateway rejected",
+    )
 
-        mocker.patch(
-            "payment.services.retry.GatewayService.initiate_payment",
-            return_value=self.successful_gateway_result(),
-        )
 
-        mocker.patch(
-            "payment.services.retry.GatewayService.payment_url",
-            return_value="https://gateway.test/AUTH-2",
-        )
+def gateway_result(*, success=True, authority="AUTH-2", message=""):
+    return GatewayPaymentResult(
+        success=success,
+        gateway=PaymentGateway.ZARINPAL,
+        authority=authority if success else None,
+        message=message,
+        response_code="100" if success else "-1",
+    )
 
-        url = RetryPaymentService.retry(
+
+def test_retry_uses_same_payment_and_creates_new_attempt(payment, mocker):
+    first_attempt = failed_attempt(payment)
+    payment_count = PaymentAttempt.objects.filter(payment=payment).values("payment").distinct().count()
+
+    mocker.patch(
+        "payment.services.retry.GatewayService.initiate_payment",
+        return_value=gateway_result(),
+    )
+    mocker.patch(
+        "payment.services.retry.GatewayService.payment_url",
+        return_value="https://gateway.test/AUTH-2",
+    )
+
+    payment_count_before = payment.__class__.objects.count()
+    url = RetryPaymentService.retry(
+        order=payment.order,
+        callback_url="https://shop.test/payment/verify/",
+    )
+
+    attempts = PaymentAttempt.objects.filter(payment=payment).order_by("attempt_number")
+    retry_attempt = attempts.get(attempt_number=2)
+    payment.refresh_from_db()
+
+    assert payment.__class__.objects.count() == payment_count_before
+    assert attempts.count() == 2
+    assert payment_count == 1
+    assert retry_attempt.payment_id == payment.pk
+    assert retry_attempt.retry_of_id == first_attempt.pk
+    assert retry_attempt.retry_count == 2
+    assert retry_attempt.status == PaymentAttemptStatus.PENDING
+    assert retry_attempt.authority_id == "AUTH-2"
+    assert payment.status == PaymentStatusType.PENDING
+    assert url == "https://gateway.test/AUTH-2"
+
+
+def test_retry_preserves_financial_snapshot(payment, mocker):
+    failed_attempt(payment)
+    snapshot = (payment.amount, payment.currency, payment.gateway, payment.order_id)
+
+    mocker.patch(
+        "payment.services.retry.GatewayService.initiate_payment",
+        return_value=gateway_result(),
+    )
+    mocker.patch(
+        "payment.services.retry.GatewayService.payment_url",
+        return_value="https://gateway.test/AUTH-2",
+    )
+
+    RetryPaymentService.retry(
+        order=payment.order,
+        callback_url="https://shop.test/payment/verify/",
+    )
+
+    payment.refresh_from_db()
+    assert (payment.amount, payment.currency, payment.gateway, payment.order_id) == snapshot
+
+
+def test_pending_attempt_with_authority_is_idempotent(payment, mocker):
+    attempt = PaymentAttemptFactory(
+        payment=payment,
+        attempt_number=1,
+        retry_count=1,
+        status=PaymentAttemptStatus.PENDING,
+        authority_id="AUTH-PENDING",
+    )
+
+    initiate = mocker.patch("payment.services.retry.GatewayService.initiate_payment")
+    mocker.patch(
+        "payment.services.retry.GatewayService.payment_url",
+        return_value="https://gateway.test/AUTH-PENDING",
+    )
+
+    url = RetryPaymentService.retry(
+        order=payment.order,
+        callback_url="https://shop.test/payment/verify/",
+    )
+
+    assert url == "https://gateway.test/AUTH-PENDING"
+    initiate.assert_not_called()
+    assert PaymentAttempt.objects.filter(payment=payment).count() == 1
+    assert PaymentAttempt.objects.get(pk=attempt.pk).status == PaymentAttemptStatus.PENDING
+
+
+def test_pending_attempt_without_authority_is_not_reinitiated(payment, mocker):
+    PaymentAttemptFactory(
+        payment=payment,
+        attempt_number=1,
+        retry_count=1,
+        status=PaymentAttemptStatus.PENDING,
+        authority_id="",
+    )
+    initiate = mocker.patch("payment.services.retry.GatewayService.initiate_payment")
+
+    with pytest.raises(PaymentGatewayError) as exc_info:
+        RetryPaymentService.retry(
             order=payment.order,
-            callback_url="https://shop.test/payment/callback",
+            callback_url="https://shop.test/payment/verify/",
         )
 
-        payment.refresh_from_db()
+    assert exc_info.value.retryable is True
+    initiate.assert_not_called()
+    assert PaymentAttempt.objects.filter(payment=payment).count() == 1
 
-        attempts = PaymentAttempt.objects.filter(
-            payment=payment,
-        ).order_by("attempt_number")
 
-        assert attempts.count() == 2
+def test_definitive_gateway_rejection_fails_attempt_not_payment(payment, mocker):
+    first_attempt = failed_attempt(payment)
+    mocker.patch(
+        "payment.services.retry.GatewayService.initiate_payment",
+        return_value=gateway_result(success=False, message="Rejected"),
+    )
 
-        retry = attempts.get(
-            attempt_number=2,
+    with pytest.raises(PaymentGatewayError) as exc_info:
+        RetryPaymentService.retry(
+            order=payment.order,
+            callback_url="https://shop.test/payment/verify/",
         )
 
-        assert retry.payment_id == payment.id
-        assert retry.retry_of_id == first_attempt.id
-        assert retry.retry_count == 2
-        assert retry.status == PaymentAttemptStatus.PENDING
-        assert retry.authority_id == "AUTH-2"
-        assert url == "https://gateway.test/AUTH-2"
+    retry_attempt = PaymentAttempt.objects.get(payment=payment, attempt_number=2)
+    payment.refresh_from_db()
 
-    def test_retry_after_failed_payment(
-        self,
-        failed_order,
-        mocker,
-    ):
-        # Mocks
-        mocker.patch(
-            "payment.services.retry.GatewayService.payment_request",
-            return_value={"Authority": "AUTH123"},
-        )
-        mocker.patch(
-            "payment.services.retry.GatewayService.payment_url",
-            return_value="https://gateway.com/pay/AUTH123",
-        )
+    assert retry_attempt.retry_of_id == first_attempt.pk
+    assert retry_attempt.status == PaymentAttemptStatus.FAILED
+    assert payment.status == PaymentStatusType.PENDING
+    assert exc_info.value.retryable is False
 
-        url = RetryPaymentService.retry(order=failed_order)
 
-        latest_payment = failed_order.payments.last()
-        assert latest_payment.status == PaymentStatusType.PENDING
+def test_transport_failure_leaves_new_attempt_pending(payment, mocker):
+    failed_attempt(payment)
+    mocker.patch(
+        "payment.services.retry.GatewayService.initiate_payment",
+        side_effect=PaymentGatewayError("Gateway unavailable", retryable=True),
+    )
 
-    def test_new_payment_created(
-        self,
-        failed_order,
-        mocker,
-    ):
-        mocker.patch(
-            "payment.services.retry.GatewayService.payment_request",
-            return_value={"Authority": "AUTH123"},
-        )
-        mocker.patch(
-            "payment.services.retry.GatewayService.payment_url",
-            return_value="https://gateway.com/pay/AUTH123",
+    with pytest.raises(PaymentGatewayError) as exc_info:
+        RetryPaymentService.retry(
+            order=payment.order,
+            callback_url="https://shop.test/payment/verify/",
         )
 
-        before = failed_order.payments.count()
+    retry_attempt = PaymentAttempt.objects.get(payment=payment, attempt_number=2)
+    payment.refresh_from_db()
 
-        RetryPaymentService.retry(order=failed_order)
+    assert retry_attempt.status == PaymentAttemptStatus.PENDING
+    assert payment.status == PaymentStatusType.PENDING
+    assert exc_info.value.retryable is True
 
-        assert failed_order.payments.count() == before + 1
 
-    def test_order_back_to_pending(
-        self,
-        failed_order,
-        mocker,
-    ):
-        mocker.patch(
-            "payment.services.retry.GatewayService.payment_request",
-            return_value={"Authority": "AUTH123"},
-        )
-        mocker.patch(
-            "payment.services.retry.GatewayService.payment_url",
-            return_value="https://gateway.com/pay/AUTH123",
-        )
+@pytest.mark.parametrize("status", [PaymentStatusType.SUCCESS, PaymentStatusType.FAILED])
+def test_terminal_payment_cannot_retry(payment, status):
+    payment.status = status
+    payment.save(update_fields=["status"])
 
-        RetryPaymentService.retry(order=failed_order)
-
-        failed_order.refresh_from_db()
-        assert failed_order.status == OrderStatusType.pending
-
-    def test_return_payment_url(
-        self,
-        failed_order,
-        mocker,
-    ):
-        mocker.patch(
-            "payment.services.retry.GatewayService.payment_request",
-            return_value={"Authority": "AUTH123"},
-        )
-        mocker.patch(
-            "payment.services.retry.GatewayService.payment_url",
-            return_value="https://gateway.com/pay/AUTH123",
+    with pytest.raises(Exception):
+        RetryPaymentService.retry(
+            order=payment.order,
+            callback_url="https://shop.test/payment/verify/",
         )
 
-        url = RetryPaymentService.retry(order=failed_order)
 
-        assert isinstance(url, str)
-        assert "AUTH123" in url
-
-
-class TestRetry:
-
-    def test_retry_only_after_failed(
-        self,
-        failed_order,
-        mocker,
-    ):
-        mocker.patch(
-            "payment.services.retry.GatewayService.payment_request",
-            return_value={"Authority": "AUTH123"},
-        )
-        mocker.patch(
-            "payment.services.retry.GatewayService.payment_url",
-            return_value="https://gateway.com/pay/AUTH123",
-        )
-
-        RetryPaymentService.retry(order=failed_order)
-
-        latest_payment = failed_order.payments.last()
-        assert latest_payment.status == PaymentStatusType.PENDING
-
-    def test_multiple_failed_payments_allowed(
-        self,
-        failed_order,
-        mocker,
-    ):
-        mocker.patch(
-            "payment.services.retry.GatewayService.payment_request",
-            return_value={"Authority": "AUTH123"},
-        )
-        mocker.patch(
-            "payment.services.retry.GatewayService.payment_url",
-            return_value="https://gateway.com/pay/AUTH123",
-        )
-
-        RetryPaymentService.retry(order=failed_order)
-
-        # تغییر وضعیت آخرین پرداخت به FAILED برای شبیه‌سازی شکست مجدد
-        last_payment = failed_order.payments.last()
-        last_payment.status = PaymentStatusType.FAILED
-        last_payment.save()
-
-        url = RetryPaymentService.retry(order=failed_order)
-
-        assert url is not None
-
-    def test_only_one_pending_payment(
-        self,
-        pending_order,
-        pending_payment,
-    ):
-        with pytest.raises(ValidationError):
-            RetryPaymentService.retry(order=pending_order)
-
-
-class TestAtomicity:
-
-    def test_gateway_failure(
-        self,
-        failed_order,
-        mocker,
-    ):
-        mocker.patch(
-            "payment.services.retry.GatewayService.payment_request",
-            side_effect=RuntimeError("Gateway connection error"),
-        )
-
-        before = failed_order.payments.count()
-
-        with pytest.raises(RuntimeError):
-            RetryPaymentService.retry(order=failed_order)
-
-        assert failed_order.payments.count() == before
-
-    def test_database_rollback(
-        self,
-        failed_order,
-        mocker,
-    ):
-        mocker.patch(
-            "payment.services.retry.GatewayService.payment_request",
-            return_value={"Authority": "AUTH123"},
-        )
-        mocker.patch(
-            "payment.services.retry.PaymentFactory.create",
-            side_effect=RuntimeError("DB Save Error"),
-        )
-
-        with pytest.raises(RuntimeError):
-            RetryPaymentService.retry(order=failed_order)
-
-
-class TestIdempotency:
-
-    def test_second_retry_fails(
-        self,
-        failed_order,
-        mocker,
-    ):
-        mocker.patch(
-            "payment.services.retry.GatewayService.payment_request",
-            return_value={"Authority": "AUTH123"},
-        )
-        mocker.patch(
-            "payment.services.retry.GatewayService.payment_url",
-            return_value="https://gateway.com/pay/AUTH123",
-        )
-
-        # اولین بار موفق می‌شود و یک پرداخت PENDING می‌سازد
-        RetryPaymentService.retry(order=failed_order)
-
-        # بار دوم به دلیل داشتن پرداخت PENDING فعال، باید ValidationError دهد
-        with pytest.raises(ValidationError):
-            RetryPaymentService.retry(order=failed_order)
-
-    def test_no_duplicate_pending(
-        self,
-        failed_order,
-        mocker,
-    ):
-        mocker.patch(
-            "payment.services.retry.GatewayService.payment_request",
-            return_value={"Authority": "AUTH123"},
-        )
-        mocker.patch(
-            "payment.services.retry.GatewayService.payment_url",
-            return_value="https://gateway.com/pay/AUTH123",
-        )
-
-        RetryPaymentService.retry(order=failed_order)
-
-        assert (
-            failed_order.payments.filter(
-                status=PaymentStatusType.PENDING,
-            ).count()
-            == 1
+def test_retry_requires_previous_attempt(payment):
+    with pytest.raises(PaymentInvariantViolation):
+        RetryPaymentService.retry(
+            order=payment.order,
+            callback_url="https://shop.test/payment/verify/",
         )
