@@ -1,30 +1,55 @@
-# tests/e2e/test_payment_retry.py
 import pytest
 
-from django.core.exceptions import ValidationError
+from payment.enums import PaymentAttemptStatus
+from payment.services.callback import resolve_callback
 
-from payment.services.verify import verify_payment
+from tests.factories.payment import PaymentAttemptFactory
 
 
 pytestmark = pytest.mark.django_db
 
 
-class TestPaymentRetry:
+def test_callback_resolves_exact_retry_attempt(payment):
+    first_attempt = PaymentAttemptFactory(
+        payment=payment,
+        attempt_number=1,
+        retry_count=1,
+        status=PaymentAttemptStatus.FAILED,
+        authority_id="AUTH-1",
+    )
+    second_attempt = PaymentAttemptFactory(
+        payment=payment,
+        attempt_number=2,
+        retry_count=2,
+        status=PaymentAttemptStatus.PENDING,
+        authority_id="AUTH-2",
+        retry_of=first_attempt,
+    )
 
-    def test_verify_twice_returns_same_payment(
-        self,
-        payment,
-    ):
-        verify_payment(
-            authority=payment.authority_id,
-            ref_id=11,
-            response={},
-        )
+    resolution = resolve_callback(authority="AUTH-1")
 
-        with pytest.raises(ValidationError):
+    assert resolution.payment_id == payment.pk
+    assert resolution.attempt_id == first_attempt.pk
+    assert resolution.attempt_id != second_attempt.pk
 
-            verify_payment(
-                authority=payment.authority_id,
-                ref_id=11,
-                response={},
-            )
+
+def test_callback_resolves_new_attempt_by_its_own_authority(payment):
+    first_attempt = PaymentAttemptFactory(
+        payment=payment,
+        attempt_number=1,
+        retry_count=1,
+        status=PaymentAttemptStatus.FAILED,
+        authority_id="AUTH-1",
+    )
+    second_attempt = PaymentAttemptFactory(
+        payment=payment,
+        attempt_number=2,
+        retry_count=2,
+        status=PaymentAttemptStatus.PENDING,
+        authority_id="AUTH-2",
+        retry_of=first_attempt,
+    )
+
+    resolution = resolve_callback(authority="AUTH-2")
+
+    assert resolution.attempt_id == second_attempt.pk
