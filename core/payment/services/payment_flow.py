@@ -1,22 +1,32 @@
-# payment/services/payment_flow.py
+# core/payment/services/payment_flow.py
 
-from payment.services.verify import verify_payment
+from __future__ import annotations
+
+from typing import Any
+
 from cart.cart import CartSession
+from payment.services.verify import verify_payment
+
 
 def handle_successful_payment(
     *,
-    payment_id,
-    ref_id=None,
-    response=None,
+    payment_id: int,
+    attempt_id: int | None = None,
+    ref_id: str | None = None,
+    response: dict[str, Any] | None = None,
     session,
 ):
-    """Verify a Payment and perform presentation/session side effects.
+    """Verify a gateway callback and apply presentation-side effects.
 
-    This is no longer a second payment implementation.  All financial
-    verification and lifecycle mutation belongs to ``verify_payment``.
+    Financial mutation remains exclusively inside ``verify_payment``.
+    ``attempt_id`` is optional for internal/direct callers, but canonical
+    gateway callbacks should always pass the attempt resolved from the
+    callback authority.
     """
+
     payment = verify_payment(
         payment_id=payment_id,
+        attempt_id=attempt_id,
         ref_id=ref_id,
         response=response,
     )

@@ -275,6 +275,14 @@ class PaymentAttempt(models.Model):
                 name="payment_attempt_payment_number_uniq",
             ),
 
+            models.UniqueConstraint(
+                fields=("payment",),
+                condition=Q(
+                    status=PaymentAttemptStatus.PENDING,
+                ),
+                name="payment_one_pending_attempt_per_payment",
+            ),
+
             models.CheckConstraint(
                 condition=Q(
                     attempt_number__gte=1,

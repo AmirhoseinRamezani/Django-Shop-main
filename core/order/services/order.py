@@ -96,6 +96,11 @@ class OrderService:
             sale_type=SaleType.ONLINE,
             status=OrderStatusType.pending,
             total_price=total_price,
+            subtotal_price=total_price,
+            discount_amount=Decimal("0"),
+            shipping_price=Decimal("0"),
+            tax_amount=Decimal("0"),
+            payable_price=total_price,
             expire_at=expire_at,
 
             # user snapshot

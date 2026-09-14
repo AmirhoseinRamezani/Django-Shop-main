@@ -51,7 +51,7 @@ class CouponService:
                 is_active=True,
             )
             .exclude(
-                used_count=F("max_usage"),
+                used_count=F("max_limit_usage"),
             )
             .update(
                 used_count=F("used_count") + 1

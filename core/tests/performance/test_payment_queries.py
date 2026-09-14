@@ -5,9 +5,10 @@ from tests.helpers.queries import (
     assert_max_queries,
 )
 
-from payment.services.verify import (
-    verify_payment,
-)
+from payment.enums import PaymentGateway, PaymentAttemptStatus
+from payment.providers.base import GatewayVerificationResult
+from payment.services.verify import verify_payment
+from tests.factories.payment import PaymentAttemptFactory
 
 
 pytestmark = [

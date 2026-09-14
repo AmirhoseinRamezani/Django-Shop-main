@@ -1,0 +1,12 @@
+diff --git a/tests/e2e/test_checkout_flow.py b/tests/e2e/test_checkout_flow.py
+index b1bae98..6efe06d 100644
+--- a/tests/e2e/test_checkout_flow.py
++++ b/tests/e2e/test_checkout_flow.py
+@@ -65,6 +65,6 @@ def test_complete_checkout_flow(
+     payment.refresh_from_db()
+     order.refresh_from_db()
+ 
+-    assert payment.status == PaymentStatusType.success
++    assert payment.status == PaymentStatusType.SUCCESS
+     assert payment.is_consumed
+     assert order.status == OrderStatusType.paid

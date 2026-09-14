@@ -6,10 +6,10 @@ from payment.exceptions import (
     PaymentCallbackMissingIdentityError,
     PaymentInvalidCallbackError,
 )
-from payment.services.callback import resolve_payment_id
+from payment.services.callback import resolve_callback, resolve_payment_id
 
 from tests.factories.payment import PaymentAttemptFactory
-from payment.enums import PaymentAttemptStatus
+from payment.enums import PaymentAttemptStatus, PaymentGateway
 
 pytestmark = [
     pytest.mark.django_db,
@@ -58,3 +58,47 @@ class TestPaymentCallbackResolution:
     def test_unknown_authority_is_rejected(self):
         with pytest.raises(PaymentInvalidCallbackError):
             resolve_payment_id(authority="AUTH-UNKNOWN")
+
+
+    def test_resolves_concrete_attempt_and_payment(
+        self,
+        payment_factory,
+    ):
+        payment = payment_factory()
+
+        attempt = PaymentAttemptFactory(
+            payment=payment,
+            attempt_number=1,
+            status=PaymentAttemptStatus.PENDING,
+            authority_id="AUTH-CALLBACK-EXACT",
+        )
+
+        resolution = resolve_callback(
+            authority=" AUTH-CALLBACK-EXACT ",
+        )
+
+        assert resolution.payment_id == payment.pk
+        assert resolution.attempt_id == attempt.pk
+        assert resolution.authority == "AUTH-CALLBACK-EXACT"
+
+    def test_gateway_mismatch_is_rejected(
+        self,
+        payment_factory,
+    ):
+        payment = payment_factory(
+            gateway=PaymentGateway.ZARINPAL,
+        )
+
+        PaymentAttemptFactory(
+            payment=payment,
+            attempt_number=1,
+            status=PaymentAttemptStatus.PENDING,
+            authority_id="AUTH-GATEWAY-MISMATCH",
+        )
+
+        with pytest.raises(PaymentCallbackIdentityMismatchError):
+            resolve_callback(
+                authority="AUTH-GATEWAY-MISMATCH",
+                gateway="stripe",
+            )
+

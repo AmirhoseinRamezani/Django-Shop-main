@@ -1,32 +1,24 @@
-# tests/concurrency/test_idempotency.py
 import pytest
-
-from django.core.exceptions import ValidationError
 
 from payment.services.verify import verify_payment
 
 pytestmark = pytest.mark.django_db
 
 
-def test_verify_twice_returns_same_payment(
-    payment,
-):
+def test_verify_twice_returns_same_payment(successful_payment):
+    attempt = successful_payment.attempts.get()
 
-    payment1 = verify_payment(
-            authority=payment.authority_id,
-            ref_id=111,
-        )
+    first = verify_payment(
+        payment_id=successful_payment.pk,
+        attempt_id=attempt.pk,
+        ref_id="REF-SUCCESSFUL",
+    )
+    second = verify_payment(
+        payment_id=successful_payment.pk,
+        attempt_id=attempt.pk,
+        ref_id="REF-SUCCESSFUL",
+    )
 
-    payment2 = verify_payment(
-                authority=payment.authority_id,
-                ref_id=112,
-            )
-    
-    assert payment1.pk == payment2.pk
-    
-    # with pytest.raises(ValidationError):
-
-    #     verify_payment(
-    #         authority=payment.authority_id,
-    #         ref_id=112,
-    #     )
+    assert first.pk == second.pk == successful_payment.pk
+    successful_payment.refresh_from_db()
+    assert successful_payment.is_consumed is True

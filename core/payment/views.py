@@ -10,8 +10,13 @@ from django.urls import reverse_lazy
 
 from django.contrib.auth.mixins import LoginRequiredMixin
 
-from payment.exceptions import PaymentCallbackError, PaymentGatewayError
-from payment.services.callback import resolve_payment_id
+from payment.exceptions import (
+    PaymentCallbackError,
+    PaymentGatewayError,
+    PaymentCallbackIdentityMismatchError,
+)
+from payment.services.callback import resolve_callback
+from payment.services.gateway_service import GatewayService
 
 from payment.services.payment_flow import (
     handle_successful_payment,
@@ -45,7 +50,7 @@ class PaymentVerifyView(View):
         *args,
         **kwargs,
     ):
-
+        payload = request.GET.dict()
         authority = request.GET.get("Authority")
 
         if not authority:
@@ -54,35 +59,53 @@ class PaymentVerifyView(View):
             )
 
         try:
-
-            payment_id = resolve_payment_id(
+            resolution = resolve_callback(
                 authority=authority,
             )
-            
+
+            callback = GatewayService.parse_callback(
+                payload=payload,
+                gateway=resolution.gateway,
+            )
+
+            callback_authority = str(
+                callback.authority or ""
+            ).strip()
+
+            if callback_authority != resolution.authority:
+                raise PaymentCallbackIdentityMismatchError(
+                    "Parsed gateway callback authority does not match "
+                    "the resolved PaymentAttempt."
+                )
+
+            handle_successful_payment(
+                payment_id=resolution.payment_id,
+                attempt_id=resolution.attempt_id,
+                ref_id=request.GET.get("RefID"),
+                response=payload,
+                session=request.session,
+            )
+
         except PaymentCallbackError:
-            
             return redirect(
                 reverse_lazy("order:failed")
             )
-        
-        try:
-            handle_successful_payment(
-                payment_id=payment_id,
-                ref_id=request.GET.get("RefID"),
-                response=request.GET.dict(),
-                session=request.session,
-            )
+
         except PaymentGatewayError as exc:
-            # An unknown gateway outcome must not be presented as a confirmed
-            # financial failure.  The authoritative service keeps Payment
-            # pending and the exception is intentionally allowed to reach the
-            # application's error handling / retry surface.
+            # A transport/unknown gateway outcome must never be presented
+            # as a confirmed financial failure.  The authoritative service
+            # leaves the Payment pending for later reconciliation.
             if exc.retryable:
                 raise
 
-            return redirect(reverse_lazy("order:failed"))
+            return redirect(
+                reverse_lazy("order:failed")
+            )
 
-        return redirect(reverse_lazy("order:completed"))
+        return redirect(
+            reverse_lazy("order:completed")
+        )
+
 
 
 class RetryPaymentView(

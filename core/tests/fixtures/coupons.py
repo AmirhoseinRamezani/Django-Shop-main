@@ -7,7 +7,7 @@ from order.models import CouponModel
 @pytest.fixture
 def used_coupon(coupon):
 
-    coupon.used_count = coupon.max_usage
+    coupon.used_count = coupon.max_limit_usage
     coupon.save(
         update_fields=[
             "used_count",

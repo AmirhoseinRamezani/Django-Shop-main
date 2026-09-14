@@ -17,7 +17,7 @@ class CartBuilder:
 
     # ----------------------------
 
-    def with_user(self, user):
+    def for_user(self, user):
 
         self.user = user
 
@@ -29,7 +29,7 @@ class CartBuilder:
 
     # ----------------------------
 
-    def add(
+    def with_item(
         self,
         product=None,
         qty=1,
@@ -51,7 +51,7 @@ class CartBuilder:
 
         for _ in range(count):
 
-            self.add()
+            self.with_item()
 
         return self
 
@@ -60,3 +60,7 @@ class CartBuilder:
     def build(self):
 
         return self.cart
+
+    # Backward-compatible aliases for older builder callers.
+    with_user = for_user
+    add = with_item

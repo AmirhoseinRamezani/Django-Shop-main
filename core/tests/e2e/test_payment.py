@@ -1,6 +1,8 @@
 # tests/e2e/test_payment.py
 import pytest
 
+from payment.enums import PaymentGateway
+from payment.providers.base import GatewayPaymentResult, GatewayVerificationResult
 from payment.services.services import PaymentService
 from payment.services.verify import verify_payment
 
@@ -16,28 +18,54 @@ class TestPaymentLifecycle:
 
     def test_payment_success(
         self,
-        paid_order,
+        order,
         mocker,
     ):
-        gateway = mocker.patch(
-            "payment.services.services.ZarinPalSandbox"
+        mocker.patch(
+            "payment.services.services.GatewayService.current_gateway",
+            return_value=PaymentGateway.ZARINPAL,
         )
 
-        gateway.return_value.payment_request.return_value = {
-            "Authority": "AUTH123",
-        }
+        mocker.patch(
+            "payment.services.services.GatewayService.initiate_payment",
+            return_value=GatewayPaymentResult(
+                success=True,
+                gateway=PaymentGateway.ZARINPAL,
+                authority="AUTH123",
+            ),
+        )
 
-        gateway.return_value.generate_payment_url.return_value = "url"
+        mocker.patch(
+            "payment.services.services.GatewayService.payment_url",
+            return_value="url",
+        )
 
         PaymentService.start_payment(
-            paid_order,
+            order,
+            callback_url="https://shop.test/payment/verify/",
         )
 
-        payment = paid_order.payments.first()
+        payment = order.payments.first()
+        attempt = payment.attempts.first()
+
+        mocker.patch(
+            "payment.services.verify.GatewayService.verify",
+            return_value=GatewayVerificationResult(
+                success=True,
+                gateway=PaymentGateway.ZARINPAL,
+                gateway_reference="REF-AUTH123",
+                gateway_transaction_id="TXN-AUTH123",
+                response_code="100",
+                message="verified",
+                amount=payment.amount,
+                currency=payment.currency,
+            ),
+        )
 
         verify_payment(
-            authority=payment.authority_id,
-            ref_id=123,
+            payment_id=payment.pk,
+            attempt_id=attempt.pk,
+            ref_id="REF-AUTH123",
             response={},
         )
 

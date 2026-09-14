@@ -2,7 +2,8 @@
 import pytest
 
 from order.models import OrderStatusType
-from payment.enums import PaymentStatusType
+from payment.enums import PaymentGateway, PaymentStatusType
+from payment.providers.base import GatewayPaymentResult, GatewayVerificationResult
 from order.services.order import OrderService
 from payment.services.services import PaymentService
 from payment.services.payment_flow import handle_successful_payment
@@ -28,20 +29,29 @@ class TestCustomerCheckout:
     ):
         cart = (
             cart_builder
-            .for_user(user)
-            .with_item(product, quantity=2)
+            .with_user(user)
+            .add(product=product, qty=2)
             .build()
         )
 
-        gateway = mocker.patch(
-            "payment.services.services.ZarinPalSandbox"
+        mocker.patch(
+            "payment.services.services.GatewayService.current_gateway",
+            return_value=PaymentGateway.ZARINPAL,
         )
 
-        gateway.return_value.payment_request.return_value = {
-            "Authority": "AUTH-100",
-        }
+        mocker.patch(
+            "payment.services.services.GatewayService.initiate_payment",
+            return_value=GatewayPaymentResult(
+                success=True,
+                gateway=PaymentGateway.ZARINPAL,
+                authority="AUTH-100",
+            ),
+        )
 
-        gateway.return_value.generate_payment_url.return_value = "payment-url"
+        mocker.patch(
+            "payment.services.services.GatewayService.payment_url",
+            return_value="payment-url",
+        )
 
         order = OrderService.create_online_order(
             user=user,
@@ -49,13 +59,32 @@ class TestCustomerCheckout:
             cart=cart,
         )
 
-        PaymentService.start_payment(order)
+        PaymentService.start_payment(
+            order,
+            callback_url="https://shop.test/payment/verify/",
+        )
 
         payment = order.payments.get()
+        attempt = payment.attempts.get()
+
+        mocker.patch(
+            "payment.services.verify.GatewayService.verify",
+            return_value=GatewayVerificationResult(
+                success=True,
+                gateway=PaymentGateway.ZARINPAL,
+                gateway_reference="REF-AUTH-100",
+                gateway_transaction_id="TXN-AUTH-100",
+                response_code="100",
+                message="verified",
+                amount=payment.amount,
+                currency=payment.currency,
+            ),
+        )
 
         handle_successful_payment(
-            authority=payment.authority_id,
-            ref_id=1122,
+            payment_id=payment.pk,
+            attempt_id=attempt.pk,
+            ref_id="REF-AUTH-100",
             response={},
             session=DummySession(),
         )
