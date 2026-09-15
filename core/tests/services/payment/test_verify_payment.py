@@ -42,10 +42,7 @@ class TestVerifyPayment(BaseTestCase):
         )
 
     @staticmethod
-    def _result(
-        payment,
-        **overrides,
-    ):
+    def _result(payment, **overrides):
         values = {
             "success": True,
             "gateway": PaymentGateway.ZARINPAL,
@@ -59,10 +56,7 @@ class TestVerifyPayment(BaseTestCase):
         values.update(overrides)
         return GatewayVerificationResult(**values)
 
-    def _payment_with_attempt(
-        self,
-        payment_factory,
-    ):
+    def _payment_with_attempt(self, payment_factory):
         payment = payment_factory()
 
         attempt = PaymentAttemptFactory(
@@ -74,13 +68,8 @@ class TestVerifyPayment(BaseTestCase):
 
         return payment, attempt
 
-    def test_success_verify(
-        self,
-        payment_factory,
-    ):
-        payment, attempt = self._payment_with_attempt(
-            payment_factory,
-        )
+    def test_success_verify(self, payment_factory):
+        payment, attempt = self._payment_with_attempt(payment_factory)
 
         with patch(
             "payment.services.verify.GatewayService.verify",
@@ -95,25 +84,18 @@ class TestVerifyPayment(BaseTestCase):
         self.assert_payment_success(payment)
         self.assert_order_paid(payment.order)
 
-    def test_verify_twice_is_idempotent(
-        self,
-        payment_factory,
-    ):
-        payment, attempt = self._payment_with_attempt(
-            payment_factory,
-        )
+    def test_verify_twice_is_idempotent(self, payment_factory):
+        payment, attempt = self._payment_with_attempt(payment_factory)
 
         with patch(
             "payment.services.verify.GatewayService.verify",
             return_value=self.verification_result(payment),
         ) as mock_verify:
-
             verify_payment(
                 payment_id=payment.pk,
                 ref_id="REF-TEST",
                 response={"status": "ok"},
             )
-
             verify_payment(
                 payment_id=payment.pk,
                 ref_id="REF-TEST",
@@ -123,13 +105,9 @@ class TestVerifyPayment(BaseTestCase):
             assert mock_verify.call_count == 1
 
         payment.refresh_from_db()
-
         assert payment.status == PaymentStatusType.SUCCESS
 
-    def test_verification_is_bound_to_exact_attempt(
-        self,
-        payment_factory,
-    ):
+    def test_verification_is_bound_to_exact_attempt(self, payment_factory):
         payment = payment_factory()
 
         first = PaymentAttemptFactory(
@@ -162,10 +140,7 @@ class TestVerifyPayment(BaseTestCase):
         assert called_context["attempt"].attempt_number == 1
         assert second.pk != first.pk
 
-    def test_late_callback_cannot_switch_to_newer_attempt(
-        self,
-        payment_factory,
-    ):
+    def test_late_callback_cannot_switch_to_newer_attempt(self, payment_factory):
         payment = payment_factory()
 
         first = PaymentAttemptFactory(
@@ -197,18 +172,12 @@ class TestVerifyPayment(BaseTestCase):
         second.refresh_from_db()
         assert second.status == PaymentAttemptStatus.PENDING
 
-    def test_conflicting_gateway_reference_is_rejected(
-        self,
-        payment_factory,
-    ):
+    def test_conflicting_gateway_reference_is_rejected(self, payment_factory):
         payment, attempt = self._payment_with_attempt(payment_factory)
 
         with patch(
             "payment.services.verify.GatewayService.verify",
-            return_value=self._result(
-                payment,
-                gateway_reference="REF-CONFLICT",
-            ),
+            return_value=self._result(payment, gateway_reference="REF-CONFLICT"),
         ):
             with pytest.raises(PaymentInvariantViolation):
                 verify_payment(
@@ -223,18 +192,12 @@ class TestVerifyPayment(BaseTestCase):
         assert attempt.status == PaymentAttemptStatus.PENDING
         assert attempt.gateway_reference == ""
 
-    def test_gateway_amount_mismatch_is_rejected(
-        self,
-        payment_factory,
-    ):
+    def test_gateway_amount_mismatch_is_rejected(self, payment_factory):
         payment, attempt = self._payment_with_attempt(payment_factory)
 
         with patch(
             "payment.services.verify.GatewayService.verify",
-            return_value=self._result(
-                payment,
-                amount=payment.amount + 1,
-            ),
+            return_value=self._result(payment, amount=payment.amount + 1),
         ):
             with pytest.raises(PaymentInvariantViolation):
                 verify_payment(
@@ -246,18 +209,12 @@ class TestVerifyPayment(BaseTestCase):
         payment.refresh_from_db()
         assert payment.status == PaymentStatusType.PENDING
 
-    def test_success_without_gateway_reference_is_rejected(
-        self,
-        payment_factory,
-    ):
+    def test_success_without_gateway_reference_is_rejected(self, payment_factory):
         payment, attempt = self._payment_with_attempt(payment_factory)
 
         with patch(
             "payment.services.verify.GatewayService.verify",
-            return_value=self._result(
-                payment,
-                gateway_reference=None,
-            ),
+            return_value=self._result(payment, gateway_reference=None),
         ):
             with pytest.raises(PaymentGatewayError):
                 verify_payment(
@@ -271,13 +228,8 @@ class TestVerifyPayment(BaseTestCase):
         assert payment.status == PaymentStatusType.PENDING
         assert attempt.status == PaymentAttemptStatus.PENDING
 
-    def test_failed_payment_cannot_verify(
-        self,
-        payment_factory,
-    ):
-        payment = payment_factory(
-            failed=True,
-        )
+    def test_failed_payment_cannot_verify(self, payment_factory):
+        payment = payment_factory(failed=True)
 
         with pytest.raises(PaymentInvariantViolation):
             verify_payment(
@@ -314,6 +266,25 @@ class TestVerifyPayment(BaseTestCase):
         mock_verify.assert_not_called()
         assert result.is_consumed is True
 
+    def test_successful_payment_without_successful_attempt_is_rejected(
+        self,
+        payment_factory,
+    ):
+        payment = payment_factory()
+
+        payment.succeed()
+        PaymentRepository.save(payment, update_fields=("status",))
+
+        with pytest.raises(PaymentInvariantViolation):
+            verify_payment(
+                payment_id=payment.pk,
+                ref_id="REF-TEST",
+                response={"status": "ok"},
+            )
+
+        payment.refresh_from_db()
+        assert payment.is_consumed is False
+
     def test_duplicate_terminal_callback_with_conflicting_ref_is_rejected(
         self,
         payment_factory,
@@ -327,10 +298,7 @@ class TestVerifyPayment(BaseTestCase):
         PaymentAttemptRepository.save_success(attempt)
 
         payment.succeed()
-        PaymentRepository.save(
-            payment,
-            update_fields=("status",),
-        )
+        PaymentRepository.save(payment, update_fields=("status",))
 
         with pytest.raises(PaymentInvariantViolation):
             verify_payment(
@@ -343,13 +311,8 @@ class TestVerifyPayment(BaseTestCase):
         payment.refresh_from_db()
         assert payment.is_consumed is False
 
-    def test_payment_consumed(
-        self,
-        payment_factory,
-    ):
-        payment, attempt = self._payment_with_attempt(
-            payment_factory,
-        )
+    def test_payment_consumed(self, payment_factory):
+        payment, attempt = self._payment_with_attempt(payment_factory)
 
         with patch(
             "payment.services.verify.GatewayService.verify",
@@ -362,13 +325,9 @@ class TestVerifyPayment(BaseTestCase):
             )
 
         payment.refresh_from_db()
-
         assert payment.is_consumed is True
 
-    def test_order_status_changed(
-        self,
-        payment_factory,
-    ):
+    def test_order_status_changed(self, payment_factory):
         payment, attempt = self._payment_with_attempt(payment_factory)
 
         with patch(
@@ -382,14 +341,10 @@ class TestVerifyPayment(BaseTestCase):
             )
 
         payment.order.refresh_from_db()
-
         assert payment.order.status == OrderStatusType.paid
         assert payment.order.is_paid
 
-    def test_ref_id_saved(
-        self,
-        payment_factory,
-    ):
+    def test_ref_id_saved(self, payment_factory):
         payment, attempt = self._payment_with_attempt(payment_factory)
 
         with patch(
@@ -403,16 +358,12 @@ class TestVerifyPayment(BaseTestCase):
             )
 
         attempt.refresh_from_db()
-
         assert attempt.gateway_reference == "REF-TEST"
         assert attempt.gateway_transaction_id == "123456"
         assert attempt.authority_id == "AUTH-VERIFY"
         assert attempt.status == PaymentAttemptStatus.SUCCESS
 
-    def test_order_paid_date_is_set(
-        self,
-        payment_factory,
-    ):
+    def test_order_paid_date_is_set(self, payment_factory):
         payment, attempt = self._payment_with_attempt(payment_factory)
 
         with patch(
@@ -426,6 +377,5 @@ class TestVerifyPayment(BaseTestCase):
             )
 
         payment.order.refresh_from_db()
-
         assert payment.order.status == OrderStatusType.paid
         assert payment.order.paid_date is not None
