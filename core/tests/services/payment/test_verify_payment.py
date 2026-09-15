@@ -15,8 +15,9 @@ from payment.enums import (
 )
 from payment.exceptions import PaymentGatewayError, PaymentInvariantViolation
 from payment.providers.base import GatewayVerificationResult
-from payment.services.verify import verify_payment
+from payment.repositories.payment_attempt_repository import PaymentAttemptRepository
 from payment.repositories.payment_repository import PaymentRepository
+from payment.services.verify import verify_payment
 
 
 pytestmark = [
@@ -140,7 +141,7 @@ class TestVerifyPayment(BaseTestCase):
         second = PaymentAttemptFactory(
             payment=payment,
             attempt_number=2,
-            status=PaymentAttemptStatus.PENDING,
+            status=PaymentAttemptStatus.FAILED,
             authority_id="AUTH-NEW",
         )
 
@@ -291,6 +292,12 @@ class TestVerifyPayment(BaseTestCase):
     ):
         payment, attempt = self._payment_with_attempt(payment_factory)
 
+        attempt.mark_success(
+            authority_id=attempt.authority_id,
+            gateway_reference="REF-TEST",
+        )
+        PaymentAttemptRepository.save_success(attempt)
+
         payment.succeed()
         PaymentRepository.save(payment, update_fields=("status",))
 
@@ -312,6 +319,12 @@ class TestVerifyPayment(BaseTestCase):
         payment_factory,
     ):
         payment, attempt = self._payment_with_attempt(payment_factory)
+
+        attempt.mark_success(
+            authority_id=attempt.authority_id,
+            gateway_reference="REF-TEST",
+        )
+        PaymentAttemptRepository.save_success(attempt)
 
         payment.succeed()
         PaymentRepository.save(
@@ -356,9 +369,7 @@ class TestVerifyPayment(BaseTestCase):
         self,
         payment_factory,
     ):
-        payment, attempt = self._payment_with_attempt(
-            payment_factory,
-        )
+        payment, attempt = self._payment_with_attempt(payment_factory)
 
         with patch(
             "payment.services.verify.GatewayService.verify",
@@ -379,9 +390,7 @@ class TestVerifyPayment(BaseTestCase):
         self,
         payment_factory,
     ):
-        payment, attempt = self._payment_with_attempt(
-            payment_factory,
-        )
+        payment, attempt = self._payment_with_attempt(payment_factory)
 
         with patch(
             "payment.services.verify.GatewayService.verify",
@@ -404,9 +413,7 @@ class TestVerifyPayment(BaseTestCase):
         self,
         payment_factory,
     ):
-        payment, attempt = self._payment_with_attempt(
-            payment_factory,
-        )
+        payment, attempt = self._payment_with_attempt(payment_factory)
 
         with patch(
             "payment.services.verify.GatewayService.verify",
