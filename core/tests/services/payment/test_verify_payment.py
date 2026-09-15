@@ -116,10 +116,16 @@ class TestVerifyPayment(BaseTestCase):
             status=PaymentAttemptStatus.PENDING,
             authority_id="AUTH-OLD",
         )
+        first.mark_failed(
+            reason="Gateway payment failed",
+            response_code="-1",
+        )
+        PaymentAttemptRepository.save(first)
+
         second = PaymentAttemptFactory(
             payment=payment,
             attempt_number=2,
-            status=PaymentAttemptStatus.FAILED,
+            status=PaymentAttemptStatus.PENDING,
             authority_id="AUTH-NEW",
         )
 
@@ -129,16 +135,16 @@ class TestVerifyPayment(BaseTestCase):
         ) as mock_verify:
             verify_payment(
                 payment_id=payment.pk,
-                attempt_id=first.pk,
+                attempt_id=second.pk,
                 ref_id="REF-TEST",
                 response={"status": "ok"},
             )
 
         mock_verify.assert_called_once()
         called_context = mock_verify.call_args.kwargs
-        assert called_context["attempt"].attempt_id == first.pk
-        assert called_context["attempt"].attempt_number == 1
-        assert second.pk != first.pk
+        assert called_context["attempt"].attempt_id == second.pk
+        assert called_context["attempt"].attempt_number == 2
+        assert first.pk != second.pk
 
     def test_late_callback_cannot_switch_to_newer_attempt(self, payment_factory):
         payment = payment_factory()
@@ -146,10 +152,15 @@ class TestVerifyPayment(BaseTestCase):
         first = PaymentAttemptFactory(
             payment=payment,
             attempt_number=1,
-            status=PaymentAttemptStatus.TIMEOUT,
+            status=PaymentAttemptStatus.PENDING,
             authority_id="AUTH-TIMEOUT",
-            gateway_reference="",
         )
+        first.mark_timeout(
+            reason="Gateway timeout",
+            latency_ms=5000,
+        )
+        PaymentAttemptRepository.save(first)
+
         second = PaymentAttemptFactory(
             payment=payment,
             attempt_number=2,
