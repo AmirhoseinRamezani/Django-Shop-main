@@ -1,4 +1,4 @@
-# tests/factories/payment.py
+# core/tests/factories/payment.py
 import factory
 from django.utils import timezone
 
@@ -56,6 +56,7 @@ class PaymentFactory(BaseFactory):
             is_refunded=True,
         )
 
+
 class PaymentAttemptFactory(BaseFactory):
     """
     Factory for PaymentAttempt (Individual gateway execution lifecycle).
@@ -110,6 +111,7 @@ class PaymentAttemptFactory(BaseFactory):
             failure_reason="Payment attempt cancelled",
             latency_ms=100,
         )
+
     @classmethod
     def _create(cls, model_class, *args, **kwargs):
         status = kwargs.get(
@@ -124,35 +126,17 @@ class PaymentAttemptFactory(BaseFactory):
                 **kwargs,
             )
 
-        # auto_now_add controls started_at.
-        # We must let the DB create the pending row first,
-        # then transition the attempt to its terminal state.
+        # Terminal attempts must be inserted directly because the database
+        # intentionally allows only one pending attempt per Payment.
         terminal_kwargs = dict(kwargs)
+        terminal_kwargs["finished_at"] = timezone.now()
 
-        terminal_kwargs["status"] = (
-            PaymentAttemptStatus.PENDING
-        )
-        terminal_kwargs["finished_at"] = None
-
-        obj = super()._create(
+        return super()._create(
             model_class,
             *args,
             **terminal_kwargs,
         )
 
-        finished_at = timezone.now()
-
-        obj.status = status
-        obj.finished_at = finished_at
-
-        obj.save(
-            update_fields=[
-                "status",
-                "finished_at",
-            ]
-        )
-
-        return obj
 
 class GatewayLogFactory(BaseFactory):
     """
@@ -164,11 +148,11 @@ class GatewayLogFactory(BaseFactory):
 
     attempt = factory.SubFactory(PaymentAttemptFactory)
     request_url = "https://api.zarinpal.com/pg/v4/payment/request.json"
-    
+
     gateway = PaymentGateway.ZARINPAL
     log_type = GatewayLogType.REQUEST
     direction = GatewayLogDirection.OUTBOUND
-    
+
     request_method = "POST"
     http_status = 200
     latency_ms = 120
@@ -178,36 +162,19 @@ class GatewayLogFactory(BaseFactory):
     response_payload = factory.LazyFunction(dict)
     response_code = ""
     gateway_message = ""
-    is_success = True
-    exception = ""
-    ip_address = "127.0.0.1"
-    user_agent = "pytest"
-    meta = factory.LazyFunction(dict)
-    
+
+
 class RefundFactory(BaseFactory):
     """
-    Factory for independent Refund transactions.
+    Factory for Refund.
     """
 
     class Meta:
         model = Refund
 
-    payment = factory.SubFactory(
-        PaymentFactory,
-        status=PaymentStatusType.SUCCESS,
-        is_consumed=True,
-    )
+    payment = factory.SubFactory(PaymentFactory)
     amount = factory.LazyAttribute(lambda o: o.payment.amount)
-    currency = factory.LazyAttribute(
-        lambda o: o.payment.currency
-    )
-
-    idempotency_key = factory.Sequence(
-        lambda n: f"refund-idempotency-{n:08d}"
-    )
-
-    reason = RefundReason.OTHER
-    reason_detail = ""
+    reason = RefundReason.CUSTOMER_REQUEST
     status = RefundStatus.PENDING
     gateway_reference = ""
     gateway_transaction_id = ""
@@ -215,51 +182,11 @@ class RefundFactory(BaseFactory):
     gateway_message = ""
     failure_reason = ""
     latency_ms = None
-    ip_address = "127.0.0.1"
-    user_agent = "pytest"
-    meta = factory.LazyFunction(dict)
+    requested_at = factory.LazyFunction(timezone.now)
+    finished_at = None
 
-    class Params:
-
-        success = factory.Trait(
-            status=RefundStatus.SUCCESS,
-            gateway_reference=factory.Sequence(
-                lambda n: f"REFUND-REF-{n:08d}"
-            ),
-            gateway_transaction_id="",
-            response_code="100",
-            gateway_message="Refund successful",
-            failure_reason="",
-            latency_ms=300,
-        )
-
-        failed = factory.Trait(
-            status=RefundStatus.FAILED,
-            gateway_reference="",
-            gateway_transaction_id="",
-            response_code="-1",
-            gateway_message="Refund failed",
-            failure_reason="Gateway refund failed",
-            latency_ms=300,
-        )
-    
     @classmethod
     def _create(cls, model_class, *args, **kwargs):
-        """
-        Create terminal refunds through a valid domain lifecycle.
-
-        Database lifecycle:
-
-            INSERT:
-                PENDING + finished_at=NULL
-
-            UPDATE:
-                SUCCESS/FAILED + finished_at=timezone.now()
-
-        This is required because Refund has DB constraints enforcing
-        terminal-state consistency and finished_at >= requested_at.
-        """
-
         requested_status = kwargs.get(
             "status",
             RefundStatus.PENDING,
@@ -273,8 +200,6 @@ class RefundFactory(BaseFactory):
             )
 
         terminal_kwargs = dict(kwargs)
-
-        # First persist a valid pending state.
         terminal_kwargs["status"] = RefundStatus.PENDING
         terminal_kwargs["finished_at"] = None
 
@@ -284,10 +209,7 @@ class RefundFactory(BaseFactory):
             **terminal_kwargs,
         )
 
-        # Apply the real lifecycle transition after requested_at
-        # has been generated by the database/model.
         if requested_status == RefundStatus.SUCCESS:
-
             obj.mark_success(
                 gateway_reference=obj.gateway_reference,
                 gateway_transaction_id=obj.gateway_transaction_id,
@@ -295,22 +217,17 @@ class RefundFactory(BaseFactory):
                 gateway_message=obj.gateway_message,
                 latency_ms=obj.latency_ms,
             )
-
         elif requested_status == RefundStatus.FAILED:
-
             obj.mark_failed(
                 reason=obj.failure_reason,
                 response_code=obj.response_code,
                 gateway_message=obj.gateway_message,
                 latency_ms=obj.latency_ms,
             )
-
         else:
             raise ValueError(
-                f"Unsupported RefundFactory terminal status: "
-                f"{requested_status}"
+                f"Unsupported RefundFactory terminal status: {requested_status}"
             )
 
         obj.save()
-
         return obj
