@@ -93,15 +93,12 @@ class VerificationContext:
     """
     Immutable context crossing the database -> gateway boundary.
     """
-
     payment: VerificationSnapshot
     attempt: AttemptVerificationSnapshot
-
 
 # ================================
 # PUBLIC APPLICATION FLOW
 # ================================
-
 
 def verify_payment(
     *,
@@ -115,31 +112,62 @@ def verify_payment(
 
     Transaction boundaries
     ----------------------
+
     Phase A
-        Payment lock -> Attempt lock -> immutable snapshot -> COMMIT
+        Payment lock
+            -> Attempt lock
+            -> immutable snapshot
+            -> COMMIT
 
-    Phase B
-        Gateway HTTP with no database lock held
+        Phase B:
+            Gateway HTTP
+            -> NO DB LOCK
 
-    Phase C
-        Payment lock -> Attempt lock -> reconcile -> persist -> COMMIT
+        Phase C:
+            Payment lock
+            -> Attempt lock
+            -> reconcile
+            -> persist
+            -> COMMIT
 
-    Phase D
-        Order lock -> Payment lock -> consume -> synchronize order -> COMMIT
+        Phase D:
+            Order lock
+            -> Payment lock
+            -> consume
+            -> synchronize order
+            -> COMMIT
 
     Financial rules
     ---------------
-    Payment owns the immutable financial snapshot.
-    PaymentAttempt owns gateway execution identity.
-    Gateway results are external evidence and must be reconciled.
-    Unknown gateway outcomes never become confirmed failures automatically.
-    External gateway I/O never occurs while a database lock is held.
+
+    Payment:
+        owns the immutable financial snapshot.
+
+    PaymentAttempt:
+        owns gateway execution identity.
+
+    Gateway result:
+        is external evidence and must be reconciled against local state.
+
+    Unknown gateway outcomes:
+        never become confirmed failures merely because communication failed.
+
+    External gateway I/O:
+        never occurs while a database lock is held.
     """
 
-    # Provider-specific callback payload is compatibility-only input.
+    # ----------------------------------------
+    # Raw callback payload is compatibility-only input.
+    #
+    # Provider-specific callback payload must never become financial
+    # source of truth.
+    # ----------------------------------------
+
     del response
 
-    normalized_ref_id = _normalize_optional(ref_id)
+    normalized_ref_id = _normalize_optional(
+        ref_id,
+    )
 
     # ========================================
     # PHASE A — IMMUTABLE SNAPSHOT
@@ -150,7 +178,12 @@ def verify_payment(
         attempt_id=attempt_id,
     )
 
-    # SUCCESS is terminal and must always be backed by a successful Attempt.
+    # ----------------------------------------
+    # Payment is already SUCCESS.
+    # SUCCESS is terminal.
+    # Do not call the gateway again.
+    # ----------------------------------------
+
     if context is None:
         _validate_successful_payment_callback(
             payment_id=payment_id,
@@ -175,7 +208,14 @@ def verify_payment(
             attempt=attempt_snapshot,
         )
     except PaymentGatewayError:
-        # Transport/infrastructure failure leaves financial state unchanged.
+        """
+        Transport/infrastructure failure.
+
+        The financial outcome is unknown.
+
+        Payment remains unchanged and can later be retried or
+        reconciled.
+        """
         raise
 
     # ========================================
@@ -183,7 +223,10 @@ def verify_payment(
     # ========================================
 
     with transaction.atomic():
-        payment = PaymentRepository.get_for_update(payment_id)
+        payment = PaymentRepository.get_for_update(
+            payment_id,
+        )
+
         attempt = PaymentAttemptRepository.find_for_update(
             attempt_snapshot.attempt_id,
         )
@@ -199,6 +242,8 @@ def verify_payment(
             )
 
         # Another verifier may have finalized the Payment after Phase A.
+        # The result is idempotent only if the gateway evidence still agrees
+        # with the exact attempt that was originally resolved.
         if payment.is_successful:
             _validate_duplicate_success_identity(
                 result=result,
@@ -206,10 +251,12 @@ def verify_payment(
                 payment_snapshot=payment_snapshot,
                 attempt_snapshot=attempt_snapshot,
             )
+
         elif payment.is_failed:
             raise PaymentInvariantViolation(
                 "A failed Payment cannot be resurrected by verification."
             )
+
         else:
             if not payment.is_pending:
                 raise PaymentInvariantViolation(
@@ -232,7 +279,10 @@ def verify_payment(
                         "operation": "verify",
                         "payment_id": payment.pk,
                         "attempt_id": attempt.pk,
-                        "response_code": result.response_code or "",
+                        "response_code": (
+                            result.response_code
+                            or ""
+                        ),
                     },
                     retryable=False,
                 )
@@ -251,7 +301,8 @@ def verify_payment(
 
             if not gateway_reference:
                 raise PaymentInvariantViolation(
-                    "Successful gateway verification requires a gateway reference."
+                    "Successful gateway verification requires "
+                    "a gateway reference."
                 )
 
             gateway_transaction_id = _normalize_optional(
@@ -269,22 +320,33 @@ def verify_payment(
                 gateway_message=result.message or "",
             )
 
-            PaymentAttemptRepository.save_success(attempt)
+            PaymentAttemptRepository.save_success(
+                attempt,
+            )
 
             payment.succeed()
 
             PaymentRepository.save(
                 payment,
-                update_fields=("status",),
+                update_fields=(
+                    "status",
+                ),
             )
 
-    return _consume_successful_payment(payment_id=payment_id)
+    # Consumption is intentionally outside the verification persistence
+    # transaction.  If this process dies after SUCCESS is committed, a later
+    # duplicate callback can still enter this idempotent synchronization path.
+    #
+    # This also means a worker that observes an already-successful Payment
+    # cannot accidentally skip Order synchronization.
+    return _consume_successful_payment(
+        payment_id=payment_id,
+    )
 
 
 # ================================
 # PHASE A — SNAPSHOT
 # ================================
-
 
 def _validate_successful_payment_callback(
     *,
@@ -295,7 +357,9 @@ def _validate_successful_payment_callback(
     """Validate a terminal successful Payment against its successful Attempt."""
 
     with transaction.atomic():
-        payment = PaymentRepository.get_for_update(payment_id)
+        payment = PaymentRepository.get_for_update(
+            payment_id,
+        )
 
         if not payment.is_successful:
             raise PaymentInvariantViolation(
@@ -303,12 +367,19 @@ def _validate_successful_payment_callback(
             )
 
         if attempt_id is not None:
-            attempt = PaymentAttemptRepository.get_for_update(attempt_id)
+            attempt = PaymentAttemptRepository.get_for_update(
+                attempt_id,
+            )
         else:
             successful_attempts = list(
-                PaymentAttemptRepository.successful_for_payment(payment.pk)
+                PaymentAttemptRepository.successful_for_payment(
+                    payment.pk,
+                )
                 .select_for_update()
-                .order_by("-attempt_number", "-id")[:2]
+                .order_by(
+                    "-attempt_number",
+                    "-id",
+                )[:2]
             )
 
             if not successful_attempts:
@@ -327,6 +398,11 @@ def _validate_successful_payment_callback(
         if attempt.payment_id != payment.pk:
             raise PaymentInvariantViolation(
                 "PaymentAttempt does not belong to the expected Payment."
+            )
+
+        if not payment.is_successful:
+            raise PaymentInvariantViolation(
+                "Payment changed state while validating a terminal callback."
             )
 
         if attempt.status != PaymentAttemptStatus.SUCCESS:
@@ -350,34 +426,73 @@ def _build_verification_context(
     payment_id: int,
     attempt_id: int | None = None,
 ) -> VerificationContext | None:
-    """Capture an immutable verification context."""
+    """
+    Capture an immutable verification context.
+
+    Returns:
+        None
+            when Payment is already SUCCESS.
+
+        VerificationContext
+            when external verification is required.
+
+    Lock order:
+
+        Payment
+            ->
+        PaymentAttempt
+    """
 
     with transaction.atomic():
-        payment = PaymentRepository.get_for_update(payment_id)
+        payment = PaymentRepository.get_for_update(
+            payment_id,
+        )
+
+        # ------------------------------------
+        # SUCCESS is terminal and idempotent.
+        # ------------------------------------
 
         if payment.is_successful:
             if attempt_id is not None:
-                attempt = PaymentAttemptRepository.get_for_update(attempt_id)
+                attempt = PaymentAttemptRepository.get_for_update(
+                    attempt_id,
+                )
                 if attempt.payment_id != payment.pk:
                     raise PaymentInvariantViolation(
                         "PaymentAttempt does not belong to the expected Payment."
                     )
             return None
 
+        # ------------------------------------
+        # FAILED is terminal.
+        # ------------------------------------
+
         if payment.is_failed:
             raise PaymentInvariantViolation(
                 "A failed Payment cannot be verified."
             )
 
-        PaymentPolicy.can_verify(payment)
+        # ------------------------------------
+        # Application-level verification policy.
+        # ------------------------------------
+
+        PaymentPolicy.can_verify(
+            payment,
+        )
 
         if payment.state != PaymentStatusType.PENDING:
             raise PaymentInvariantViolation(
                 "Only pending Payments can be verified."
             )
 
+        # ------------------------------------
+        # PaymentAttempt is resolved while Payment is locked.
+        # ------------------------------------
+
         if attempt_id is not None:
-            attempt = PaymentAttemptRepository.get_for_update(attempt_id)
+            attempt = PaymentAttemptRepository.get_for_update(
+                attempt_id,
+            )
 
             if attempt.payment_id != payment.pk:
                 raise PaymentInvariantViolation(
@@ -394,14 +509,18 @@ def _build_verification_context(
                     "PaymentAttempt has no gateway authority."
                 )
         else:
-            attempt = _resolve_verification_attempt(payment_id=payment.pk)
+            attempt = _resolve_verification_attempt(
+                payment_id=payment.pk,
+            )
 
         return VerificationContext(
             payment=VerificationSnapshot(
                 payment_id=payment.pk,
                 order_id=payment.order_id,
                 amount=payment.amount,
-                currency=_normalize_optional(payment.currency),
+                currency=_normalize_optional(
+                    payment.currency,
+                ),
                 gateway=payment.gateway,
             ),
             attempt=AttemptVerificationSnapshot(
@@ -421,14 +540,29 @@ def _build_verification_context(
             ),
         )
 
+def _resolve_verification_attempt(
+    *,
+    payment_id: int,
+) -> PaymentAttempt:
+    """Resolve the active gateway execution attempt for a Payment.
 
-def _resolve_verification_attempt(*, payment_id: int) -> PaymentAttempt:
-    """Resolve the sole pending gateway attempt for a Payment."""
+    Direct verification without an explicit attempt binding is intentionally
+    limited to the currently pending attempt.  Terminal historical attempts
+    must be reconciled through an explicit reconciliation workflow rather
+    than silently becoming the target of a new verification request.
+    """
 
     attempts = list(
-        PaymentAttemptRepository.pending_for_payment_for_update(payment_id)
-        .filter(authority_id__gt="")
-        .order_by("-attempt_number", "-id")[:2]
+        PaymentAttemptRepository.pending_for_payment_for_update(
+            payment_id,
+        )
+        .filter(
+            authority_id__gt="",
+        )
+        .order_by(
+            "-attempt_number",
+            "-id",
+        )[:2]
     )
 
     if not attempts:
@@ -448,7 +582,6 @@ def _resolve_verification_attempt(*, payment_id: int) -> PaymentAttempt:
 # GATEWAY RESULT VALIDATION
 # ================================
 
-
 def _validate_gateway_result(
     *,
     result: Any,
@@ -456,26 +589,47 @@ def _validate_gateway_result(
     attempt_snapshot: AttemptVerificationSnapshot,
     callback_ref: str,
 ) -> None:
-    """Validate normalized GatewayService evidence without mutation."""
+    """
+    Validate normalized GatewayService evidence.
+    No financial state is changed here.
+    """
 
     if result is None:
         raise PaymentInvariantViolation(
             "Gateway verification returned no result."
         )
 
-    result_gateway = _normalize_gateway_identity(result.gateway)
-    expected_gateway = _normalize_gateway_identity(payment_snapshot.gateway)
+    # ----------------------------------------
+    # Gateway identity
+    # ----------------------------------------
+
+    result_gateway = _normalize_gateway_identity(
+        result.gateway,
+    )
+
+    expected_gateway = _normalize_gateway_identity(
+        payment_snapshot.gateway,
+    )
 
     if result_gateway != expected_gateway:
         raise PaymentInvariantViolation(
-            "Gateway verification result does not match the historical Payment gateway."
+            "Gateway verification result does not match "
+            "the historical Payment gateway."
         )
 
-    gateway_reference = _normalize_optional(result.gateway_reference)
+    # ----------------------------------------
+    # Successful verification must have trusted identity.
+    # A success without reference is not a trustworthy financial fact.
+    # ----------------------------------------
+
+    gateway_reference = _normalize_optional(
+        result.gateway_reference,
+    )
 
     if result.success and not gateway_reference:
         raise PaymentGatewayError(
-            "Gateway verification succeeded without a gateway reference from the gateway result.",
+            "Gateway verification succeeded without "
+            "a gateway reference from the gateway result.",
             details={
                 "gateway": expected_gateway,
                 "operation": "verify",
@@ -485,23 +639,43 @@ def _validate_gateway_result(
             retryable=False,
         )
 
+    # ----------------------------------------
+    # Gateway authority must match the historical attempt.
+    # ----------------------------------------
+
     result_authority = _normalize_optional(
-        getattr(result, "authority", None),
+        getattr(
+            result,
+            "authority",
+            None,
+        ),
     )
 
-    if result_authority and result_authority != attempt_snapshot.authority_id:
-        raise PaymentInvariantViolation(
-            "Gateway verification authority does not match the PaymentAttempt authority."
-        )
+    if result_authority:
+        if result_authority != attempt_snapshot.authority_id:
+            raise PaymentInvariantViolation(
+                "Gateway verification authority does not match "
+                "the PaymentAttempt authority."
+            )
+
+    # ----------------------------------------
+    # Existing PaymentAttempt gateway reference.
+    # ----------------------------------------
 
     if (
         attempt_snapshot.gateway_reference
         and gateway_reference
-        and gateway_reference != attempt_snapshot.gateway_reference
+        and gateway_reference
+        != attempt_snapshot.gateway_reference
     ):
         raise PaymentInvariantViolation(
-            "Gateway verification reference conflicts with the PaymentAttempt gateway reference."
+            "Gateway verification reference conflicts with "
+            "the PaymentAttempt gateway reference."
         )
+
+    # ----------------------------------------
+    # Callback reference.
+    # ----------------------------------------
 
     if (
         callback_ref
@@ -512,24 +686,36 @@ def _validate_gateway_result(
             "Callback reference does not match gateway verification."
         )
 
+    # ----------------------------------------
+    # Callback reference against historical attempt.
+    # ----------------------------------------
+
     if (
         callback_ref
         and attempt_snapshot.gateway_reference
         and callback_ref != attempt_snapshot.gateway_reference
     ):
         raise PaymentInvariantViolation(
-            "Callback reference does not match the PaymentAttempt gateway reference."
+            "Callback reference does not match the PaymentAttempt."
         )
 
-    result_transaction = _normalize_optional(result.gateway_transaction_id)
+    # ----------------------------------------
+    # Transaction identity.
+    # ----------------------------------------
+
+    result_transaction = _normalize_optional(
+        result.gateway_transaction_id,
+    )
 
     if (
         attempt_snapshot.gateway_transaction_id
         and result_transaction
-        and result_transaction != attempt_snapshot.gateway_transaction_id
+        and result_transaction
+        != attempt_snapshot.gateway_transaction_id
     ):
         raise PaymentInvariantViolation(
-            "Gateway transaction identity conflicts with the PaymentAttempt transaction identity."
+            "Gateway transaction identity conflicts with "
+            "the PaymentAttempt transaction identity."
         )
 
 
@@ -537,13 +723,20 @@ def _validate_gateway_result(
 # FINANCIAL EVIDENCE
 # ================================
 
-
 def _validate_financial_snapshot(
     *,
     payment: PaymentModel,
     result: Any,
 ) -> None:
-    """Validate gateway financial evidence against immutable Payment data."""
+    """
+    Validate gateway financial evidence against immutable Payment data.
+
+    Never derive the final amount from:
+        Order
+        Cart
+        Product
+        Coupon
+    """
 
     if result.amount is None:
         return
@@ -551,7 +744,10 @@ def _validate_financial_snapshot(
     try:
         payment.validate_financial_snapshot(
             amount=result.amount,
-            currency=result.currency or payment.currency,
+            currency=(
+                result.currency
+                or payment.currency
+            ),
         )
     except ValidationError as exc:
         raise PaymentInvariantViolation(
@@ -559,19 +755,27 @@ def _validate_financial_snapshot(
         ) from exc
 
     if result.currency:
-        normalized_result_currency = _normalize_optional(result.currency)
-        normalized_payment_currency = _normalize_optional(payment.currency)
+        normalized_result_currency = _normalize_optional(
+            result.currency,
+        )
 
-        if normalized_result_currency != normalized_payment_currency:
+        normalized_payment_currency = _normalize_optional(
+            payment.currency,
+        )
+
+        if (
+            normalized_result_currency
+            != normalized_payment_currency
+        ):
             raise PaymentInvariantViolation(
-                "Gateway verification currency does not match the Payment currency."
+                "Gateway verification currency does not match "
+                "the Payment currency."
             )
 
 
 # ================================
 # DUPLICATE SUCCESS
 # ================================
-
 
 def _validate_duplicate_success_identity(
     *,
@@ -580,64 +784,128 @@ def _validate_duplicate_success_identity(
     payment_snapshot: VerificationSnapshot,
     attempt_snapshot: AttemptVerificationSnapshot,
 ) -> None:
-    """Validate gateway evidence after another verifier finalized Payment."""
+    """
+    Validate a gateway result arriving after another verifier already
+    finalized the Payment.
+
+    Same identity:
+        idempotent success.
+
+    Conflicting identity:
+        reject.
+
+    The persisted Payment remains authoritative.
+    """
 
     if not result.success:
         raise PaymentInvariantViolation(
-            "A duplicate verification cannot downgrade an already successful Payment."
+            "A duplicate verification cannot downgrade "
+            "an already successful Payment."
         )
 
-    result_gateway = _normalize_gateway_identity(result.gateway)
-    expected_gateway = _normalize_gateway_identity(payment_snapshot.gateway)
+    # ----------------------------------------
+    # Gateway identity.
+    # ----------------------------------------
+
+    result_gateway = _normalize_gateway_identity(
+        result.gateway,
+    )
+
+    expected_gateway = _normalize_gateway_identity(
+        payment_snapshot.gateway,
+    )
 
     if result_gateway != expected_gateway:
         raise PaymentInvariantViolation(
             "Duplicate verification returned a conflicting gateway."
         )
 
-    gateway_reference = _normalize_optional(result.gateway_reference)
+    # ----------------------------------------
+    # Gateway reference.
+    # ----------------------------------------
+
+    gateway_reference = _normalize_optional(
+        result.gateway_reference,
+    )
 
     if (
         gateway_reference
         and attempt_snapshot.gateway_reference
-        and gateway_reference != attempt_snapshot.gateway_reference
+        and gateway_reference
+        != attempt_snapshot.gateway_reference
     ):
         raise PaymentInvariantViolation(
-            "Duplicate verification returned a conflicting gateway reference."
+            "Duplicate verification returned a conflicting "
+            "gateway reference."
         )
+
+    # ----------------------------------------
+    # Successful result must still have identity.
+    # ----------------------------------------
 
     if not gateway_reference:
         raise PaymentInvariantViolation(
-            "Duplicate successful verification returned no gateway reference."
+            "Duplicate successful verification returned no "
+            "gateway reference."
         )
 
-    gateway_transaction_id = _normalize_optional(result.gateway_transaction_id)
+    # ----------------------------------------
+    # Transaction identity.
+    # ----------------------------------------
+
+    gateway_transaction_id = _normalize_optional(
+        result.gateway_transaction_id,
+    )
 
     if (
         gateway_transaction_id
         and attempt_snapshot.gateway_transaction_id
-        and gateway_transaction_id != attempt_snapshot.gateway_transaction_id
+        and gateway_transaction_id
+        != attempt_snapshot.gateway_transaction_id
     ):
         raise PaymentInvariantViolation(
-            "Duplicate verification returned a conflicting gateway transaction ID."
+            "Duplicate verification returned a conflicting "
+            "gateway transaction ID."
         )
+
+    # ----------------------------------------
+    # Financial amount.
+    # ----------------------------------------
 
     if result.amount is not None:
         try:
-            result_amount = Decimal(str(result.amount))
-        except (TypeError, ValueError, ArithmeticError) as exc:
+            result_amount = Decimal(
+                str(
+                    result.amount,
+                ),
+            )
+        except (
+            TypeError,
+            ValueError,
+            ArithmeticError,
+        ) as exc:
             raise PaymentInvariantViolation(
                 "Duplicate verification returned an invalid amount."
             ) from exc
 
         if result_amount != payment.amount:
             raise PaymentInvariantViolation(
-                "Duplicate verification returned a conflicting financial amount."
+                "Duplicate verification returned a conflicting "
+                "financial amount."
             )
 
+    # ----------------------------------------
+    # Currency.
+    # ----------------------------------------
+
     if result.currency:
-        normalized_currency = _normalize_optional(result.currency)
-        normalized_payment_currency = _normalize_optional(payment.currency)
+        normalized_currency = _normalize_optional(
+            result.currency,
+        )
+
+        normalized_payment_currency = _normalize_optional(
+            payment.currency,
+        )
 
         if normalized_currency != normalized_payment_currency:
             raise PaymentInvariantViolation(
@@ -649,25 +917,64 @@ def _validate_duplicate_success_identity(
 # ORDER / PAYMENT SYNCHRONIZATION
 # ================================
 
+def _consume_successful_payment(
+    *,
+    payment_id: int,
+) -> PaymentModel:
+    """
+    Synchronize a successful Payment with its Order.
 
-def _consume_successful_payment(*, payment_id: int) -> PaymentModel:
-    """Synchronize a successful Payment with its Order idempotently."""
+    Canonical cross-aggregate lock order:
+        Order
+            ->
+        Payment
+
+    The operation is idempotent.
+    If Payment is already consumed, no business effect is repeated.
+    """
 
     with transaction.atomic():
-        payment = PaymentRepository.get(payment_id)
+        # ------------------------------------
+        # Read Payment only to discover its Order.
+        # No Payment lock is held yet.
+        # ------------------------------------
+
+        payment = PaymentRepository.get(
+            payment_id,
+        )
+
+        # ------------------------------------
+        # Canonical cross-aggregate lock.
+        # ------------------------------------
 
         order = (
             OrderModel.objects
             .select_for_update()
-            .get(pk=payment.order_id)
+            .get(
+                pk=payment.order_id,
+            )
         )
 
-        payment = PaymentRepository.get_for_update(payment_id)
+        # ------------------------------------
+        # Acquire Payment after Order.
+        # ------------------------------------
+
+        payment = PaymentRepository.get_for_update(
+            payment_id,
+        )
+
+        # ------------------------------------
+        # Defensive relationship consistency check.
+        # ------------------------------------
 
         if payment.order_id != order.pk:
             raise PaymentInvariantViolation(
                 "Payment order identity changed during synchronization."
             )
+
+        # ------------------------------------
+        # Payment state validation.
+        # ------------------------------------
 
         if payment.is_failed:
             raise PaymentInvariantViolation(
@@ -679,34 +986,72 @@ def _consume_successful_payment(*, payment_id: int) -> PaymentModel:
                 "Only successful Payments can be consumed."
             )
 
+        # ------------------------------------
+        # Idempotent terminal consumption.
+        # ------------------------------------
+
         if payment.is_consumed:
             return payment
 
-        confirm_order_payment(order_id=order.pk)
+        # ------------------------------------
+        # Order application workflow owns order-side effects.
+        #
+        # It must itself remain idempotent.
+        # ------------------------------------
 
-        payment = PaymentRepository.get_for_update(payment_id)
+        confirm_order_payment(
+            order_id=order.pk,
+        )
+
+        # ------------------------------------
+        # Reload canonical Payment state.
+        # ------------------------------------
+
+        payment.refresh_from_db()
+
+        if not payment.is_successful:
+            raise PaymentInvariantViolation(
+                "Payment lost SUCCESS state during order synchronization."
+            )
 
         if not payment.is_consumed:
-            payment.consume()
-            PaymentRepository.save(
-                payment,
-                update_fields=("is_consumed",),
+            raise PaymentInvariantViolation(
+                "Successful Payment was not consumed by "
+                "the order synchronization workflow."
             )
 
         return payment
 
-
 # ================================
-# NORMALIZATION HELPERS
+# NORMALIZATION
 # ================================
 
+def _normalize_optional(
+    value: Any,
+) -> str:
+    """
+    Normalize optional textual gateway identity.
+    Only surrounding whitespace is removed.
+    Provider-specific transformations are deliberately forbidden.
+    """
 
-def _normalize_optional(value: Any) -> str:
-    return str(value or "").strip()
+    return str(
+        value or "",
+    ).strip()
 
 
-def _normalize_required(value: Any, *, field_name: str) -> str:
-    normalized = _normalize_optional(value)
+def _normalize_required(
+    value: Any,
+    *,
+    field_name: str,
+) -> str:
+    """
+    Normalize and require a textual gateway identity.
+    """
+
+    normalized = _normalize_optional(
+        value,
+    )
 
     if not normalized:
         raise PaymentInvariantViolation(
@@ -716,10 +1061,19 @@ def _normalize_required(value: Any, *, field_name: str) -> str:
     return normalized
 
 
-def _normalize_gateway_identity(value: Any) -> str:
-    try:
-        return str(getattr(value, "value", value)).strip()
-    except (TypeError, ValueError) as exc:
-        raise PaymentInvariantViolation(
-            "Invalid gateway identity."
-        ) from exc
+def _normalize_gateway_identity(
+    value: Any,
+) -> str:
+    """
+    Normalize PaymentGateway enum/string identity.
+    No provider-specific transformation is performed.
+    """
+
+    return str(
+        value.value
+        if hasattr(
+            value,
+            "value",
+        )
+        else value,
+    ).strip()
