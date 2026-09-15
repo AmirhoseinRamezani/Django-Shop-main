@@ -24,12 +24,16 @@ def handle_successful_payment(
     callback authority.
     """
 
-    payment = verify_payment(
-        payment_id=payment_id,
-        attempt_id=attempt_id,
-        ref_id=ref_id,
-        response=response,
-    )
+    verify_kwargs = {
+        "payment_id": payment_id,
+        "ref_id": ref_id,
+        "response": response,
+    }
+
+    if attempt_id is not None:
+        verify_kwargs["attempt_id"] = attempt_id
+
+    payment = verify_payment(**verify_kwargs)
 
     order = payment.order
 
