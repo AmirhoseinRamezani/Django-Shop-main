@@ -126,16 +126,20 @@ class PaymentAttemptFactory(BaseFactory):
                 **kwargs,
             )
 
-        # Terminal attempts must be inserted directly because the database
-        # intentionally allows only one pending attempt per Payment.
-        terminal_kwargs = dict(kwargs)
-        terminal_kwargs["finished_at"] = timezone.now()
+        # Terminal attempts may coexist with a pending attempt. Bulk insert
+        # lets the test fixture provide a valid finished_at/start time pair
+        # without creating a forbidden transient pending row first.
+        finished_at = timezone.now()
+        started_at = finished_at - timezone.timedelta(microseconds=1)
 
-        return super()._create(
-            model_class,
-            *args,
-            **terminal_kwargs,
-        )
+        terminal_kwargs = dict(kwargs)
+        terminal_kwargs["started_at"] = started_at
+        terminal_kwargs["finished_at"] = finished_at
+
+        obj = model_class(*args, **terminal_kwargs)
+        model_class.objects.bulk_create([obj])
+
+        return obj
 
 
 class GatewayLogFactory(BaseFactory):
