@@ -40,12 +40,8 @@ class PaymentFactory(BaseFactory):
     is_refunded = False
 
     class Params:
-        success = factory.Trait(
-            status=PaymentStatusType.SUCCESS,
-        )
-        failed = factory.Trait(
-            status=PaymentStatusType.FAILED,
-        )
+        success = factory.Trait(status=PaymentStatusType.SUCCESS)
+        failed = factory.Trait(status=PaymentStatusType.FAILED)
         consumed = factory.Trait(
             status=PaymentStatusType.SUCCESS,
             is_consumed=True,
@@ -105,7 +101,6 @@ class PaymentAttemptFactory(BaseFactory):
             failure_reason="Gateway timeout",
             latency_ms=5000,
         )
-
         cancelled = factory.Trait(
             status=PaymentAttemptStatus.CANCELLED,
             failure_reason="Payment attempt cancelled",
@@ -114,31 +109,23 @@ class PaymentAttemptFactory(BaseFactory):
 
     @classmethod
     def _create(cls, model_class, *args, **kwargs):
-        status = kwargs.get(
-            "status",
-            PaymentAttemptStatus.PENDING,
-        )
+        status = kwargs.get("status", PaymentAttemptStatus.PENDING)
 
         if status == PaymentAttemptStatus.PENDING:
-            return super()._create(
-                model_class,
-                *args,
-                **kwargs,
-            )
+            return super()._create(model_class, *args, **kwargs)
 
-        # Terminal attempts may coexist with a pending attempt. Bulk insert
-        # lets the test fixture provide a valid finished_at/start time pair
-        # without creating a forbidden transient pending row first.
-        finished_at = timezone.now()
-        started_at = finished_at - timezone.timedelta(microseconds=1)
+        # A terminal fixture must be valid at insert time. We bypass the
+        # transient PENDING state and use explicit timestamps because the
+        # production model enforces finished_at >= started_at.
+        now = timezone.now()
+        started_at = now - timezone.timedelta(seconds=1)
 
         terminal_kwargs = dict(kwargs)
         terminal_kwargs["started_at"] = started_at
-        terminal_kwargs["finished_at"] = finished_at
+        terminal_kwargs["finished_at"] = now
 
         obj = model_class(*args, **terminal_kwargs)
         model_class.objects.bulk_create([obj])
-
         return obj
 
 
@@ -152,11 +139,9 @@ class GatewayLogFactory(BaseFactory):
 
     attempt = factory.SubFactory(PaymentAttemptFactory)
     request_url = "https://api.zarinpal.com/pg/v4/payment/request.json"
-
     gateway = PaymentGateway.ZARINPAL
     log_type = GatewayLogType.REQUEST
     direction = GatewayLogDirection.OUTBOUND
-
     request_method = "POST"
     http_status = 200
     latency_ms = 120
@@ -191,27 +176,16 @@ class RefundFactory(BaseFactory):
 
     @classmethod
     def _create(cls, model_class, *args, **kwargs):
-        requested_status = kwargs.get(
-            "status",
-            RefundStatus.PENDING,
-        )
+        requested_status = kwargs.get("status", RefundStatus.PENDING)
 
         if requested_status == RefundStatus.PENDING:
-            return super()._create(
-                model_class,
-                *args,
-                **kwargs,
-            )
+            return super()._create(model_class, *args, **kwargs)
 
         terminal_kwargs = dict(kwargs)
         terminal_kwargs["status"] = RefundStatus.PENDING
         terminal_kwargs["finished_at"] = None
 
-        obj = super()._create(
-            model_class,
-            *args,
-            **terminal_kwargs,
-        )
+        obj = super()._create(model_class, *args, **terminal_kwargs)
 
         if requested_status == RefundStatus.SUCCESS:
             obj.mark_success(
