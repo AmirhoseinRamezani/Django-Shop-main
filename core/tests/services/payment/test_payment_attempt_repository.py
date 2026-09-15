@@ -1,7 +1,6 @@
 # tests/services/payment/test_payment_attempt_repository.py
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError
 
 from payment.enums import PaymentAttemptStatus
 from payment.repositories.payment_attempt_repository import (
@@ -52,7 +51,7 @@ class TestPaymentAttemptRepositoryPersistence:
             target_payment.pk,
         ).count() == 0
 
-    def test_database_allows_only_one_pending_attempt_per_payment(self):
+    def test_create_rejects_multiple_pending_attempts_per_payment(self):
         payment = PaymentFactory.create()
 
         PaymentAttemptRepository.create(
@@ -63,7 +62,7 @@ class TestPaymentAttemptRepositoryPersistence:
             authority_id="AUTH-1",
         )
 
-        with pytest.raises(IntegrityError):
+        with pytest.raises(ValidationError):
             PaymentAttemptRepository.create(
                 payment=payment,
                 attempt_number=2,
