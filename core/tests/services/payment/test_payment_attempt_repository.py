@@ -1,6 +1,7 @@
 # tests/services/payment/test_payment_attempt_repository.py
 import pytest
 from django.core.exceptions import ValidationError
+from django.db import IntegrityError
 
 from payment.enums import PaymentAttemptStatus
 from payment.repositories.payment_attempt_repository import (
@@ -51,7 +52,7 @@ class TestPaymentAttemptRepositoryPersistence:
             target_payment.pk,
         ).count() == 0
 
-    def test_create_rejects_multiple_pending_attempts_per_payment(self):
+    def test_rejects_multiple_pending_attempts_per_payment(self):
         payment = PaymentFactory.create()
 
         PaymentAttemptRepository.create(
@@ -62,8 +63,21 @@ class TestPaymentAttemptRepositoryPersistence:
             authority_id="AUTH-1",
         )
 
+        # Repository validation provides a clear domain error for ordinary
+        # callers before the database constraint is reached.
         with pytest.raises(ValidationError):
             PaymentAttemptRepository.create(
+                payment=payment,
+                attempt_number=2,
+                retry_count=2,
+                status=PaymentAttemptStatus.PENDING,
+                authority_id="AUTH-2",
+            )
+
+        # Direct ORM persistence bypasses repository validation. PostgreSQL
+        # remains the final authority for concurrency-sensitive uniqueness.
+        with pytest.raises(IntegrityError):
+            PaymentAttemptRepository.model.objects.create(
                 payment=payment,
                 attempt_number=2,
                 retry_count=2,
