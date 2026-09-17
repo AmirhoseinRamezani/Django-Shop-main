@@ -356,9 +356,6 @@ def verify_payment(
                         "status",
                     ),
                 )
-                payment=payment,
-                result=result,
-            )
 
             gateway_reference = _normalize_optional(
                 result.gateway_reference,
