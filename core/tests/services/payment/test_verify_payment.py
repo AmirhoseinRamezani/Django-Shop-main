@@ -14,7 +14,11 @@ from payment.enums import (
     PaymentGateway,
     PaymentStatusType,
 )
-from payment.exceptions import PaymentGatewayError, PaymentInvariantViolation
+from payment.exceptions import (
+    PaymentGatewayError,
+    PaymentGatewayRejectedError,
+    PaymentInvariantViolation,
+)
 from payment.providers.base import GatewayVerificationResult
 from payment.repositories.payment_attempt_repository import (
     PaymentAttemptRepository,
@@ -309,6 +313,81 @@ class TestVerifyPayment(BaseTestCase):
         payment.refresh_from_db()
 
         assert payment.status == PaymentStatusType.PENDING
+
+    def test_explicit_gateway_rejection_finalizes_payment_as_failed(
+        self,
+        payment_factory,
+    ):
+        payment, attempt = self._payment_with_attempt(
+            payment_factory,
+        )
+
+        rejection = self._result(
+            payment,
+            success=False,
+            gateway_reference="REF-REJECTED",
+            gateway_transaction_id=None,
+            response_code="-21",
+            message="Payment rejected",
+        )
+
+        with patch(
+            "payment.services.verify.GatewayService.verify",
+            return_value=rejection,
+        ):
+            with pytest.raises(PaymentGatewayRejectedError) as exc_info:
+                verify_payment(
+                    payment_id=payment.pk,
+                    attempt_id=attempt.pk,
+                    ref_id="REF-REJECTED",
+                )
+
+        assert exc_info.value.retryable is False
+
+        payment.refresh_from_db()
+        attempt.refresh_from_db()
+
+        assert payment.status == PaymentStatusType.FAILED
+        assert payment.is_consumed is False
+        assert attempt.status == PaymentAttemptStatus.FAILED
+        assert attempt.gateway_reference == ""
+        assert attempt.response_code == "-21"
+        assert attempt.failure_reason == "Payment rejected"
+
+    def test_rejected_result_with_mismatched_amount_does_not_finalize_payment(
+        self,
+        payment_factory,
+    ):
+        payment, attempt = self._payment_with_attempt(
+            payment_factory,
+        )
+
+        rejection = self._result(
+            payment,
+            success=False,
+            amount=payment.amount + 1,
+            gateway_reference="REF-REJECTED",
+            response_code="-21",
+        )
+
+        with patch(
+            "payment.services.verify.GatewayService.verify",
+            return_value=rejection,
+        ):
+            with pytest.raises(PaymentInvariantViolation):
+                verify_payment(
+                    payment_id=payment.pk,
+                    attempt_id=attempt.pk,
+                    ref_id="REF-REJECTED",
+                )
+
+        payment.refresh_from_db()
+        attempt.refresh_from_db()
+
+        assert payment.status == PaymentStatusType.PENDING
+        assert payment.is_consumed is False
+        assert attempt.status == PaymentAttemptStatus.PENDING
+        assert attempt.gateway_reference == ""
 
     def test_success_without_gateway_reference_is_rejected(
         self,
