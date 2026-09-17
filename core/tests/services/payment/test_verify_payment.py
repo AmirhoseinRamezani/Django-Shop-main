@@ -186,6 +186,38 @@ class TestVerifyPayment(BaseTestCase):
         assert called_context["attempt"].attempt_number == 2
         assert called_context["attempt"].payment_id == payment.pk
         assert first.pk != second.pk
+        
+    def test_transport_failure_keeps_payment_and_attempt_pending(
+        self,
+        payment_factory,
+    ):
+        payment, attempt = self._payment_with_attempt(payment_factory)
+
+        with patch(
+            "payment.services.verify.GatewayService.verify",
+            side_effect=PaymentGatewayError(
+                "Gateway unavailable",
+                retryable=True,
+            ),
+        ) as mock_verify:
+            with pytest.raises(PaymentGatewayError) as exc_info:
+                verify_payment(
+                    payment_id=payment.pk,
+                    attempt_id=attempt.pk,
+                    ref_id="REF-TEST",
+                )
+
+        mock_verify.assert_called_once()
+
+        payment.refresh_from_db()
+        attempt.refresh_from_db()
+
+        assert exc_info.value.retryable is True
+        assert payment.status == PaymentStatusType.PENDING
+        assert attempt.status == PaymentAttemptStatus.PENDING
+        assert payment.is_consumed is False
+        assert attempt.gateway_reference == ""
+        assert attempt.gateway_transaction_id == ""
 
     def test_late_callback_cannot_switch_to_newer_attempt(
         self,
