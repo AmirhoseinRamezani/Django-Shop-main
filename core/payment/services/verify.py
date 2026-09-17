@@ -357,47 +357,6 @@ def verify_payment(
                     ),
                 )
 
-            gateway_reference = _normalize_optional(
-                result.gateway_reference,
-            )
-
-            if not gateway_reference:
-                gateway_reference = normalized_ref_id
-
-            if not gateway_reference:
-                raise PaymentInvariantViolation(
-                    "Successful gateway verification requires "
-                    "a gateway reference."
-                )
-
-            gateway_transaction_id = _normalize_optional(
-                result.gateway_transaction_id,
-            )
-
-            attempt.mark_success(
-                authority_id=_normalize_required(
-                    attempt.authority_id,
-                    field_name="PaymentAttempt authority",
-                ),
-                gateway_reference=gateway_reference,
-                gateway_transaction_id=gateway_transaction_id,
-                response_code=result.response_code or "",
-                gateway_message=result.message or "",
-            )
-
-            PaymentAttemptRepository.save_success(
-                attempt,
-            )
-
-            payment.succeed()
-
-            PaymentRepository.save(
-                payment,
-                update_fields=(
-                    "status",
-                ),
-            )
-
     if rejection_error is not None:
         raise rejection_error
 
