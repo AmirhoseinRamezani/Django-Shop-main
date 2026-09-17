@@ -15,6 +15,7 @@ from order.services.confirm_payment import confirm_order_payment
 from payment.enums import PaymentAttemptStatus, PaymentStatusType
 from payment.exceptions import (
     PaymentGatewayError,
+    PaymentGatewayRejectedError,
     PaymentInvariantViolation,
 )
 from payment.models import PaymentAttempt, PaymentModel
@@ -222,6 +223,8 @@ def verify_payment(
     # PHASE C — RECONCILE GATEWAY RESULT
     # ========================================
 
+    rejection_error: PaymentGatewayRejectedError | None = None
+
     with transaction.atomic():
         payment = PaymentRepository.get_for_update(
             payment_id,
@@ -270,10 +273,37 @@ def verify_payment(
                 callback_ref=normalized_ref_id,
             )
 
+            _validate_financial_snapshot(
+                payment=payment,
+                result=result,
+            )
+
             if not result.success:
-                raise PaymentGatewayError(
+                attempt.mark_failed(
+                    reason=(
+                        result.message
+                        or "Payment gateway verification was rejected."
+                    ),
+                    response_code=result.response_code or "",
+                    gateway_message=result.message or "",
+                )
+
+                PaymentAttemptRepository.save_failure(
+                    attempt,
+                )
+
+                payment.fail()
+
+                PaymentRepository.save(
+                    payment,
+                    update_fields=(
+                        "status",
+                    ),
+                )
+
+                rejection_error = PaymentGatewayRejectedError(
                     result.message
-                    or "Payment gateway verification failed.",
+                    or "Payment gateway verification was rejected.",
                     details={
                         "gateway": str(result.gateway),
                         "operation": "verify",
@@ -284,10 +314,48 @@ def verify_payment(
                             or ""
                         ),
                     },
-                    retryable=False,
+                )
+            else:
+                gateway_reference = _normalize_optional(
+                    result.gateway_reference,
                 )
 
-            _validate_financial_snapshot(
+                if not gateway_reference:
+                    gateway_reference = normalized_ref_id
+
+                if not gateway_reference:
+                    raise PaymentInvariantViolation(
+                        "Successful gateway verification requires "
+                        "a gateway reference."
+                    )
+
+                gateway_transaction_id = _normalize_optional(
+                    result.gateway_transaction_id,
+                )
+
+                attempt.mark_success(
+                    authority_id=_normalize_required(
+                        attempt.authority_id,
+                        field_name="PaymentAttempt authority",
+                    ),
+                    gateway_reference=gateway_reference,
+                    gateway_transaction_id=gateway_transaction_id,
+                    response_code=result.response_code or "",
+                    gateway_message=result.message or "",
+                )
+
+                PaymentAttemptRepository.save_success(
+                    attempt,
+                )
+
+                payment.succeed()
+
+                PaymentRepository.save(
+                    payment,
+                    update_fields=(
+                        "status",
+                    ),
+                )
                 payment=payment,
                 result=result,
             )
@@ -332,6 +400,9 @@ def verify_payment(
                     "status",
                 ),
             )
+
+    if rejection_error is not None:
+        raise rejection_error
 
     # Consumption is intentionally outside the verification persistence
     # transaction.  If this process dies after SUCCESS is committed, a later
