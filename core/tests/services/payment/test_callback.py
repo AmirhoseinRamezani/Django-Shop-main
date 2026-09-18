@@ -1,5 +1,6 @@
 # core/tests/services/payment/test_callback.py
 import pytest
+from unittest.mock import patch
 
 from payment.enums import PaymentAttemptStatus, PaymentGateway
 from payment.providers.base import GatewayCallback
@@ -119,6 +120,41 @@ class TestPaymentCallbackResolution:
         assert calls["ref_id"] is None
         assert calls["response"] == {}
 
+
+    def test_callback_status_cannot_force_verification_failure(
+        self,
+        payment_factory,
+    ):
+        payment = payment_factory()
+
+        attempt = PaymentAttemptFactory(
+            payment=payment,
+            attempt_number=1,
+            status=PaymentAttemptStatus.PENDING,
+            authority_id="AUTH-CALLBACK-STATUS",
+        )
+
+        with patch(
+            "payment.services.callback.verify_payment",
+            return_value=payment,
+        ) as mock_verify:
+            result = verify_callback(
+                callback=GatewayCallback(
+                    gateway=PaymentGateway.ZARINPAL,
+                    authority=attempt.authority_id,
+                    success=False,
+                    response_code="NOK",
+                    message="Client-controlled failure status",
+                ),
+            )
+
+        assert result is payment
+        mock_verify.assert_called_once_with(
+            payment_id=payment.pk,
+            attempt_id=attempt.pk,
+            ref_id=None,
+            response={},
+        )
 
     def test_ambiguous_authority_is_rejected(self, payment_factory):
         first = payment_factory()
