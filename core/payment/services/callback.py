@@ -13,12 +13,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from payment.enums import PaymentGateway
+from payment.providers.base import GatewayCallback
 from payment.exceptions import (
     PaymentCallbackIdentityMismatchError,
     PaymentCallbackMissingIdentityError,
     PaymentInvalidCallbackError,
 )
+from payment.models import PaymentModel
 from payment.repositories.payment_attempt_repository import PaymentAttemptRepository
+from payment.services.verify import verify_payment
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,3 +135,28 @@ def resolve_payment_id(*, authority: str | None) -> int:
     return resolve_callback(
         authority=authority,
     ).payment_id
+
+def verify_callback(
+    *,
+    callback: GatewayCallback,
+) -> PaymentModel:
+    """Verify a normalized gateway callback against its exact attempt.
+
+    The callback authority is resolved first.  The resulting PaymentAttempt
+    identity is then passed explicitly into the verification workflow.
+
+    Callback payload fields are evidence only; the gateway verification
+    result remains the financial source of truth.
+    """
+
+    resolution = resolve_callback(
+        authority=callback.authority,
+        gateway=callback.gateway,
+    )
+
+    return verify_payment(
+        payment_id=resolution.payment_id,
+        attempt_id=resolution.attempt_id,
+        ref_id=callback.gateway_reference,
+        response=callback.data,
+    )
