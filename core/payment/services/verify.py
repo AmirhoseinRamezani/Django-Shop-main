@@ -321,9 +321,6 @@ def verify_payment(
                 )
 
                 if not gateway_reference:
-                    gateway_reference = normalized_ref_id
-
-                if not gateway_reference:
                     raise PaymentInvariantViolation(
                         "Successful gateway verification requires "
                         "a gateway reference."

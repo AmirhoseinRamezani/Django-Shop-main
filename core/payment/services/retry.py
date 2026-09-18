@@ -5,12 +5,17 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils.translation import gettext_lazy as _
 
 from order.models import OrderModel
 from payment.enums import PaymentAttemptStatus, PaymentStatusType
-from payment.exceptions import PaymentGatewayError, PaymentInvariantViolation
+from payment.exceptions import (
+    PaymentAlreadyProcessedError,
+    PaymentGatewayError,
+    PaymentIdempotencyConflictError,
+    PaymentInvariantViolation,
+)
 from payment.models import PaymentAttempt, PaymentModel
 from payment.policies import PaymentAttemptPolicy, PaymentPolicy
 from payment.providers.base import GatewayPaymentResult
@@ -46,12 +51,18 @@ class RetryPaymentService:
         callback_url: str,
         ip_address: str | None = None,
         user_agent: str = "",
+        idempotency_key: str | None = None,
     ) -> str:
+        normalized_key = RetryPaymentService._normalize_idempotency_key(
+            idempotency_key,
+        )
+
         snapshot, existing_authority = RetryPaymentService._prepare_retry(
             order=order,
             callback_url=callback_url,
             ip_address=ip_address,
             user_agent=user_agent,
+            idempotency_key=normalized_key,
         )
 
         if existing_authority:
@@ -160,6 +171,7 @@ class RetryPaymentService:
         callback_url: str,
         ip_address: str | None,
         user_agent: str,
+        idempotency_key: str | None,
     ) -> tuple[RetrySnapshot, str]:
         locked_order = (
             OrderModel.objects
@@ -182,6 +194,54 @@ class RetryPaymentService:
             )
 
         payment = pending_payments[0]
+
+        if idempotency_key:
+            existing_retry = PaymentAttemptRepository.find_by_retry_idempotency_key_for_update(
+                idempotency_key,
+            )
+
+            if existing_retry is not None:
+                if existing_retry.payment_id != payment.pk:
+                    raise PaymentIdempotencyConflictError(
+                        "Retry idempotency key belongs to another Payment.",
+                        details={
+                            "payment_id": payment.pk,
+                            "attempt_id": existing_retry.pk,
+                            "operation": "retry_payment",
+                        },
+                    )
+
+                if existing_retry.status == PaymentAttemptStatus.PENDING:
+                    snapshot = RetryPaymentService._snapshot(
+                        payment=payment,
+                        order=locked_order,
+                        attempt=existing_retry,
+                        callback_url=callback_url,
+                    )
+
+                    if existing_retry.authority_id:
+                        return snapshot, existing_retry.authority_id
+
+                    raise PaymentGatewayError(
+                        "Payment gateway initiation is already in progress.",
+                        details={
+                            "payment_id": payment.pk,
+                            "attempt_id": existing_retry.pk,
+                            "operation": "retry_payment",
+                        },
+                        retryable=True,
+                    )
+
+                raise PaymentAlreadyProcessedError(
+                    "Retry idempotency key has already been processed.",
+                    details={
+                        "payment_id": payment.pk,
+                        "attempt_id": existing_retry.pk,
+                        "attempt_status": str(existing_retry.status),
+                        "operation": "retry_payment",
+                    },
+                )
+
         PaymentPolicy.can_retry(payment)
 
         pending_attempts = list(
@@ -198,14 +258,36 @@ class RetryPaymentService:
         if pending_attempts:
             pending_attempt = pending_attempts[0]
 
-            snapshot = RetrySnapshot(
-                payment_id=payment.pk,
-                attempt_id=pending_attempt.pk,
-                payment_amount=payment.amount,
-                payment_currency=str(payment.currency),
-                payment_gateway=str(payment.gateway),
-                order_id=locked_order.pk,
-                callback_url=str(callback_url).strip(),
+            if (
+                idempotency_key
+                and pending_attempt.retry_idempotency_key
+                and pending_attempt.retry_idempotency_key != idempotency_key
+            ):
+                raise PaymentIdempotencyConflictError(
+                    "A different retry idempotency key is already active for this Payment.",
+                    details={
+                        "payment_id": payment.pk,
+                        "attempt_id": pending_attempt.pk,
+                        "operation": "retry_payment",
+                    },
+                )
+
+            if idempotency_key and not pending_attempt.retry_idempotency_key:
+                raise PaymentGatewayError(
+                    "An existing payment attempt is already in progress.",
+                    details={
+                        "payment_id": payment.pk,
+                        "attempt_id": pending_attempt.pk,
+                        "operation": "retry_payment",
+                    },
+                    retryable=True,
+                )
+
+            snapshot = RetryPaymentService._snapshot(
+                payment=payment,
+                order=locked_order,
+                attempt=pending_attempt,
+                callback_url=callback_url,
             )
 
             if pending_attempt.authority_id:
@@ -236,28 +318,95 @@ class RetryPaymentService:
             payment.pk,
         )
 
-        retry_attempt = PaymentAttemptRepository.create(
-            payment=payment,
-            attempt_number=attempt_number,
-            retry_of=previous_attempt,
-            retry_count=attempt_number,
-            status=PaymentAttemptStatus.PENDING,
-            ip_address=ip_address,
-            user_agent=user_agent or "",
-        )
+        try:
+            with transaction.atomic():
+                retry_attempt = PaymentAttemptRepository.create(
+                    payment=payment,
+                    attempt_number=attempt_number,
+                    retry_of=previous_attempt,
+                    retry_count=attempt_number,
+                    status=PaymentAttemptStatus.PENDING,
+                    ip_address=ip_address,
+                    user_agent=user_agent or "",
+                    retry_idempotency_key=idempotency_key,
+                )
+        except IntegrityError:
+            if not idempotency_key:
+                raise
+
+            existing_retry = PaymentAttemptRepository.find_by_retry_idempotency_key(
+                idempotency_key,
+            )
+
+            if existing_retry is None:
+                raise
+
+            if existing_retry.payment_id != payment.pk:
+                raise PaymentIdempotencyConflictError(
+                    "Retry idempotency key belongs to another Payment.",
+                    details={
+                        "payment_id": payment.pk,
+                        "attempt_id": existing_retry.pk,
+                        "operation": "retry_payment",
+                    },
+                )
+
+            raise PaymentAlreadyProcessedError(
+                "Retry idempotency key has already been processed.",
+                details={
+                    "payment_id": payment.pk,
+                    "attempt_id": existing_retry.pk,
+                    "attempt_status": str(existing_retry.status),
+                    "operation": "retry_payment",
+                },
+            )
 
         return (
-            RetrySnapshot(
-                payment_id=payment.pk,
-                attempt_id=retry_attempt.pk,
-                payment_amount=payment.amount,
-                payment_currency=str(payment.currency),
-                payment_gateway=str(payment.gateway),
-                order_id=locked_order.pk,
-                callback_url=str(callback_url).strip(),
+            RetryPaymentService._snapshot(
+                payment=payment,
+                order=locked_order,
+                attempt=retry_attempt,
+                callback_url=callback_url,
             ),
             "",
         )
+
+    @staticmethod
+    def _snapshot(
+        *,
+        payment: PaymentModel,
+        order: OrderModel,
+        attempt: PaymentAttempt,
+        callback_url: str,
+    ) -> RetrySnapshot:
+        return RetrySnapshot(
+            payment_id=payment.pk,
+            attempt_id=attempt.pk,
+            payment_amount=payment.amount,
+            payment_currency=str(payment.currency),
+            payment_gateway=str(payment.gateway),
+            order_id=order.pk,
+            callback_url=str(callback_url).strip(),
+        )
+
+    @staticmethod
+    def _normalize_idempotency_key(
+        value: str | None,
+    ) -> str | None:
+        normalized = str(value or "").strip()
+
+        if not normalized:
+            return None
+
+        if len(normalized) > 128:
+            raise PaymentIdempotencyConflictError(
+                "Retry idempotency key exceeds the maximum length.",
+                details={
+                    "operation": "retry_payment",
+                },
+            )
+
+        return normalized
 
     @staticmethod
     def _persist_initiation_result(

@@ -138,6 +138,16 @@ class PaymentAttempt(models.Model):
         ),
     )
 
+    retry_idempotency_key = models.CharField(
+        max_length=128,
+        null=True,
+        blank=True,
+        unique=True,
+        help_text=_(
+            "Stable idempotency key for the retry request that created this attempt."
+        ),
+    )
+
     # ------------------------------------
     # Lifecycle
     # ------------------------------------
@@ -299,6 +309,14 @@ class PaymentAttempt(models.Model):
                     retry_count__gte=1,
                 ),
                 name="payment_attempt_retry_positive",
+            ),
+
+            models.CheckConstraint(
+                condition=(
+                    Q(retry_idempotency_key__isnull=True)
+                    | Q(retry_idempotency_key__gt="")
+                ),
+                name="payment_attempt_retry_key_valid",
             ),
 
             # --------------------------------
@@ -727,6 +745,7 @@ class PaymentAttempt(models.Model):
         self,
         *,
         reason: str = "",
+        latency_ms: int | None = None,
     ) -> "PaymentAttempt":
         """
         Transition this attempt to CANCELLED.
@@ -740,11 +759,16 @@ class PaymentAttempt(models.Model):
                     reason,
                 )
 
+            self._record_existing_terminal_latency(
+                latency_ms,
+            )
+
             return self
 
         return self._mark_terminal(
             status=PaymentAttemptStatus.CANCELLED,
             reason=reason,
+            latency_ms=latency_ms,
         )
 
     # ================================

@@ -2,31 +2,29 @@
 
 import pytest
 
+from tests.factories.events import OutboxEventFactory
 
-from tests.factories.events import (
-    OutboxEventFactory,
-)
 
 @pytest.fixture
 def event_factory():
-
     return OutboxEventFactory
+
+
+@pytest.fixture
+def outbox_event(db):
+    return OutboxEventFactory()
+
 
 @pytest.fixture
 def pending_event(db):
-
     return OutboxEventFactory()
+
 
 @pytest.fixture
 def processed_event(db):
+    return OutboxEventFactory(processed=True)
 
-    return OutboxEventFactory(
-        processed=True
-    )
 
 @pytest.fixture
 def failed_event(db):
-
-    return OutboxEventFactory(
-        failed=True
-    )
+    return OutboxEventFactory(failed=True)

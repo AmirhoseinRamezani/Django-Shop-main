@@ -766,6 +766,7 @@ class TestPaymentAttemptRetry:
             payment=payment,
             attempt_number=1,
             retry_count=1,
+            failed=True,
         )
 
         second = PaymentAttemptFactory.create(
@@ -773,6 +774,7 @@ class TestPaymentAttemptRetry:
             attempt_number=2,
             retry_count=2,
             retry_of=first,
+            failed=True,
         )
 
         third = PaymentAttemptFactory.build(
