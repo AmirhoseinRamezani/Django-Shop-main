@@ -138,6 +138,16 @@ class PaymentAttempt(models.Model):
         ),
     )
 
+    retry_idempotency_key = models.CharField(
+        max_length=128,
+        null=True,
+        blank=True,
+        unique=True,
+        help_text=_(
+            "Stable idempotency key for the retry request that created this attempt."
+        ),
+    )
+
     # ------------------------------------
     # Lifecycle
     # ------------------------------------
@@ -299,6 +309,14 @@ class PaymentAttempt(models.Model):
                     retry_count__gte=1,
                 ),
                 name="payment_attempt_retry_positive",
+            ),
+
+            models.CheckConstraint(
+                condition=(
+                    Q(retry_idempotency_key__isnull=True)
+                    | Q(retry_idempotency_key__gt="")
+                ),
+                name="payment_attempt_retry_key_valid",
             ),
 
             # --------------------------------

@@ -518,6 +518,49 @@ class PaymentAttemptRepository(
         ).strip()
 
     @classmethod
+    def find_by_retry_idempotency_key(
+        cls,
+        retry_idempotency_key: str,
+    ) -> PaymentAttempt | None:
+        """
+        Return the retry attempt identified by its globally unique key.
+        """
+
+        key = str(retry_idempotency_key or "").strip()
+
+        if not key:
+            return None
+
+        return (
+            cls.queryset()
+            .filter(retry_idempotency_key=key)
+            .first()
+        )
+
+    @classmethod
+    def find_by_retry_idempotency_key_for_update(
+        cls,
+        retry_idempotency_key: str,
+    ) -> PaymentAttempt | None:
+        """
+        Return and lock the retry attempt identified by its globally unique key.
+
+        The caller owns transaction.atomic().
+        """
+
+        key = str(retry_idempotency_key or "").strip()
+
+        if not key:
+            return None
+
+        return (
+            cls.queryset()
+            .filter(retry_idempotency_key=key)
+            .select_for_update()
+            .first()
+        )
+
+    @classmethod
     def find_by_authority(
         cls,
         *,
@@ -540,7 +583,7 @@ class PaymentAttemptRepository(
             )
             .first()
         )
-        
+
     @classmethod
     def for_authority(
         cls,

@@ -135,6 +135,7 @@ class RetryPaymentView(
             callback_url=callback_url,
             ip_address=request.META.get("REMOTE_ADDR"),
             user_agent=request.META.get("HTTP_USER_AGENT", ""),
+            idempotency_key=request.headers.get("Idempotency-Key"),
         )
 
         return redirect(payment_url)
