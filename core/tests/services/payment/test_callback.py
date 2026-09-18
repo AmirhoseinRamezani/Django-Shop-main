@@ -39,14 +39,18 @@ class TestPaymentCallbackResolution:
         first_attempt = PaymentAttemptFactory(
             payment=payment,
             attempt_number=1,
-            status=PaymentAttemptStatus.PENDING,
+            status=PaymentAttemptStatus.TIMEOUT,
             authority_id="AUTH-CALLBACK-OLD",
+            failure_reason="Gateway timeout",
+            latency_ms=5000,
         )
         second_attempt = PaymentAttemptFactory(
             payment=payment,
             attempt_number=2,
             status=PaymentAttemptStatus.PENDING,
             authority_id="AUTH-CALLBACK-CURRENT",
+            retry_of=first_attempt,
+            retry_count=2,
         )
 
         first_resolution = resolve_callback(
