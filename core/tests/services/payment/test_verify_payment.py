@@ -417,6 +417,36 @@ class TestVerifyPayment(BaseTestCase):
         assert payment.status == PaymentStatusType.PENDING
         assert attempt.status == PaymentAttemptStatus.PENDING
 
+    def test_callback_reference_cannot_become_gateway_evidence(
+        self,
+        payment_factory,
+    ):
+        payment, attempt = self._payment_with_attempt(
+            payment_factory,
+        )
+
+        with patch(
+            "payment.services.verify.GatewayService.verify",
+            return_value=self._result(
+                payment,
+                gateway_reference=None,
+            ),
+        ):
+            with pytest.raises(PaymentGatewayError):
+                verify_payment(
+                    payment_id=payment.pk,
+                    attempt_id=attempt.pk,
+                    ref_id="REF-CLIENT-CONTROLLED",
+                )
+
+        payment.refresh_from_db()
+        attempt.refresh_from_db()
+
+        assert payment.status == PaymentStatusType.PENDING
+        assert payment.is_consumed is False
+        assert attempt.status == PaymentAttemptStatus.PENDING
+        assert attempt.gateway_reference == ""
+
     def test_failed_payment_cannot_verify(
         self,
         payment_factory,
