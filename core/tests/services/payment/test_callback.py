@@ -2,12 +2,17 @@
 import pytest
 
 from payment.enums import PaymentAttemptStatus, PaymentGateway
+from payment.providers.base import GatewayCallback
 from payment.exceptions import (
     PaymentCallbackIdentityMismatchError,
     PaymentCallbackMissingIdentityError,
     PaymentInvalidCallbackError,
 )
-from payment.services.callback import resolve_callback, resolve_payment_id
+from payment.services.callback import (
+    resolve_callback,
+    resolve_payment_id,
+    verify_callback,
+)
 from tests.factories.payment import PaymentAttemptFactory
 
 pytestmark = [
@@ -65,6 +70,55 @@ class TestPaymentCallbackResolution:
         assert second_resolution.payment_id == payment.pk
         assert second_resolution.attempt_id == second_attempt.pk
         assert first_resolution.attempt_id != second_resolution.attempt_id
+
+    def test_callback_verification_preserves_exact_attempt_identity(
+        self,
+        payment_factory,
+        monkeypatch,
+    ):
+        payment = payment_factory()
+
+        first_attempt = PaymentAttemptFactory(
+            payment=payment,
+            attempt_number=1,
+            status=PaymentAttemptStatus.TIMEOUT,
+            authority_id="AUTH-CALLBACK-OLD",
+            failure_reason="Gateway timeout",
+            latency_ms=5000,
+        )
+        second_attempt = PaymentAttemptFactory(
+            payment=payment,
+            attempt_number=2,
+            status=PaymentAttemptStatus.PENDING,
+            authority_id="AUTH-CALLBACK-CURRENT",
+            retry_of=first_attempt,
+            retry_count=2,
+        )
+
+        calls = {}
+
+        def fake_verify_payment(**kwargs):
+            calls.update(kwargs)
+            return payment
+
+        monkeypatch.setattr(
+            "payment.services.callback.verify_payment",
+            fake_verify_payment,
+        )
+
+        result = verify_callback(
+            callback=GatewayCallback(
+                gateway=PaymentGateway.ZARINPAL,
+                authority="AUTH-CALLBACK-CURRENT",
+            ),
+        )
+
+        assert result is payment
+        assert calls["payment_id"] == payment.pk
+        assert calls["attempt_id"] == second_attempt.pk
+        assert calls["ref_id"] is None
+        assert calls["response"] == {}
+
 
     def test_ambiguous_authority_is_rejected(self, payment_factory):
         first = payment_factory()
