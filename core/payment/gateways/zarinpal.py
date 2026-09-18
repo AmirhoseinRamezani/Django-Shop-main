@@ -10,8 +10,12 @@ from django.conf import settings
 
 from payment.enums import Currency, PaymentGateway
 from payment.exceptions import (
+    PaymentGatewayAuthenticationError,
     PaymentGatewayError,
+    PaymentGatewayInvalidResponseError,
     PaymentGatewayNotSupportedError,
+    PaymentGatewayUnavailableError,
+    PaymentGatewayTimeoutError,
 )
 from payment.providers.base import (
     BaseGateway,
@@ -430,7 +434,7 @@ class ZarinPalGateway(BaseGateway):
                 timeout=self.timeout,
             )
         except requests.Timeout as exc:
-            raise PaymentGatewayError(
+            raise PaymentGatewayTimeoutError(
                 "ZarinPal request timed out.",
                 details={
                     "gateway": self.gateway.value,
@@ -439,7 +443,7 @@ class ZarinPalGateway(BaseGateway):
                 retryable=True,
             ) from exc
         except requests.RequestException as exc:
-            raise PaymentGatewayError(
+            raise PaymentGatewayUnavailableError(
                 "ZarinPal request failed.",
                 details={
                     "gateway": self.gateway.value,
@@ -449,7 +453,7 @@ class ZarinPalGateway(BaseGateway):
             ) from exc
 
         if response.status_code >= 500:
-            raise PaymentGatewayError(
+            raise PaymentGatewayUnavailableError(
                 "ZarinPal service is temporarily unavailable.",
                 details={
                     "gateway": self.gateway.value,
@@ -459,9 +463,20 @@ class ZarinPalGateway(BaseGateway):
                 retryable=True,
             )
 
+        if response.status_code in {401, 403}:
+            raise PaymentGatewayAuthenticationError(
+                "ZarinPal authentication failed.",
+                details={
+                    "gateway": self.gateway.value,
+                    "operation": operation,
+                    "http_status": response.status_code,
+                },
+                retryable=False,
+            )
+
         if response.status_code >= 400:
-            raise PaymentGatewayError(
-                "ZarinPal rejected the HTTP request.",
+            raise PaymentGatewayInvalidResponseError(
+                "ZarinPal returned an invalid HTTP response.",
                 details={
                     "gateway": self.gateway.value,
                     "operation": operation,
@@ -473,7 +488,7 @@ class ZarinPalGateway(BaseGateway):
         try:
             data = response.json()
         except ValueError as exc:
-            raise PaymentGatewayError(
+            raise PaymentGatewayInvalidResponseError(
                 "ZarinPal returned an invalid JSON response.",
                 details={
                     "gateway": self.gateway.value,
@@ -483,7 +498,7 @@ class ZarinPalGateway(BaseGateway):
             ) from exc
 
         if not isinstance(data, Mapping):
-            raise PaymentGatewayError(
+            raise PaymentGatewayInvalidResponseError(
                 "ZarinPal returned an invalid response structure.",
                 details={
                     "gateway": self.gateway.value,
