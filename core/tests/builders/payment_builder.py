@@ -379,7 +379,13 @@ class PaymentScenarioBuilder(BaseBuilder[PaymentScenario]):
         state = self._payment_state
 
         if state == "success":
-            kwargs["success"] = True
+            # A successful refund requires the Payment to be consumed.
+            # Keep the builder compositional by selecting the existing
+            # PaymentFactory scenario rather than mutating Payment here.
+            if self._refund_states:
+                kwargs["consumed"] = True
+            else:
+                kwargs["success"] = True
 
         elif state == "failed":
             kwargs["failed"] = True

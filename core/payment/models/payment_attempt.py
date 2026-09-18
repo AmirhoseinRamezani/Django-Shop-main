@@ -727,6 +727,7 @@ class PaymentAttempt(models.Model):
         self,
         *,
         reason: str = "",
+        latency_ms: int | None = None,
     ) -> "PaymentAttempt":
         """
         Transition this attempt to CANCELLED.
@@ -740,11 +741,16 @@ class PaymentAttempt(models.Model):
                     reason,
                 )
 
+            self._record_existing_terminal_latency(
+                latency_ms,
+            )
+
             return self
 
         return self._mark_terminal(
             status=PaymentAttemptStatus.CANCELLED,
             reason=reason,
+            latency_ms=latency_ms,
         )
 
     # ================================
