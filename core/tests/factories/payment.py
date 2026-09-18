@@ -109,23 +109,65 @@ class PaymentAttemptFactory(BaseFactory):
 
     @classmethod
     def _create(cls, model_class, *args, **kwargs):
-        status = kwargs.get("status", PaymentAttemptStatus.PENDING)
+        requested_status = kwargs.get(
+            "status",
+            PaymentAttemptStatus.PENDING,
+        )
 
-        if status == PaymentAttemptStatus.PENDING:
-            return super()._create(model_class, *args, **kwargs)
-
-        # A terminal fixture must be valid at insert time. We bypass the
-        # transient PENDING state and use explicit timestamps because the
-        # production model enforces finished_at >= started_at.
-        now = timezone.now()
-        started_at = now - timezone.timedelta(seconds=1)
+        if requested_status == PaymentAttemptStatus.PENDING:
+            return super()._create(
+                model_class,
+                *args,
+                **kwargs,
+            )
 
         terminal_kwargs = dict(kwargs)
-        terminal_kwargs["started_at"] = started_at
-        terminal_kwargs["finished_at"] = now
+        terminal_kwargs["status"] = PaymentAttemptStatus.PENDING
+        terminal_kwargs["finished_at"] = None
 
-        obj = model_class(*args, **terminal_kwargs)
-        model_class.objects.bulk_create([obj])
+        obj = super()._create(
+            model_class,
+            *args,
+            **terminal_kwargs,
+        )
+
+        if requested_status == PaymentAttemptStatus.SUCCESS:
+            obj.mark_success(
+                authority_id=obj.authority_id,
+                gateway_reference=obj.gateway_reference,
+                gateway_transaction_id=obj.gateway_transaction_id,
+                response_code=obj.response_code,
+                gateway_message=obj.gateway_message,
+                latency_ms=obj.latency_ms,
+            )
+
+        elif requested_status == PaymentAttemptStatus.FAILED:
+            obj.mark_failed(
+                reason=obj.failure_reason,
+                response_code=obj.response_code,
+                gateway_message=obj.gateway_message,
+                latency_ms=obj.latency_ms,
+            )
+
+        elif requested_status == PaymentAttemptStatus.TIMEOUT:
+            obj.mark_timeout(
+                reason=obj.failure_reason,
+                latency_ms=obj.latency_ms,
+            )
+
+        elif requested_status == PaymentAttemptStatus.CANCELLED:
+            obj.mark_cancelled(
+                reason=obj.failure_reason,
+                latency_ms=obj.latency_ms,
+            )
+
+        else:
+            raise ValueError(
+                f"Unsupported PaymentAttemptFactory terminal status: "
+                f"{requested_status}"
+            )
+
+        obj.save()
         return obj
 
 
