@@ -45,6 +45,60 @@ class TestRefundRepository:
             payment_amount=payment.amount,
         ) is True
 
+
+    def test_reserved_amount_includes_pending_and_successful_refunds(self):
+        payment = PaymentFactory(
+            success=True,
+            consumed=True,
+            amount=Decimal("1000000"),
+        )
+        RefundFactory(
+            payment=payment,
+            amount=Decimal("400000"),
+            success=True,
+        )
+        RefundFactory(
+            payment=payment,
+            amount=Decimal("300000"),
+        )
+        RefundFactory(
+            payment=payment,
+            amount=Decimal("100000"),
+            failed=True,
+        )
+
+        assert (
+            RefundRepository.reserved_amount_for_payment(payment.pk)
+            == Decimal("700000")
+        )
+
+    def test_stale_pending_returns_only_pending_refunds_before_cutoff(self):
+        from datetime import timedelta
+        from django.utils import timezone
+
+        payment = PaymentFactory(success=True, consumed=True)
+        stale = RefundFactory(payment=payment, idempotency_key="stale-refund")
+        fresh = RefundFactory(payment=payment, idempotency_key="fresh-refund")
+        RefundFactory(
+            payment=payment,
+            idempotency_key="failed-refund",
+            failed=True,
+        )
+
+        cutoff = timezone.now() - timedelta(minutes=10)
+        RefundRepository.model.objects.filter(pk=stale.pk).update(
+            requested_at=cutoff - timedelta(seconds=1),
+        )
+
+        candidates = list(
+            RefundRepository.stale_pending(
+                requested_before=cutoff,
+            )
+        )
+
+        assert candidates == [stale]
+        assert fresh not in candidates
+
     def test_idempotency_key_is_unique(self):
         payment = PaymentFactory(success=True, consumed=True)
         RefundFactory(payment=payment, idempotency_key="refund-key")
