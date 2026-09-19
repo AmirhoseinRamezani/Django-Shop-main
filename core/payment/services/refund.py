@@ -117,41 +117,21 @@ class RefundService:
         meta: dict[str, Any] | None = None,
     ) -> Refund:
         """
-        Execute one refund request.
+        Reserve one refund request durably, execute the gateway outside the
+        database critical section, then finalize the exact Refund.
 
-        The Payment row remains locked for the complete cumulative
-        authorization and refund state transition workflow.
-
-        ``actor`` is accepted as application context for compatibility with
-        the surrounding application layer. Actor/audit persistence remains
-        outside this service.
+        A newly created PENDING Refund owns the financial reservation.
+        Existing PENDING refunds are returned to the caller and are not
+        executed again by an ordinary application retry.
         """
 
         del actor
 
         normalized_amount = cls._normalize_amount(amount)
-        normalized_key = cls._normalize_idempotency_key(
-            idempotency_key,
-        )
+        normalized_key = cls._normalize_idempotency_key(idempotency_key)
 
         with transaction.atomic():
-            # ================================
-            # Canonical Payment lock
-            # ================================
-
-            payment = PaymentRepository.get_for_update(
-                payment_id,
-            )
-            
-            refund = RefundRepository.get_for_update(refund_id)
-            if refund.payment_id != payment.pk:
-                raise PaymentInvariantViolation(
-                    "Refund does not belong to the locked Payment."
-                )
-
-            # ================================
-            # Idempotency
-            # ================================
+            payment = PaymentRepository.get_for_update(payment_id)
 
             existing = (
                 RefundRepository.find_by_idempotency_key_for_update(
@@ -167,13 +147,7 @@ class RefundService:
                 )
                 return existing
 
-            # ================================
-            # Payment eligibility
-            # ================================
-
-            PaymentPolicy.can_refund(
-                payment,
-            )
+            PaymentPolicy.can_refund(payment)
 
             attempt = (
                 PaymentAttemptRepository
@@ -186,46 +160,25 @@ class RefundService:
                 raise PaymentInvariantViolation(
                     "A refundable Payment must have a successful PaymentAttempt."
                 )
-            # ================================
-            # V1 currency contract
-            # ================================
 
-            # cls._validate_v1_currency(
-            #     payment.currency,
-            # )
-
-            # ================================
-            # Cumulative successful refund authorization
-            # ================================
-
-            successful_refunded = (
-                RefundRepository.successful_amount_for_payment(
-                    payment.pk,
-                )
-            )
-
-            # cls._validate_successful_refund_total(
-            #     successful_refunded=successful_refunded,
-            #     payment_amount=payment.amount,
-            # )
             reserved_refunded = (
                 RefundRepository.reserved_amount_for_payment(
                     payment.pk,
                 )
             )
-            
-            remaining_refundable = (
-                payment.amount - successful_refunded
-            )
+
+            if reserved_refunded > payment.amount:
+                raise PaymentInvariantViolation(
+                    "Reserved refund amount exceeds the Payment amount."
+                )
+
+            remaining_refundable = payment.amount - reserved_refunded
 
             cls._validate_requested_amount(
                 amount=normalized_amount,
                 remaining_refundable=remaining_refundable,
             )
 
-            # ================================
-            # Immutable Refund snapshot
-            # ================================
             refund = RefundRepository.create(
                 payment=payment,
                 amount=normalized_amount,
@@ -238,60 +191,11 @@ class RefundService:
                 user_agent=user_agent,
                 meta=meta or {},
             )
-            # try:
-            #     refund = RefundRepository.create(
-            #         payment=payment,
-            #         amount=normalized_amount,
-            #         currency=payment.currency,
-            #         idempotency_key=normalized_key,
-            #         reason=reason,
-            #         reason_detail=reason_detail,
-            #         status=RefundStatus.PENDING,
-            #         ip_address=ip_address,
-            #         user_agent=user_agent,
-            #         meta=meta or {},
-            #     )
-
-            # except IntegrityError:
-            #     """
-            #     The database uniqueness constraint is authoritative.
-
-            #     An IntegrityError is treated as an idempotency race only
-            #     when the requested idempotency identity can actually be
-            #     resolved.
-
-            #     Unrelated integrity failures are re-raised.
-            #     """
-
-            #     existing = (
-            #         RefundRepository.find_by_idempotency_key_for_update(
-            #             normalized_key,
-            #         )
-            #     )
-
-            #     if existing is None:
-            #         raise
-
-            #     cls._validate_idempotent_request(
-            #         refund=existing,
-            #         payment=payment,
-            #         amount=normalized_amount,
-            #     )
-
-            #     return existing
-
-            # ================================
-            # Domain financial validation
-            # ================================
 
             refund.validate_against_payment(
                 payment_amount=payment.amount,
                 payment_currency=payment.currency,
             )
-
-            # ================================
-            # Request observability
-            # ================================
 
             RefundRepository.save(
                 refund,
@@ -302,158 +206,110 @@ class RefundService:
                 ),
             )
 
-            # ================================
-            # Gateway execution
-            # ================================
+        try:
+            result = GatewayService.refund(
+                payment=payment,
+                attempt=attempt,
+                refund=refund,
+            )
+        except PaymentGatewayNotSupportedError:
+            return cls._finalize_failure(
+                payment_id=payment_id,
+                refund_id=refund.pk,
+                reason="Gateway refund operation is not supported.",
+            )
+        except PaymentGatewayError as exc:
+            return cls._record_pending_gateway_error(
+                payment_id=payment_id,
+                refund_id=refund.pk,
+                exc=exc,
+            )
 
-            try:
-                result = GatewayService.refund(
+        if not isinstance(result, GatewayRefundResult):
+            return cls._record_pending_gateway_evidence(
+                payment_id=payment_id,
+                refund_id=refund.pk,
+                response_code="INVALID_RESULT",
+                gateway_message="Gateway returned an invalid refund result.",
+            )
+
+        if not result.success:
+            return cls._finalize_failure(
+                payment_id=payment_id,
+                refund_id=refund.pk,
+                reason=cls._gateway_failure_reason(result),
+                response_code=cls._gateway_response_code(result),
+                gateway_message=cls._gateway_message(result),
+                latency_ms=cls._gateway_latency(result),
+            )
+
+        gateway_reference = cls._normalize_optional(
+            result.gateway_reference,
+        )
+        gateway_transaction_id = cls._normalize_optional(
+            result.gateway_transaction_id,
+        )
+
+        if not (gateway_reference or gateway_transaction_id):
+            return cls._record_pending_gateway_evidence(
+                payment_id=payment_id,
+                refund_id=refund.pk,
+                response_code=cls._gateway_response_code(result),
+                gateway_message=(
+                    "Gateway reported refund success without "
+                    "a trusted gateway identity."
+                ),
+            )
+
+        return cls._finalize_success(
+            payment_id=payment_id,
+            refund_id=refund.pk,
+            gateway_reference=gateway_reference,
+            gateway_transaction_id=gateway_transaction_id,
+            response_code=cls._gateway_response_code(result),
+            gateway_message=cls._gateway_message(result),
+            latency_ms=cls._gateway_latency(result),
+        )
+
+    @classmethod
+    def _finalize_success(
+        cls,
+        *,
+        payment_id: int,
+        refund_id: int,
+        gateway_reference: str,
+        gateway_transaction_id: str,
+        response_code: str,
+        gateway_message: str,
+        latency_ms: int | None,
+    ) -> Refund:
+        with transaction.atomic():
+            payment = PaymentRepository.get_for_update(payment_id)
+            refund = RefundRepository.get_for_update(refund_id)
+
+            if refund.payment_id != payment.pk:
+                raise PaymentInvariantViolation(
+                    "Refund does not belong to the locked Payment."
+                )
+
+            if refund.is_success:
+                cls._sync_payment_refund_state(
                     payment=payment,
-                    attempt=attempt,
-                    refund=refund,
                 )
+                return refund
 
-            except PaymentGatewayNotSupportedError:
-                """
-                Unsupported refund capability is deterministic.
-
-                The selected historical gateway cannot perform this
-                operation. No external financial uncertainty exists.
-                """
-
-                return cls._mark_failed(
-                    refund=refund,
-                    reason=(
-                        "Gateway refund operation is not supported."
-                    ),
-                )
-
-            except PaymentGatewayError as exc:
-                """
-                GatewayService exposes gateway communication/integration
-                failures through the payment-specific exception contract.
-
-                A PaymentGatewayError does not by itself prove that the
-                refund was rejected.
-
-                Therefore the Refund remains PENDING and reconcilable.
-                """
-
-                return cls._register_gateway_exception(
-                    refund=refund,
-                    exc=exc,
-                )
-
-            # ================================
-            # Gateway result contract
-            # ================================
-
-            if not isinstance(
-                result,
-                GatewayRefundResult,
-            ):
-                """
-                The provider violated the typed gateway contract.
-
-                We cannot safely classify this as a financial rejection.
-                Keep the Refund pending so reconciliation can determine the
-                external outcome.
-                """
-
-                return cls._register_gateway_evidence(
-                    refund=refund,
-                    response_code="INVALID_RESULT",
-                    gateway_message=(
-                        "Gateway returned an invalid refund result."
-                    ),
-                )
-
-            # ================================
-            # Definitive gateway failure
-            # ================================
-
-            if not result.success:
-                return cls._mark_failed(
-                    refund=refund,
-                    reason=cls._gateway_failure_reason(
-                        result,
-                    ),
-                    response_code=cls._gateway_response_code(
-                        result,
-                    ),
-                    gateway_message=cls._gateway_message(
-                        result,
-                    ),
-                    latency_ms=cls._gateway_latency(
-                        result,
-                    ),
-                )
-
-            # ================================
-            # Gateway SUCCESS identity
-            # ================================
-
-            gateway_reference = cls._normalize_optional(
-                result.gateway_reference,
-            )
-
-            gateway_transaction_id = cls._normalize_optional(
-                result.gateway_transaction_id,
-            )
-
-            if not (
-                gateway_reference
-                or gateway_transaction_id
-            ):
-                """
-                The provider claims success but supplied no trusted external
-                identity.
-
-                This is NOT safe to classify as SUCCESS.
-
-                It is also NOT safe to classify as confirmed FAILURE because
-                the gateway may already have processed the refund.
-
-                Therefore the Refund remains PENDING and is eligible for
-                reconciliation.
-                """
-
-                return cls._register_gateway_evidence(
-                    refund=refund,
-                    response_code=cls._gateway_response_code(
-                        result,
-                    ),
-                    gateway_message=(
-                        "Gateway reported refund success without "
-                        "a trusted gateway identity."
-                    ),
-                )
-
-            # ================================
-            # Domain SUCCESS transition
-            # ================================
+            if refund.is_failed:
+                return refund
 
             refund.mark_success(
                 gateway_reference=gateway_reference,
                 gateway_transaction_id=gateway_transaction_id,
-                response_code=cls._gateway_response_code(
-                    result,
-                ),
-                gateway_message=cls._gateway_message(
-                    result,
-                ),
-                latency_ms=cls._gateway_latency(
-                    result,
-                ),
+                response_code=response_code,
+                gateway_message=gateway_message,
+                latency_ms=latency_ms,
             )
 
-            RefundRepository.save_success(
-                refund,
-            )
-
-            # ================================
-            # Recalculate authoritative successful refund total
-            # ================================
+            RefundRepository.save_success(refund)
 
             successful_refunded = (
                 RefundRepository.successful_amount_for_payment(
@@ -466,18 +322,116 @@ class RefundService:
                 payment_amount=payment.amount,
             )
 
-            # ================================
-            # Fully refunded Payment
-            # ================================
-
-            if successful_refunded == payment.amount:
-                payment.refund()
-
-                PaymentRepository.save_refund_state(
-                    payment,
-                )
+            cls._sync_payment_refund_state(
+                payment=payment,
+            )
 
             return refund
+
+    @classmethod
+    def _finalize_failure(
+        cls,
+        *,
+        payment_id: int,
+        refund_id: int,
+        reason: str,
+        response_code: str = "",
+        gateway_message: str = "",
+        latency_ms: int | None = None,
+    ) -> Refund:
+        with transaction.atomic():
+            payment = PaymentRepository.get_for_update(payment_id)
+            refund = RefundRepository.get_for_update(refund_id)
+
+            if refund.payment_id != payment.pk:
+                raise PaymentInvariantViolation(
+                    "Refund does not belong to the locked Payment."
+                )
+
+            if refund.is_terminal:
+                return refund
+
+            refund.mark_failed(
+                reason=reason,
+                response_code=response_code,
+                gateway_message=gateway_message,
+                latency_ms=latency_ms,
+            )
+
+            RefundRepository.save_failure(refund)
+            return refund
+
+    @classmethod
+    def _record_pending_gateway_error(
+        cls,
+        *,
+        payment_id: int,
+        refund_id: int,
+        exc: PaymentGatewayError,
+    ) -> Refund:
+        return cls._record_pending_gateway_evidence(
+            payment_id=payment_id,
+            refund_id=refund_id,
+            response_code=exc.__class__.__name__,
+            gateway_message=(
+                "Gateway refund execution did not return "
+                "a definitive result."
+            ),
+        )
+
+    @classmethod
+    def _record_pending_gateway_evidence(
+        cls,
+        *,
+        payment_id: int,
+        refund_id: int,
+        response_code: str = "",
+        gateway_message: str = "",
+    ) -> Refund:
+        with transaction.atomic():
+            payment = PaymentRepository.get_for_update(payment_id)
+            refund = RefundRepository.get_for_update(refund_id)
+
+            if refund.payment_id != payment.pk:
+                raise PaymentInvariantViolation(
+                    "Refund does not belong to the locked Payment."
+                )
+
+            if refund.is_terminal:
+                return refund
+
+            refund.register_gateway_response(
+                response_code=response_code,
+                gateway_message=gateway_message,
+            )
+
+            RefundRepository.save_gateway_evidence(refund)
+            return refund
+
+    @staticmethod
+    def _sync_payment_refund_state(*, payment) -> None:
+        successful_refunded = (
+            RefundRepository.successful_amount_for_payment(
+                payment.pk,
+            )
+        )
+
+        if successful_refunded > payment.amount:
+            raise PaymentInvariantViolation(
+                "Successful refund total exceeds the Payment amount."
+            )
+
+        should_be_refunded = successful_refunded == payment.amount
+
+        if payment.is_refunded == should_be_refunded:
+            return
+
+        if should_be_refunded:
+            payment.refund()
+        else:
+            payment.is_refunded = False
+
+        PaymentRepository.save_refund_state(payment)
 
     # ============================
     # IDEMPOTENCY
