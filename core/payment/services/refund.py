@@ -5,7 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from django.db import IntegrityError, transaction
+from django.db import transaction
 
 from payment.enums import Currency, RefundStatus
 from payment.exceptions import (
@@ -55,23 +55,12 @@ class RefundService:
     --------------------
     The Payment row is the canonical synchronization point.
 
-        transaction.atomic()
-            ->
-        lock Payment
-            ->
-        resolve idempotency
-            ->
-        authorize cumulative refund
-            ->
-        create Refund
-            ->
-        execute gateway
-            ->
-        persist Refund result
-            ->
-        synchronize fully-refunded Payment
-            ->
-        commit
+    Refund reservation is committed before gateway execution. Gateway I/O
+    never runs while the Payment row is locked.
+
+        Phase A: lock Payment -> authorize -> create PENDING Refund -> commit
+        Phase B: execute gateway
+        Phase C: lock Payment + exact Refund -> finalize -> commit
 
     Gateway outcome contract
     ------------------------
