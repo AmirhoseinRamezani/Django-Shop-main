@@ -28,7 +28,7 @@ def refundable_payment(*, amount=Decimal("1000000")):
     PaymentAttemptFactory(
         payment=payment,
         attempt_number=1,
-        status=PaymentAttemptStatus.SUCCESS,
+        success=True,
     )
     return payment
 
