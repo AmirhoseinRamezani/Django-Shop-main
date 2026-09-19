@@ -71,13 +71,7 @@ def test_concurrent_refunds_never_over_refund_one_payment():
 
     assert refunds == [
         (Decimal("600000"), RefundStatus.SUCCESS),
-        (Decimal("600000"), RefundStatus.PENDING),
-    ] or refunds == [
-        (Decimal("600000"), RefundStatus.PENDING),
-        (Decimal("600000"), RefundStatus.SUCCESS),
     ]
-
-    assert sum(amount for amount, _ in refunds if _ == RefundStatus.SUCCESS) == Decimal(
-        "600000"
-    )
-    assert sum(amount for amount, _ in refunds) == Decimal("1200000")
+    assert sum(
+        amount for amount, status in refunds if status == RefundStatus.SUCCESS
+    ) == Decimal("600000")
