@@ -348,8 +348,15 @@ class GatewayCapabilities:
     Payment initiation, payment URL generation, verification and
     callback parsing are mandatory BaseGateway operations.
 
-    Settlement, refund, reversal and inquiry are optional because
-    gateway support differs.
+    Settlement, refund, refund inquiry, refund idempotency, reversal and
+    payment inquiry are optional because gateway support differs.
+
+    Refund inquiry is specifically about refund reconciliation and must
+    not be inferred from payment inquiry support.
+
+    Refund idempotency means the provider accepts a caller-supplied
+    stable refund idempotency identity. It is not implied by the local
+    Refund primary key.
     """
 
     __slots__ = (
