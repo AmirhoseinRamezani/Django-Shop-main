@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Mapping
 
-from payment.enums import PaymentGateway
+from payment.enums import PaymentGateway, RefundStatus
 from payment.exceptions import (
     PaymentGatewayNotSupportedError,
 )
@@ -200,9 +200,14 @@ class GatewayRefundInquiryRequest:
 class GatewayRefundInquiryResult:
     """
     Normalized provider result for refund reconciliation.
+
+    PENDING means the provider did not establish a definitive terminal
+    refund outcome. It must not be treated as FAILED.
     """
 
     success: bool
+
+    status: RefundStatus
 
     gateway: PaymentGateway
 
