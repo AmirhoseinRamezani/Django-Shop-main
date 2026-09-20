@@ -6,7 +6,7 @@ from typing import Any, Mapping
 
 from django.conf import settings
 
-from payment.enums import Currency, PaymentGateway
+from payment.enums import Currency, PaymentGateway, RefundStatus
 from payment.exceptions import (
     PaymentAmountMismatchError,
     PaymentCurrencyMismatchError,
@@ -2013,6 +2013,23 @@ class GatewayService:
             expected_gateway=expected_gateway,
             operation=cls._OP_REFUND_INQUIRY,
         )
+
+        if (
+            result.status == RefundStatus.SUCCESS
+            and not result.success
+        ) or (
+            result.status != RefundStatus.SUCCESS
+            and result.success
+        ):
+            raise PaymentGatewayError(
+                "Gateway refund inquiry returned inconsistent outcome.",
+                details={
+                    "gateway": expected_gateway.value,
+                    "refund_id": getattr(refund, "pk", None),
+                    "operation": cls._OP_REFUND_INQUIRY,
+                },
+                retryable=False,
+            )
 
         if result.amount is not None:
             normalized_amount = cls._normalize_amount(
