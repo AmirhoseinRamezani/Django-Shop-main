@@ -794,6 +794,9 @@ class GatewayService:
             order_id=order_id,
             currency=refund_currency,
             refund_reference=refund_reference,
+            idempotency_key=cls._optional_string(
+                getattr(refund, "idempotency_key", None),
+            ),
         )
 
         try:
