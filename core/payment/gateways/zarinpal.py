@@ -48,6 +48,8 @@ class ZarinPalGateway(BaseGateway):
 
     capabilities = GatewayCapabilities(
         refund=False,
+        refund_inquiry=False,
+        refund_idempotency=False,
         settlement=False,
         reverse=False,
         callback=True,
