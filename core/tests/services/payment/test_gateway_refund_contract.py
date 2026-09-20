@@ -73,10 +73,33 @@ class ContractGateway(BaseGateway):
         )
 
 
-class RefundOnlyGateway(ContractGateway):
+class RefundOnlyGateway(BaseGateway):
+    gateway = PaymentGateway.PAYPAL
+
     capabilities = GatewayCapabilities(
         refund=True,
     )
+
+    def initiate_payment(
+        self,
+        request: GatewayPaymentRequest,
+    ) -> GatewayPaymentResult:
+        raise NotImplementedError
+
+    def payment_url(self, authority: str) -> str:
+        raise NotImplementedError
+
+    def verify_payment(
+        self,
+        request: GatewayVerificationRequest,
+    ) -> GatewayVerificationResult:
+        raise NotImplementedError
+
+    def parse_callback(
+        self,
+        payload: dict,
+    ) -> GatewayCallback:
+        raise NotImplementedError
 
 
 def test_refund_request_carries_provider_idempotency_identity():
