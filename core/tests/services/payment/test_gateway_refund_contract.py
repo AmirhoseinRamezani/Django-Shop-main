@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from payment.enums import PaymentGateway
+from payment.enums import PaymentGateway, RefundStatus
 from payment.exceptions import PaymentGatewayNotSupportedError
 from payment.providers.base import (
     BaseGateway,
@@ -55,6 +55,7 @@ class ContractGateway(BaseGateway):
     ) -> GatewayRefundResult:
         return GatewayRefundResult(
             success=True,
+            status=RefundStatus.SUCCESS,
             gateway=self.gateway,
             gateway_reference="refund-ref",
         )
@@ -106,6 +107,7 @@ def test_refund_inquiry_is_separate_from_payment_inquiry():
     result = gateway.inquire_refund(request)
 
     assert result.success is True
+    assert result.status == RefundStatus.SUCCESS
     assert result.gateway == PaymentGateway.PAYPAL
     assert result.gateway_reference == "refund-ref"
     assert result.amount == Decimal("100000")
