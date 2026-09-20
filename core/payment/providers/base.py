@@ -175,6 +175,54 @@ class GatewayRefundResult:
 
 
 @dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True)
+class GatewayRefundInquiryRequest:
+    """
+    Provider-independent refund inquiry request.
+
+    This operation is specifically about the refund lifecycle. It must
+    never be implemented by reusing payment inquiry semantics.
+    """
+
+    refund_reference: str | None = None
+    gateway_reference: str | None = None
+    gateway_transaction_id: str | None = None
+
+    authority: str | None = None
+    order_id: str | None = None
+
+    amount: Decimal | None = None
+    currency: str = "IRR"
+
+
+@dataclass(frozen=True, slots=True)
+class GatewayRefundInquiryResult:
+    """
+    Normalized provider result for refund reconciliation.
+    """
+
+    success: bool
+
+    gateway: PaymentGateway
+
+    gateway_reference: str | None = None
+
+    gateway_transaction_id: str | None = None
+
+    response_code: str | None = None
+
+    message: str | None = None
+
+    amount: Decimal | None = None
+
+    currency: str | None = None
+
+    raw: Mapping[str, Any] = field(
+        default_factory=dict,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class GatewayReverseRequest:
     """
     Provider-independent payment reversal request.
@@ -305,6 +353,8 @@ class GatewayCapabilities:
 
     __slots__ = (
         "refund",
+        "refund_inquiry",
+        "refund_idempotency",
         "settlement",
         "reverse",
         "inquiry",
@@ -315,12 +365,16 @@ class GatewayCapabilities:
         self,
         *,
         refund: bool = False,
+        refund_inquiry: bool = False,
+        refund_idempotency: bool = False,
         settlement: bool = False,
         reverse: bool = False,
         inquiry: bool = False,
         callback: bool = True,
     ) -> None:
         self.refund = refund
+        self.refund_inquiry = refund_inquiry
+        self.refund_idempotency = refund_idempotency
         self.settlement = settlement
         self.reverse = reverse
         self.inquiry = inquiry
@@ -344,6 +398,8 @@ class GatewayCapabilities:
         return (
             "GatewayCapabilities("
             f"refund={self.refund!r}, "
+            f"refund_inquiry={self.refund_inquiry!r}, "
+            f"refund_idempotency={self.refund_idempotency!r}, "
             f"settlement={self.settlement!r}, "
             f"reverse={self.reverse!r}, "
             f"inquiry={self.inquiry!r}, "
@@ -441,6 +497,29 @@ class BaseGateway(ABC):
 
         raise NotImplementedError(
             "Refund capability is declared but not implemented."
+        )
+
+    # ------------------------------------
+    # Optional refund inquiry
+    # ------------------------------------
+
+    def inquire_refund(
+        self,
+        request: GatewayRefundInquiryRequest,
+    ) -> GatewayRefundInquiryResult:
+        """
+        Query the provider state of a refund.
+
+        This is deliberately distinct from payment inquiry. A provider
+        may support payment inquiry without exposing refund inquiry.
+        """
+
+        self._require_capability(
+            "refund_inquiry",
+        )
+
+        raise NotImplementedError(
+            "Refund inquiry capability is declared but not implemented."
         )
 
     # ------------------------------------
