@@ -21,6 +21,8 @@ from payment.providers.base import (
     GatewayInquiryResult,
     GatewayPaymentRequest,
     GatewayPaymentResult,
+    GatewayRefundInquiryRequest,
+    GatewayRefundInquiryResult,
     GatewayRefundRequest,
     GatewayRefundResult,
     GatewayReverseRequest,
@@ -148,6 +150,7 @@ class GatewayService:
     _OP_PAYMENT_URL = "payment_url"
     _OP_VERIFY = "verify"
     _OP_REFUND = "refund"
+    _OP_REFUND_INQUIRY = "refund_inquiry"
     _OP_SETTLEMENT = "settlement"
     _OP_REVERSE = "reverse"
     _OP_INQUIRY = "inquiry"
@@ -858,6 +861,130 @@ class GatewayService:
         return result
 
     # ================================
+    # REFUND INQUIRY
+    # ================================
+
+    @classmethod
+    def inquire_refund(
+        cls,
+        *,
+        refund: Any,
+        payment: Any,
+        attempt: Any | None = None,
+        gateway: PaymentGateway | str | None = None,
+    ) -> GatewayRefundInquiryResult:
+        """
+        Query provider state for an existing refund.
+
+        This method only retrieves external evidence. It does not mutate
+        financial state and does not decide the final Refund status.
+        """
+
+        payment_gateway = cls._payment_gateway(payment)
+
+        if gateway is not None:
+            requested_gateway = cls._normalize_gateway(gateway)
+
+            if requested_gateway != payment_gateway:
+                raise PaymentGatewayMismatchError(
+                    "Refund inquiry gateway does not match the historical "
+                    "Payment gateway.",
+                    details={
+                        "payment_id": getattr(payment, "pk", None),
+                        "payment_gateway": payment_gateway.value,
+                        "requested_gateway": requested_gateway.value,
+                        "operation": cls._OP_REFUND_INQUIRY,
+                    },
+                )
+
+        client = cls._client(payment_gateway)
+
+        cls._require_capability(
+            client=client,
+            gateway=payment_gateway,
+            operation=cls._OP_REFUND_INQUIRY,
+        )
+
+        amount = cls._normalize_amount(
+            getattr(refund, "amount", None),
+            operation=cls._OP_REFUND_INQUIRY,
+        )
+
+        currency = cls._normalize_currency(
+            getattr(refund, "currency", None),
+        )
+
+        payment_currency = cls._normalize_currency(
+            getattr(payment, "currency", None),
+        )
+
+        if currency != payment_currency:
+            raise PaymentCurrencyMismatchError(
+                "Refund currency must match Payment currency.",
+                details={
+                    "payment_id": getattr(payment, "pk", None),
+                    "refund_id": getattr(refund, "pk", None),
+                    "operation": cls._OP_REFUND_INQUIRY,
+                },
+            )
+
+        request = GatewayRefundInquiryRequest(
+            refund_reference=cls._refund_reference(refund),
+            gateway_reference=cls._optional_string(
+                getattr(refund, "gateway_reference", None),
+            ),
+            gateway_transaction_id=cls._optional_string(
+                getattr(refund, "gateway_transaction_id", None),
+            ),
+            authority=(
+                cls._attempt_authority(
+                    attempt,
+                    operation=cls._OP_REFUND_INQUIRY,
+                )
+                if attempt is not None
+                else None
+            ),
+            order_id=cls._payment_order_id(payment),
+            amount=amount,
+            currency=currency,
+        )
+
+        try:
+            result = client.inquire_refund(request)
+        except PaymentGatewayNotSupportedError:
+            raise
+        except PaymentGatewayError:
+            raise
+        except Exception as exc:
+            raise PaymentGatewayError(
+                "Payment gateway refund inquiry failed.",
+                details={
+                    "gateway": payment_gateway.value,
+                    "operation": cls._OP_REFUND_INQUIRY,
+                    "payment_id": getattr(payment, "pk", None),
+                    "refund_id": getattr(refund, "pk", None),
+                },
+                retryable=True,
+            ) from exc
+
+        cls._require_result_type(
+            result=result,
+            expected_type=GatewayRefundInquiryResult,
+            gateway=payment_gateway,
+            operation=cls._OP_REFUND_INQUIRY,
+            payment_id=getattr(payment, "pk", None),
+            refund_id=getattr(refund, "pk", None),
+        )
+
+        cls._validate_refund_inquiry_result(
+            result=result,
+            expected_gateway=payment_gateway,
+            refund=refund,
+        )
+
+        return result
+
+    # ================================
     # SETTLEMENT
     # ================================
 
@@ -1537,6 +1664,13 @@ class GatewayService:
     # ================================
 
     @staticmethod
+    def _optional_string(value: Any) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        return normalized or None
+
+    @staticmethod
     def _normalize_required_string(
         value: Any,
         *,
@@ -1862,6 +1996,65 @@ class GatewayService:
     # ================================
     # REFUND RESULT VALIDATION
     # ================================
+
+    @classmethod
+    def _validate_refund_inquiry_result(
+        cls,
+        *,
+        result: GatewayRefundInquiryResult,
+        expected_gateway: PaymentGateway,
+        refund: Any,
+    ) -> None:
+        cls._validate_generic_result_gateway(
+            result=result,
+            expected_gateway=expected_gateway,
+            operation=cls._OP_REFUND_INQUIRY,
+        )
+
+        if result.amount is not None:
+            normalized_amount = cls._normalize_amount(
+                result.amount,
+                operation=cls._OP_REFUND_INQUIRY,
+            )
+
+            expected_amount = cls._normalize_amount(
+                getattr(refund, "amount", None),
+                operation=cls._OP_REFUND_INQUIRY,
+            )
+
+            if normalized_amount != expected_amount:
+                raise PaymentAmountMismatchError(
+                    "Gateway refund inquiry amount does not match "
+                    "the requested refund amount.",
+                    details={
+                        "gateway": expected_gateway.value,
+                        "refund_id": getattr(refund, "pk", None),
+                        "expected_amount": str(expected_amount),
+                        "gateway_amount": str(normalized_amount),
+                        "operation": cls._OP_REFUND_INQUIRY,
+                    },
+                )
+
+        if result.currency is not None:
+            normalized_currency = cls._normalize_currency(
+                result.currency,
+            )
+            expected_currency = cls._normalize_currency(
+                getattr(refund, "currency", None),
+            )
+
+            if normalized_currency != expected_currency:
+                raise PaymentCurrencyMismatchError(
+                    "Gateway refund inquiry currency does not match "
+                    "the refund currency.",
+                    details={
+                        "gateway": expected_gateway.value,
+                        "refund_id": getattr(refund, "pk", None),
+                        "expected_currency": expected_currency,
+                        "gateway_currency": normalized_currency,
+                        "operation": cls._OP_REFUND_INQUIRY,
+                    },
+                )
 
     @classmethod
     def _validate_refund_result(
