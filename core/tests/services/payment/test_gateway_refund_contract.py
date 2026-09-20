@@ -55,7 +55,6 @@ class ContractGateway(BaseGateway):
     ) -> GatewayRefundResult:
         return GatewayRefundResult(
             success=True,
-            status=RefundStatus.SUCCESS,
             gateway=self.gateway,
             gateway_reference="refund-ref",
         )
@@ -66,6 +65,7 @@ class ContractGateway(BaseGateway):
     ) -> GatewayRefundInquiryResult:
         return GatewayRefundInquiryResult(
             success=True,
+            status=RefundStatus.SUCCESS,
             gateway=self.gateway,
             gateway_reference="refund-ref",
             amount=request.amount,
