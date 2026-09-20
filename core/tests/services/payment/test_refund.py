@@ -1,7 +1,9 @@
+from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
+from django.utils import timezone
 
 from payment.enums import PaymentAttemptStatus, PaymentGateway, PaymentStatusType, RefundStatus
 from payment.exceptions import (
@@ -11,6 +13,7 @@ from payment.exceptions import (
 )
 from payment.models import Refund
 from payment.providers.base import GatewayRefundResult
+from payment.repositories.refund_repository import RefundRepository
 from payment.services.refund import RefundService
 from tests.factories.payment import PaymentAttemptFactory, PaymentFactory, RefundFactory
 
@@ -252,6 +255,44 @@ class TestRefundService:
                 idempotency_key="refund-pending-retry-1",
                 reason="customer_request",
             )
+
+        assert result.pk == pending.pk
+        assert result.status == RefundStatus.PENDING
+        gateway.assert_not_called()
+
+    def test_stale_pending_refund_is_not_reexecuted_by_normal_retry(self):
+        payment = refundable_payment()
+        pending = RefundFactory(
+            payment=payment,
+            amount=Decimal("300000"),
+            idempotency_key="refund-stale-retry-1",
+            status=RefundStatus.PENDING,
+        )
+
+        cutoff = timezone.now() - timedelta(minutes=10)
+        Refund.objects.filter(pk=pending.pk).update(
+            requested_at=cutoff - timedelta(seconds=1),
+        )
+
+        candidates = list(
+            RefundRepository.stale_pending(
+                requested_before=cutoff,
+            )
+        )
+
+        assert candidates == [pending]
+
+        with patch(
+            "payment.services.refund.GatewayService.refund",
+        ) as gateway:
+            result = RefundService.refund(
+                payment_id=payment.pk,
+                amount=Decimal("300000"),
+                idempotency_key="refund-stale-retry-1",
+                reason="customer_request",
+            )
+
+        result.refresh_from_db()
 
         assert result.pk == pending.pk
         assert result.status == RefundStatus.PENDING
