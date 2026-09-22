@@ -534,11 +534,12 @@ class TestRefundService:
                 "Refund inquiry is not supported.",
             ),
         ) as inquiry_gateway:
-            result = RefundService.reconcile_pending_refund(
-                refund_id=pending.pk,
-            )
+            with pytest.raises(PaymentGatewayNotSupportedError):
+                RefundService.reconcile_pending_refund(
+                    refund_id=pending.pk,
+                )
 
-        result.refresh_from_db()
+        result = Refund.objects.get(pk=pending.pk)
 
         assert result.status == RefundStatus.PENDING
         assert result.finished_at is None
