@@ -12,7 +12,10 @@ from payment.exceptions import (
     PaymentRefundAmountInvalidError,
 )
 from payment.models import Refund
-from payment.providers.base import (\n    GatewayRefundInquiryResult,\n    GatewayRefundResult,\n)
+from payment.providers.base import (
+    GatewayRefundInquiryResult,
+    GatewayRefundResult,
+)
 from payment.repositories.refund_repository import RefundRepository
 from payment.services.refund import RefundService
 from tests.factories.payment import PaymentAttemptFactory, PaymentFactory, RefundFactory
