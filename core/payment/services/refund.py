@@ -17,7 +17,10 @@ from payment.exceptions import (
 )
 from payment.models.refund import Refund
 from payment.policies import PaymentPolicy
-from payment.providers.base import GatewayRefundResult
+from payment.providers.base import (
+    GatewayRefundInquiryResult,
+    GatewayRefundResult,
+)
 from payment.repositories.payment_repository import PaymentRepository
 from payment.repositories.payment_attempt_repository import PaymentAttemptRepository
 from payment.repositories.refund_repository import RefundRepository
@@ -258,6 +261,116 @@ class RefundService:
             response_code=cls._gateway_response_code(result),
             gateway_message=cls._gateway_message(result),
             latency_ms=cls._gateway_latency(result),
+        )
+
+
+    @classmethod
+    def reconcile_pending_refund(
+        cls,
+        *,
+        refund_id: int,
+    ) -> Refund:
+        """
+        Reconcile an unresolved PENDING Refund using provider inquiry.
+
+        This is a recovery operation, not a refund retry. It never calls
+        the refund execution endpoint again.
+
+        Providers without refund inquiry support remain an explicit
+        operational blocker and the Refund stays PENDING.
+        """
+
+        with transaction.atomic():
+            payment = PaymentRepository.get_for_update(
+                RefundRepository.get(refund_id).payment_id,
+            )
+            refund = RefundRepository.get_for_update(
+                refund_id,
+            )
+
+            if refund.payment_id != payment.pk:
+                raise PaymentInvariantViolation(
+                    "Refund does not belong to the locked Payment."
+                )
+
+            if refund.is_terminal:
+                return refund
+
+            attempt = (
+                PaymentAttemptRepository
+                .latest_successful_for_payment_for_update(
+                    payment.pk,
+                )
+            )
+
+        try:
+            result = GatewayService.inquire_refund(
+                payment=payment,
+                attempt=attempt,
+                refund=refund,
+            )
+        except PaymentGatewayNotSupportedError:
+            raise
+        except PaymentGatewayError as exc:
+            return cls._record_pending_gateway_error(
+                payment_id=payment.pk,
+                refund_id=refund.pk,
+                exc=exc,
+            )
+
+        if not isinstance(result, GatewayRefundInquiryResult):
+            return cls._record_pending_gateway_evidence(
+                payment_id=payment.pk,
+                refund_id=refund.pk,
+                response_code="INVALID_RESULT",
+                gateway_message=(
+                    "Gateway returned an invalid refund inquiry result."
+                ),
+            )
+
+        if result.status == RefundStatus.PENDING:
+            return cls._record_pending_gateway_evidence(
+                payment_id=payment.pk,
+                refund_id=refund.pk,
+                response_code=cls._gateway_inquiry_response_code(result),
+                gateway_message=cls._gateway_inquiry_message(result),
+            )
+
+        if result.status == RefundStatus.FAILED:
+            return cls._finalize_failure(
+                payment_id=payment.pk,
+                refund_id=refund.pk,
+                reason=cls._gateway_inquiry_failure_reason(result),
+                response_code=cls._gateway_inquiry_response_code(result),
+                gateway_message=cls._gateway_inquiry_message(result),
+            )
+
+        gateway_reference = cls._normalize_optional(
+            result.gateway_reference,
+        )
+        gateway_transaction_id = cls._normalize_optional(
+            result.gateway_transaction_id,
+        )
+
+        if not (gateway_reference or gateway_transaction_id):
+            return cls._record_pending_gateway_evidence(
+                payment_id=payment.pk,
+                refund_id=refund.pk,
+                response_code=cls._gateway_inquiry_response_code(result),
+                gateway_message=(
+                    "Gateway confirmed refund success without "
+                    "a trusted gateway identity."
+                ),
+            )
+
+        return cls._finalize_success(
+            payment_id=payment.pk,
+            refund_id=refund.pk,
+            gateway_reference=gateway_reference,
+            gateway_transaction_id=gateway_transaction_id,
+            response_code=cls._gateway_inquiry_response_code(result),
+            gateway_message=cls._gateway_inquiry_message(result),
+            latency_ms=None,
         )
 
     @classmethod
@@ -639,6 +752,37 @@ class RefundService:
     # ============================
     # GATEWAY RESULT NORMALIZATION
     # ============================
+
+
+    @staticmethod
+    def _gateway_inquiry_response_code(
+        result: GatewayRefundInquiryResult,
+    ) -> str:
+        return RefundService._normalize_optional(
+            result.response_code,
+        )[:64]
+
+    @staticmethod
+    def _gateway_inquiry_message(
+        result: GatewayRefundInquiryResult,
+    ) -> str:
+        return RefundService._normalize_optional(
+            result.message,
+        )[:255]
+
+    @staticmethod
+    def _gateway_inquiry_failure_reason(
+        result: GatewayRefundInquiryResult,
+    ) -> str:
+        message = RefundService._gateway_inquiry_message(result)
+        if message:
+            return message
+
+        response_code = RefundService._gateway_inquiry_response_code(result)
+        if response_code:
+            return f"Gateway refund inquiry failed: {response_code}"[:255]
+
+        return "Gateway confirmed refund failure."
 
     @staticmethod
     def _gateway_response_code(
