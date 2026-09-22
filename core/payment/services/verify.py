@@ -252,7 +252,7 @@ def verify_payment(
                 result=result,
                 payment=payment,
                 payment_snapshot=payment_snapshot,
-                attempt_snapshot=attempt_snapshot,
+                attempt=attempt,
             )
 
         elif payment.is_failed:
@@ -806,7 +806,7 @@ def _validate_duplicate_success_identity(
     result: Any,
     payment: PaymentModel,
     payment_snapshot: VerificationSnapshot,
-    attempt_snapshot: AttemptVerificationSnapshot,
+    attempt: PaymentAttempt,
 ) -> None:
     """
     Validate a gateway result arriving after another verifier already
@@ -818,7 +818,7 @@ def _validate_duplicate_success_identity(
     Conflicting identity:
         reject.
 
-    The persisted Payment remains authoritative.
+    The persisted Payment and locked PaymentAttempt remain authoritative.
     """
 
     if not result.success:
@@ -845,19 +845,26 @@ def _validate_duplicate_success_identity(
         )
 
     # ----------------------------------------
-    # Gateway reference.
+    # The locked PaymentAttempt is the authoritative
+    # identity after another verifier finalized Payment.
     # ----------------------------------------
+
+    if attempt.status != PaymentAttemptStatus.SUCCESS:
+        raise PaymentInvariantViolation(
+            "A successful Payment must be backed by a successful "
+            "PaymentAttempt during duplicate verification."
+        )
 
     gateway_reference = _normalize_optional(
         result.gateway_reference,
     )
 
-    if (
-        gateway_reference
-        and attempt_snapshot.gateway_reference
-        and gateway_reference
-        != attempt_snapshot.gateway_reference
-    ):
+    if not attempt.gateway_reference:
+        raise PaymentInvariantViolation(
+            "Successful PaymentAttempt has no gateway reference."
+        )
+
+    if gateway_reference != attempt.gateway_reference:
         raise PaymentInvariantViolation(
             "Duplicate verification returned a conflicting "
             "gateway reference."
@@ -883,9 +890,9 @@ def _validate_duplicate_success_identity(
 
     if (
         gateway_transaction_id
-        and attempt_snapshot.gateway_transaction_id
+        and attempt.gateway_transaction_id
         and gateway_transaction_id
-        != attempt_snapshot.gateway_transaction_id
+        != attempt.gateway_transaction_id
     ):
         raise PaymentInvariantViolation(
             "Duplicate verification returned a conflicting "
