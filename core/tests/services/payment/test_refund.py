@@ -8,6 +8,7 @@ from django.utils import timezone
 from payment.enums import PaymentAttemptStatus, PaymentGateway, PaymentStatusType, RefundStatus
 from payment.exceptions import (
     PaymentGatewayError,
+    PaymentGatewayNotSupportedError,
     PaymentInvariantViolation,
     PaymentRefundAmountInvalidError,
 )
