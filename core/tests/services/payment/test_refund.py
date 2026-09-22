@@ -516,3 +516,29 @@ class TestRefundService:
         inquiry_gateway.assert_called_once()
         refund_gateway.assert_not_called()
 
+
+
+    def test_pending_refund_recovery_stays_pending_without_provider_inquiry_support(self):
+        payment = refundable_payment()
+        pending = RefundFactory(
+            payment=payment,
+            amount=Decimal("300000"),
+            idempotency_key="refund-recovery-unsupported-inquiry-1",
+            status=RefundStatus.PENDING,
+        )
+
+        with patch(
+            "payment.services.refund.GatewayService.inquire_refund",
+            side_effect=PaymentGatewayNotSupportedError(
+                "Refund inquiry is not supported.",
+            ),
+        ) as inquiry_gateway:
+            result = RefundService.reconcile_pending_refund(
+                refund_id=pending.pk,
+            )
+
+        result.refresh_from_db()
+
+        assert result.status == RefundStatus.PENDING
+        assert result.finished_at is None
+        inquiry_gateway.assert_called_once()
