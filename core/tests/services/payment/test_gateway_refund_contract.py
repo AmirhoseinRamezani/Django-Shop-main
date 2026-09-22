@@ -154,3 +154,32 @@ def test_refund_idempotency_is_explicit_capability():
     assert not RefundOnlyGateway.capabilities.supports(
         "refund_idempotency"
     )
+
+
+@pytest.mark.parametrize(
+    ("refund", "refund_inquiry", "refund_idempotency", "expected_recovery"),
+    [
+        (True, True, True, "inquiry"),
+        (True, True, False, "inquiry"),
+        (True, False, True, "operational_blocker"),
+        (True, False, False, "operational_blocker"),
+    ],
+)
+def test_refund_recovery_capability_matrix(
+    refund,
+    refund_inquiry,
+    refund_idempotency,
+    expected_recovery,
+):
+    capabilities = GatewayCapabilities(
+        refund=refund,
+        refund_inquiry=refund_inquiry,
+        refund_idempotency=refund_idempotency,
+    )
+
+    if capabilities.refund_inquiry:
+        recovery = "inquiry"
+    else:
+        recovery = "operational_blocker"
+
+    assert recovery == expected_recovery
