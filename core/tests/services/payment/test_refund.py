@@ -12,7 +12,7 @@ from payment.exceptions import (
     PaymentRefundAmountInvalidError,
 )
 from payment.models import Refund
-from payment.providers.base import GatewayRefundResult
+from payment.providers.base import (\n    GatewayRefundInquiryResult,\n    GatewayRefundResult,\n)
 from payment.repositories.refund_repository import RefundRepository
 from payment.services.refund import RefundService
 from tests.factories.payment import PaymentAttemptFactory, PaymentFactory, RefundFactory
@@ -373,3 +373,143 @@ class TestRefundService:
 
         assert observed["refund_exists"] is True
         assert refund.status == RefundStatus.SUCCESS
+
+    def test_pending_refund_recovery_uses_inquiry_and_can_finalize_success(self):
+        payment = refundable_payment()
+        pending = RefundFactory(
+            payment=payment,
+            amount=Decimal("300000"),
+            idempotency_key="refund-recovery-success-1",
+            status=RefundStatus.PENDING,
+        )
+
+        inquiry = GatewayRefundInquiryResult(
+            success=True,
+            status=RefundStatus.SUCCESS,
+            gateway=PaymentGateway.ZARINPAL,
+            gateway_reference="RECOVERED-REF-1",
+            response_code="100",
+            message="Refund completed",
+            amount=pending.amount,
+            currency=payment.currency,
+        )
+
+        with patch(
+            "payment.services.refund.GatewayService.inquire_refund",
+            return_value=inquiry,
+        ) as gateway:
+            with patch(
+                "payment.services.refund.GatewayService.refund",
+            ) as refund_gateway:
+                result = RefundService.reconcile_pending_refund(
+                    refund_id=pending.pk,
+                )
+
+        result.refresh_from_db()
+        payment.refresh_from_db()
+
+        assert result.status == RefundStatus.SUCCESS
+        assert result.gateway_reference == "RECOVERED-REF-1"
+        assert payment.is_refunded is False
+        gateway.assert_called_once()
+        refund_gateway.assert_not_called()
+
+    def test_pending_refund_recovery_keeps_pending_when_provider_reports_pending(self):
+        payment = refundable_payment()
+        pending = RefundFactory(
+            payment=payment,
+            amount=Decimal("300000"),
+            idempotency_key="refund-recovery-pending-1",
+            status=RefundStatus.PENDING,
+        )
+
+        inquiry = GatewayRefundInquiryResult(
+            success=False,
+            status=RefundStatus.PENDING,
+            gateway=PaymentGateway.ZARINPAL,
+            response_code="PENDING",
+            message="Provider has no terminal result",
+            amount=pending.amount,
+            currency=payment.currency,
+        )
+
+        with patch(
+            "payment.services.refund.GatewayService.inquire_refund",
+            return_value=inquiry,
+        ) as gateway:
+            result = RefundService.reconcile_pending_refund(
+                refund_id=pending.pk,
+            )
+
+        result.refresh_from_db()
+
+        assert result.status == RefundStatus.PENDING
+        assert result.finished_at is None
+        assert result.response_code == "PENDING"
+        gateway.assert_called_once()
+
+    def test_pending_refund_recovery_marks_definitive_failure(self):
+        payment = refundable_payment()
+        pending = RefundFactory(
+            payment=payment,
+            amount=Decimal("300000"),
+            idempotency_key="refund-recovery-failed-1",
+            status=RefundStatus.PENDING,
+        )
+
+        inquiry = GatewayRefundInquiryResult(
+            success=False,
+            status=RefundStatus.FAILED,
+            gateway=PaymentGateway.ZARINPAL,
+            response_code="-1",
+            message="Provider rejected refund",
+            amount=pending.amount,
+            currency=payment.currency,
+        )
+
+        with patch(
+            "payment.services.refund.GatewayService.inquire_refund",
+            return_value=inquiry,
+        ):
+            result = RefundService.reconcile_pending_refund(
+                refund_id=pending.pk,
+            )
+
+        result.refresh_from_db()
+
+        assert result.status == RefundStatus.FAILED
+        assert result.failure_reason == "Provider rejected refund"
+        assert result.finished_at is not None
+
+    def test_pending_refund_recovery_does_not_retry_refund_execution(self):
+        payment = refundable_payment()
+        pending = RefundFactory(
+            payment=payment,
+            amount=Decimal("300000"),
+            idempotency_key="refund-recovery-no-retry-1",
+            status=RefundStatus.PENDING,
+        )
+
+        inquiry = GatewayRefundInquiryResult(
+            success=True,
+            status=RefundStatus.SUCCESS,
+            gateway=PaymentGateway.ZARINPAL,
+            gateway_transaction_id="RECOVERED-TX-1",
+            amount=pending.amount,
+            currency=payment.currency,
+        )
+
+        with patch(
+            "payment.services.refund.GatewayService.inquire_refund",
+            return_value=inquiry,
+        ) as inquiry_gateway:
+            with patch(
+                "payment.services.refund.GatewayService.refund",
+            ) as refund_gateway:
+                RefundService.reconcile_pending_refund(
+                    refund_id=pending.pk,
+                )
+
+        inquiry_gateway.assert_called_once()
+        refund_gateway.assert_not_called()
+
