@@ -23,6 +23,7 @@ from payment.repositories.payment_attempt_repository import (
 from payment.repositories.payment_repository import (
     PaymentRepository,
 )
+from payment.policies import PaymentPolicy
 
 
 @transaction.atomic
@@ -90,6 +91,11 @@ def confirm_order_payment(
         raise ValidationError(
             _("No successful payment found")
         )
+
+    PaymentPolicy.validate_order_financial_snapshot(
+        payment,
+        order,
+    )
 
     # ============================================================
     # 4. PAYMENT IDEMPOTENCY

@@ -40,17 +40,25 @@ class OrderPolicy:
         raise PermissionDenied(_("Access denied"))
 
     @staticmethod
-    def can_refund(user, order):
-        """
-        Only staff can refund paid orders.
-        """
-        if not user.is_staff:
-            raise PermissionDenied(_("Admin access required"))
+    def can_refund_order(order):
+        """Validate the commercial refund lifecycle for an Order.
 
-        if not order.is_paid:
+        This method deliberately contains no actor/HTTP authorization. It is
+        the single order-side business eligibility rule used by financial
+        refund workflows.
+        """
+        if order is None or not order.is_paid:
             raise PermissionDenied(_("Only paid orders can be refunded"))
 
         return True
+
+    @staticmethod
+    def can_refund(user, order):
+        """Authorize an actor and validate the order refund lifecycle."""
+        if not user or not user.is_authenticated or not user.is_staff:
+            raise PermissionDenied(_("Admin access required"))
+
+        return OrderPolicy.can_refund_order(order)
     
     @staticmethod
     def can_pay(order):

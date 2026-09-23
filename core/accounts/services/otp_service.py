@@ -83,8 +83,13 @@ def generate_or_reuse_otp(
 
     return otp
 
+@transaction.atomic
 def verify_otp(*, email: str, code: str, purpose: OTPPurpose) -> None:
-    otp = _get_valid_otp(email=email, purpose=purpose)
+    otp = _get_valid_otp(
+        email=email,
+        purpose=purpose,
+        for_update=True,
+    )
     otp.verify(code)
 
 
@@ -132,8 +137,13 @@ def _rate_limit_check(email: str) -> None:
         raise ValidationError(_("The number of requests exceeds the allowed limit."))
 
 
-def _get_valid_otp(*, email: str, purpose: OTPPurpose) -> EmailOTP:
-    otp = (
+def _get_valid_otp(
+    *,
+    email: str,
+    purpose: OTPPurpose,
+    for_update: bool = False,
+) -> EmailOTP:
+    queryset = (
         EmailOTP.objects
         .filter(
             email=email,
@@ -142,8 +152,12 @@ def _get_valid_otp(*, email: str, purpose: OTPPurpose) -> EmailOTP:
             expire_at__gt=timezone.now(),
         )
         .order_by("-created_date")
-        .first()
     )
+
+    if for_update:
+        queryset = queryset.select_for_update()
+
+    otp = queryset.first()
 
     if not otp:
         raise ValidationError(_("Invalid or expired code"))

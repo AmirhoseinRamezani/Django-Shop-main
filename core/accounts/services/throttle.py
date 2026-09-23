@@ -24,17 +24,26 @@ def check_and_increment_otp_throttle(
     """
     Raises OTPThrottleException if limit exceeded.
     """
-    if not ip:
-        return  # fail-open (important for edge infra cases)
-
+    # Missing client IP must not bypass the throttle. Use a dedicated bucket
+    # rather than trusting an absent/forged address.
+    ip = ip or "unknown"
     key = _key(ip, email)
 
-    count = cache.get(key, 0)
+    # cache.add is atomic on the supported production cache backends and
+    # establishes the first counter without a check-then-set race.
+    if cache.add(key, 1, timeout=window):
+        return
 
-    if count >= limit:
+    try:
+        count = cache.incr(key)
+    except ValueError:
+        # The key may have expired between add/incr. Re-establish it atomically.
+        if cache.add(key, 1, timeout=window):
+            return
+        count = cache.incr(key)
+
+    if count > limit:
+        # Undo this caller's reservation. incr/decr are atomic operations on
+        # Redis and compatible Django cache backends.
+        cache.decr(key)
         raise OTPThrottleException()
-
-    if count == 0:
-        cache.set(key, 1, timeout=window)
-    else:
-        cache.incr(key)

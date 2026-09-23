@@ -33,6 +33,7 @@ def test_revoke_session():
     session.refresh_from_db()
 
     assert session.is_active is False
+    assert session.revoked_at is not None
 
     assert RefreshToken.objects.filter(
         session=session,

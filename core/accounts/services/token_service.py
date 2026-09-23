@@ -4,6 +4,7 @@ from django.utils import timezone
 from django.core.exceptions import ValidationError
 
 from accounts.models import RefreshToken
+from accounts.models.device_session import DeviceSession
 
 from accounts.services.jwt import (
     decode_token,
@@ -31,22 +32,47 @@ class TokenService:
             "session_id"
         )
 
-        token_obj = (
-            RefreshToken.objects
-            .select_for_update()
-            .select_related(
-                "user",
-                "session",
-            )
-            .get(
-                token=refresh_token
-            )
-        )
+        user_id = payload.get("user_id")
+        family_id = payload.get("family_id")
 
-        if str(token_obj.session_id) != str(session_id):
-            raise ValidationError(
-                "Token session mismatch"
+        if not user_id or not session_id or not family_id:
+            raise ValidationError("Invalid token payload")
+
+        # Session is the parent security aggregate. Lock it before the child
+        # RefreshToken so logout/revocation and rotation use one lock order.
+        try:
+            session = (
+                DeviceSession.objects
+                .select_for_update()
+                .get(
+                    id=session_id,
+                    user_id=user_id,
+                )
             )
+        except DeviceSession.DoesNotExist:
+            raise ValidationError("Invalid session")
+
+        if not session.is_active:
+            raise ValidationError("Session revoked")
+
+        try:
+            token_obj = (
+                RefreshToken.objects
+                .select_for_update()
+                .select_related("user")
+                .get(token=refresh_token)
+            )
+        except RefreshToken.DoesNotExist:
+            raise ValidationError("Invalid or expired refresh token")
+
+        if (
+            str(token_obj.session_id) != str(session_id)
+            or str(token_obj.user_id) != str(user_id)
+        ):
+            raise ValidationError("Token session mismatch")
+
+        if str(token_obj.family_id) != str(family_id):
+            raise ValidationError("Token family mismatch")
 
         if token_obj.is_revoked or token_obj.is_expired():
             cls._handle_token_reuse(
@@ -80,16 +106,16 @@ class TokenService:
         token_obj,
     ):
         now = timezone.now()
+        session = token_obj.session
 
         RefreshToken.objects.filter(
-            session=token_obj.session,
+            session_id=session.id,
             is_revoked=False,
         ).update(
             is_revoked=True,
             revoked_at=now,
         )
 
-        session = token_obj.session
 
         session.is_active = False
         session.revoked_at = now

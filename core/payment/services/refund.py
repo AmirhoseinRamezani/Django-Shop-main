@@ -8,6 +8,8 @@ from typing import Any
 from django.db import transaction
 
 from payment.enums import Currency, RefundStatus
+from order.models import OrderModel
+from order.policies import OrderPolicy
 from payment.exceptions import (
     PaymentCurrencyMismatchError,
     PaymentGatewayError,
@@ -117,13 +119,31 @@ class RefundService:
         executed again by an ordinary application retry.
         """
 
-        del actor
-
         normalized_amount = cls._normalize_amount(amount)
         normalized_key = cls._normalize_idempotency_key(idempotency_key)
 
         with transaction.atomic():
+            payment_reference = PaymentRepository.get(payment_id)
+            locked_order = (
+                OrderModel.objects
+                .select_for_update()
+                .get(pk=payment_reference.order_id)
+            )
             payment = PaymentRepository.get_for_update(payment_id)
+
+            if payment.order_id != locked_order.pk:
+                raise PaymentInvariantViolation(
+                    "Payment ownership changed while refund was starting."
+                )
+
+            OrderPolicy.can_refund_order(locked_order)
+            if actor is not None:
+                OrderPolicy.can_refund(actor, locked_order)
+
+            PaymentPolicy.validate_order_financial_snapshot(
+                payment,
+                locked_order,
+            )
 
             existing = (
                 RefundRepository.find_by_idempotency_key_for_update(
@@ -265,6 +285,66 @@ class RefundService:
 
 
     @classmethod
+    def refund_order(
+        cls,
+        *,
+        order_id: int,
+        payment_id: int,
+        actor: Any,
+        idempotency_key: str,
+    ) -> Refund:
+        """Administrative full-refund entry point with explicit authorization.
+
+        This adapter calculates the refundable balance while the canonical
+        Order -> Payment lock hierarchy is held, then delegates the actual
+        financial workflow to ``refund``.
+        """
+        with transaction.atomic():
+            order = (
+                OrderModel.objects
+                .select_for_update()
+                .get(pk=order_id)
+            )
+            OrderPolicy.can_refund(actor, order)
+
+            payment = PaymentRepository.get_for_update(payment_id)
+            if payment.order_id != order.pk:
+                raise PaymentInvariantViolation(
+                    "Payment does not belong to the requested Order."
+                )
+
+            PaymentPolicy.validate_order_financial_snapshot(
+                payment,
+                order,
+            )
+
+            existing = RefundRepository.find_by_idempotency_key_for_update(
+                idempotency_key.strip(),
+            )
+            if existing is not None:
+                cls._validate_idempotent_request(
+                    refund=existing,
+                    payment=payment,
+                    amount=existing.amount,
+                )
+                return existing
+
+            reserved = RefundRepository.reserved_amount_for_payment(payment.pk)
+            amount = payment.amount - reserved
+            if amount <= Decimal("0"):
+                raise PaymentRefundAmountInvalidError(
+                    "No refundable balance remains for this Payment."
+                )
+
+        return cls.refund(
+            payment_id=payment_id,
+            amount=amount,
+            idempotency_key=idempotency_key,
+            reason="customer_request",
+            actor=actor,
+        )
+
+    @classmethod
     def reconcile_pending_refund(
         cls,
         *,
@@ -281,8 +361,19 @@ class RefundService:
         """
 
         with transaction.atomic():
+            refund_reference = RefundRepository.get(refund_id)
+            payment_reference = PaymentRepository.get(refund_reference.payment_id)
+            locked_order = (
+                OrderModel.objects
+                .select_for_update()
+                .get(pk=payment_reference.order_id)
+            )
             payment = PaymentRepository.get_for_update(
-                RefundRepository.get(refund_id).payment_id,
+                payment_reference.pk,
+            )
+            PaymentPolicy.validate_order_financial_snapshot(
+                payment,
+                locked_order,
             )
             refund = RefundRepository.get_for_update(
                 refund_id,
@@ -386,7 +477,17 @@ class RefundService:
         latency_ms: int | None,
     ) -> Refund:
         with transaction.atomic():
+            payment_reference = PaymentRepository.get(payment_id)
+            locked_order = (
+                OrderModel.objects
+                .select_for_update()
+                .get(pk=payment_reference.order_id)
+            )
             payment = PaymentRepository.get_for_update(payment_id)
+            PaymentPolicy.validate_order_financial_snapshot(
+                payment,
+                locked_order,
+            )
             refund = RefundRepository.get_for_update(refund_id)
 
             if refund.payment_id != payment.pk:
@@ -442,7 +543,17 @@ class RefundService:
         latency_ms: int | None = None,
     ) -> Refund:
         with transaction.atomic():
+            payment_reference = PaymentRepository.get(payment_id)
+            locked_order = (
+                OrderModel.objects
+                .select_for_update()
+                .get(pk=payment_reference.order_id)
+            )
             payment = PaymentRepository.get_for_update(payment_id)
+            PaymentPolicy.validate_order_financial_snapshot(
+                payment,
+                locked_order,
+            )
             refund = RefundRepository.get_for_update(refund_id)
 
             if refund.payment_id != payment.pk:
@@ -491,7 +602,17 @@ class RefundService:
         gateway_message: str = "",
     ) -> Refund:
         with transaction.atomic():
+            payment_reference = PaymentRepository.get(payment_id)
+            locked_order = (
+                OrderModel.objects
+                .select_for_update()
+                .get(pk=payment_reference.order_id)
+            )
             payment = PaymentRepository.get_for_update(payment_id)
+            PaymentPolicy.validate_order_financial_snapshot(
+                payment,
+                locked_order,
+            )
             refund = RefundRepository.get_for_update(refund_id)
 
             if refund.payment_id != payment.pk:

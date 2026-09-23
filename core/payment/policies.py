@@ -377,6 +377,39 @@ class PaymentPolicy:
     # ====================================
 
     @staticmethod
+    def validate_order_financial_snapshot(payment, order) -> bool:
+        """Ensure Payment matches the trusted immutable Order price snapshot."""
+        from decimal import Decimal
+        from payment.enums import Currency
+        from payment.exceptions import PaymentInvariantViolation
+
+        if payment is None or order is None:
+            raise PaymentInvariantViolation(
+                "Payment and Order are required for financial snapshot validation."
+            )
+
+        expected_amount = Decimal(str(order.final_price))
+        if payment.amount != expected_amount:
+            raise PaymentInvariantViolation(
+                "Payment amount does not match the Order financial snapshot.",
+                details={
+                    "payment_id": payment.pk,
+                    "order_id": order.pk,
+                },
+            )
+
+        if str(payment.currency) != str(Currency.IRR):
+            raise PaymentInvariantViolation(
+                "Payment currency does not match the V1 Order financial contract.",
+                details={
+                    "payment_id": payment.pk,
+                    "order_id": order.pk,
+                },
+            )
+
+        return True
+
+    @staticmethod
     def can_refund(payment) -> bool:
         """
         Determine whether a Payment satisfies the current refund policy.

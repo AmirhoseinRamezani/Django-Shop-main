@@ -1,8 +1,9 @@
 # order/services/coupon.py
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Q
 from django.core.exceptions import ValidationError
 from django.utils.translation import gettext as _
+from django.utils import timezone
 
 from order.models import CouponModel
 
@@ -49,9 +50,11 @@ class CouponService:
             .filter(
                 id=coupon.id,
                 is_active=True,
+                used_count__lt=F("max_limit_usage"),
             )
-            .exclude(
-                used_count=F("max_limit_usage"),
+            .filter(
+                Q(expiration_date__isnull=True)
+                | Q(expiration_date__gt=timezone.now())
             )
             .update(
                 used_count=F("used_count") + 1

@@ -1,6 +1,7 @@
 # accounts/authentication.py
 
 from django.utils import timezone
+from django.db import transaction
 from django.conf import settings
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
@@ -40,34 +41,38 @@ class JWTAuthentication(BaseAuthentication):
         if not user_id or not session_id:
             raise AuthenticationFailed(_("Invalid token payload"))
 
-        session = (
-            DeviceSession.objects
-            .select_related("user")
-            .filter(
-                id=session_id,
-                user_id=user_id,
-                is_active=True,
+        with transaction.atomic():
+            session = (
+                DeviceSession.objects
+                .select_for_update()
+                .select_related("user")
+                .filter(
+                    id=session_id,
+                    user_id=user_id,
+                    is_active=True,
+                )
+                .first()
             )
-            .first()
-        )
 
-        if not session:
-            raise AuthenticationFailed(_("Invalid session"))
+            if not session:
+                raise AuthenticationFailed(_("Invalid session"))
 
-        # Idle timeout check
-        if session.last_seen:
-            delta = timezone.now() - session.last_seen
-            if delta.total_seconds() > settings.SESSION_IDLE_TIMEOUT_SECONDS:
-                session.is_active = False
-                session.save(update_fields=["is_active"])
-                raise AuthenticationFailed(_("Session expired"))
-            
-        # update last_seen
-        session.last_seen = timezone.now()
-        session.save(update_fields=["last_seen"])
+            now = timezone.now()
+            if session.last_seen:
+                delta = now - session.last_seen
+                if delta.total_seconds() > settings.SESSION_IDLE_TIMEOUT_SECONDS:
+                    session.is_active = False
+                    session.revoked_at = now
+                    session.save(
+                        update_fields=["is_active", "revoked_at"]
+                    )
+                    raise AuthenticationFailed(_("Session expired"))
 
-        request.session_obj = session
-        
+            session.last_seen = now
+            session.save(update_fields=["last_seen"])
+
+            request.session_obj = session
+
         return (session.user, None)
 
     def authenticate_header(self, request):

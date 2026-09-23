@@ -10,7 +10,8 @@ from django.contrib import messages
 from django.core.exceptions import FieldError
 from order.models import OrderModel,OrderStatusType
 from django.db import transaction
-from order.services.refund import RefundService
+from payment.services.refund import RefundService
+from payment.enums import PaymentStatusType
 from order.policies import OrderPolicy
 from django.utils.timezone import now
 
@@ -54,7 +55,7 @@ class AdminOrderListView(HasAdminAccessPermission, LoginRequiredMixin, ListView)
             # Order statistics
             "total_orders": OrderModel.objects.count(),
             "successful_orders": OrderModel.objects.filter(
-                status=OrderStatusType.success
+                status=OrderStatusType.paid
             ).count(),
             "today_orders": OrderModel.objects.filter(
                 created_date__date=today
@@ -100,7 +101,7 @@ class AdminOrderInvoiceView(HasAdminAccessPermission, View):
         order = get_object_or_404(
             OrderModel,
             pk=pk,
-            status=OrderStatusType.success
+            status=OrderStatusType.paid
         )
 
         return render(
@@ -114,16 +115,32 @@ class AdminOrderRefundView(
     LoginRequiredMixin,
     View
 ):
-    @transaction.atomic
     def post(self, request, pk):
         order = get_object_or_404(
-            OrderModel.objects.select_for_update(),
+            OrderModel,
             pk=pk,
         )
 
-        RefundService.refund_order(order=order, admin_user=request.user)
+        payment = (
+            order.payments
+            .filter(status=PaymentStatusType.SUCCESS)
+            .order_by("-updated_date", "-id")
+            .first()
+        )
+        if payment is None:
+            messages.error(request, _("No successful payment is available for refund."))
+            return redirect(
+                reverse("dashboard_admin:order-detail", kwargs={"pk": pk})
+            )
 
-        messages.success(request, _("Order successfully returned."))
+        RefundService.refund_order(
+            order_id=order.pk,
+            payment_id=payment.pk,
+            actor=request.user,
+            idempotency_key=f"admin-order-refund:{order.pk}:{payment.pk}",
+        )
+
+        messages.success(request, _("Order refund request processed."))
         return redirect(
             reverse("dashboard_admin:order-detail", kwargs={"pk": pk})
         )

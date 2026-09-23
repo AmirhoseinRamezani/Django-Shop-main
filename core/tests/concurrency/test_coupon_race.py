@@ -2,6 +2,7 @@
 
 import pytest
 
+from order.services.coupon import CouponService
 from tests.concurrency.base import (
     ConcurrentRunner,
 )

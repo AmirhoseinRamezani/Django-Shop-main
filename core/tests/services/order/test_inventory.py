@@ -1,5 +1,6 @@
 # tests/services/order/test_inventory.py
 import pytest
+from django.core.exceptions import ValidationError
 
 from order.services.inventory import InventoryService
 
@@ -384,3 +385,14 @@ class TestConsistency:
 
         assert product.stock == original
         
+
+
+def test_decrease_rejects_insufficient_stock(product):
+    product.stock = 2
+    product.save(update_fields=["stock"])
+
+    with pytest.raises(ValidationError):
+        InventoryService.decrease(product, 3)
+
+    product.refresh_from_db()
+    assert product.stock == 2

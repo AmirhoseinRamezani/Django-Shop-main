@@ -1,5 +1,6 @@
 # accounts/tests/services/test_otp_service.py
 import pytest
+from django.core.exceptions import ValidationError
 from django.utils import timezone
 from datetime import timedelta
 
@@ -78,3 +79,36 @@ def test_expired_otp_is_rejected(email):
             code=code,
             purpose=OTPPurpose.LOGIN,
         )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_otp_verification_consumes_once(email):
+    from tests.concurrency.base import ConcurrentRunner
+
+    otp = generate_or_reuse_otp(
+        email=email,
+        purpose=OTPPurpose.LOGIN,
+    )
+    code = OutboxEvent.objects.get(topic="user.otp").payload["code"]
+
+    successes = []
+    failures = []
+
+    def verify():
+        try:
+            verify_otp(
+                email=email,
+                code=code,
+                purpose=OTPPurpose.LOGIN,
+            )
+            successes.append(True)
+        except ValidationError as exc:
+            failures.append(exc)
+
+    ConcurrentRunner().run(verify, verify)
+
+    otp.refresh_from_db()
+    assert len(successes) == 1
+    assert len(failures) == 1
+    assert otp.is_consumed is True
+    assert otp.attempts == 0

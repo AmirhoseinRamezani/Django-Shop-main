@@ -1,6 +1,8 @@
 # order/services/inventory.py
 from django.db import transaction
 from django.db.models import F
+from django.core.exceptions import ValidationError
+from django.utils.translation import gettext as _
 
 from order.models import OrderModel
 
@@ -33,6 +35,7 @@ class InventoryService:
         for item in (
             order.order_items
             .select_related("product")
+            .order_by("product_id", "id")
             .select_for_update()
         ):
 
@@ -58,6 +61,7 @@ class InventoryService:
         for item in (
             order.order_items
             .select_related("product")
+            .order_by("product_id", "id")
             .select_for_update()
         ):
 
@@ -80,9 +84,19 @@ class InventoryService:
     @staticmethod
     @transaction.atomic
     def decrease(product, quantity):
+        if quantity <= 0:
+            raise ValidationError(_("Inventory quantity must be positive."))
 
-        product.__class__.objects.filter(
-            id=product.id
-        ).update(
-            stock=F("stock") - quantity
+        updated = (
+            product.__class__.objects
+            .filter(
+                id=product.id,
+                stock__gte=quantity,
+            )
+            .update(
+                stock=F("stock") - quantity,
+            )
         )
+
+        if updated != 1:
+            raise ValidationError(_("Insufficient inventory."))

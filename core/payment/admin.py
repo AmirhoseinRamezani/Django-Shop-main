@@ -148,11 +148,20 @@ class PaymentModelAdmin(admin.ModelAdmin):
     )
     list_filter = ("status", "gateway", "is_consumed", "is_refunded", "currency", "created_date")
     search_fields = ("id", "order__id", "order__user__email")
-    readonly_fields = ("version", "created_date", "updated_date")
+    readonly_fields = tuple(field.name for field in PaymentModel._meta.fields)
     raw_id_fields = ("order",)
     inlines = [PaymentAttemptInline, RefundInline]
     date_hierarchy = "created_date"
     ordering = ("-created_date",)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
     @admin.display(description=_("Amount"))
     def amount_formatted(self, obj):
@@ -185,18 +194,7 @@ class PaymentAttemptAdmin(admin.ModelAdmin):
         "gateway_transaction_id",
         "payment__id",
     )
-    readonly_fields = (
-        "payment",
-        "retry_of",
-        "attempt_number",
-        "retry_count",
-        "started_at",
-        "finished_at",
-        "latency_ms",
-        "ip_address",
-        "user_agent",
-        "pretty_meta",
-    )
+    readonly_fields = tuple(field.name for field in PaymentAttempt._meta.fields) + ("pretty_meta",)
     inlines = [GatewayLogInline]
     date_hierarchy = "started_at"
     ordering = ("-started_at",)
@@ -205,6 +203,12 @@ class PaymentAttemptAdmin(admin.ModelAdmin):
         return super().get_queryset(request).select_related("payment")
 
     def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
         return False
 
     @admin.display(description=_("Payment"))
@@ -238,23 +242,19 @@ class RefundAdmin(admin.ModelAdmin):
         "gateway_transaction_id",
         "payment__id",
     )
-    readonly_fields = (
-        "payment",
-        "amount",
-        "currency",
-        "idempotency_key",
-        "reason",
-        "reason_detail",
-        "requested_at",
-        "finished_at",
-        "latency_ms",
-        "ip_address",
-        "user_agent",
-        "pretty_meta",
-    )
+    readonly_fields = tuple(field.name for field in Refund._meta.fields) + ("pretty_meta",)
     inlines = [GatewayLogInline]
     date_hierarchy = "requested_at"
     ordering = ("-requested_at",)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
     def get_queryset(self, request):
         return super().get_queryset(request).select_related("payment")
