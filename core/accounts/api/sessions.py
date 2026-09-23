@@ -1,11 +1,9 @@
 # accounts/api/sessions.py
-from django.db import transaction
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
 
-from accounts.models.refresh_token import RefreshToken
 from accounts.models.device_session import DeviceSession
 from accounts.services.session_service import SessionService
 
@@ -36,10 +34,9 @@ class SessionListAPIView(APIView):
 class SessionRevokeAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
-    @transaction.atomic
     def delete(self, request, session_id):
         try:
-            session = DeviceSession.objects.select_for_update().get(
+            session = DeviceSession.objects.get(
                 id=session_id,
                 user=request.user,
                 is_active=True,
@@ -47,13 +44,7 @@ class SessionRevokeAPIView(APIView):
         except DeviceSession.DoesNotExist:
             return Response(status=status.HTTP_404_NOT_FOUND)
 
-        session.is_active = False
-        session.save(update_fields=["is_active"])
-
-        RefreshToken.objects.filter(
-            session=session,
-            is_revoked=False,
-        ).update(is_revoked=True)
+        SessionService.revoke_session(session)
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -61,7 +52,6 @@ class SessionRevokeAPIView(APIView):
 class LogoutOtherSessionsAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
-    @transaction.atomic
     def post(self, request):
         current_session = getattr(request, "session_obj", None)
 

@@ -6,6 +6,7 @@ import pytest
 from django.utils import timezone
 
 from payment.enums import PaymentAttemptStatus, PaymentGateway, PaymentStatusType, RefundStatus
+from order.models import OrderStatusType
 from payment.exceptions import (
     PaymentGatewayError,
     PaymentGatewayNotSupportedError,
@@ -27,6 +28,9 @@ pytestmark = pytest.mark.django_db
 
 def refundable_payment(*, amount=Decimal("1000000")):
     payment = PaymentFactory(
+        order__status=OrderStatusType.paid,
+        order__paid_date=timezone.now(),
+        order__payable_price=amount,
         amount=amount,
         status=PaymentStatusType.SUCCESS,
         is_consumed=True,

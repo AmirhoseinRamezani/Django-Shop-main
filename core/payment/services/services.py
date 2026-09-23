@@ -153,6 +153,11 @@ class PaymentService:
                 )
                 authority = ""
 
+            PaymentPolicy.validate_order_financial_snapshot(
+                payment,
+                locked_order,
+            )
+
             payment_id = payment.pk
             attempt_id = attempt.pk
             payment_amount = payment.amount

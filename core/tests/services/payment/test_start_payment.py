@@ -6,6 +6,7 @@ from payment.enums import PaymentAttemptStatus, PaymentGateway, PaymentStatusTyp
 from payment.exceptions import (
     PaymentCreationForbiddenError,
     PaymentGatewayError,
+    PaymentInvariantViolation,
 )
 from payment.models import PaymentAttempt, PaymentModel
 from payment.providers.base import GatewayPaymentResult
@@ -178,6 +179,21 @@ class TestStartPayment:
         order = OrderFactory(cancelled=True)
 
         with pytest.raises(PaymentCreationForbiddenError):
+            PaymentService.start_payment(
+                order,
+                callback_url=self.CALLBACK_URL,
+            )
+
+    @patch("payment.services.gateway_service.GatewayService.current_gateway", return_value=PaymentGateway.ZARINPAL)
+    def test_existing_payment_amount_mismatch_is_rejected_before_gateway(self, mock_current_gateway, payment_factory):
+        order = OrderFactory(payable=True)
+        payment_factory(
+            order=order,
+            amount=order.payable_price + 1,
+            status=PaymentStatusType.PENDING,
+        )
+
+        with pytest.raises(PaymentInvariantViolation, match="financial snapshot"):
             PaymentService.start_payment(
                 order,
                 callback_url=self.CALLBACK_URL,

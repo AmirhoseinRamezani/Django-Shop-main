@@ -2,8 +2,10 @@ from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
+from django.utils import timezone
 
 from payment.enums import PaymentGateway, PaymentStatusType, RefundStatus
+from order.models import OrderStatusType
 from payment.exceptions import PaymentRefundAmountInvalidError
 from payment.providers.base import GatewayRefundResult
 from payment.services.refund import RefundService
@@ -15,6 +17,9 @@ pytestmark = pytest.mark.django_db(transaction=True)
 
 def test_concurrent_refunds_never_over_refund_one_payment():
     payment = PaymentFactory(
+        order__status=OrderStatusType.paid,
+        order__paid_date=timezone.now(),
+        order__payable_price=Decimal("1000000"),
         amount=Decimal("1000000"),
         status=PaymentStatusType.SUCCESS,
         is_consumed=True,

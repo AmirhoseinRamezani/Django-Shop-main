@@ -26,8 +26,17 @@ class OrderAdmin(admin.ModelAdmin):
     )
     list_filter = ("status", "sale_type")
     search_fields = ("full_name", "phone", "email")
-    readonly_fields = ("created_date",)
+    readonly_fields = tuple(field.name for field in OrderModel._meta.fields)
     inlines = (OrderItemInline,)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
     def final_price(self, obj):
         return obj.get_price()

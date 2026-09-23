@@ -60,6 +60,7 @@ class OrderService:
             ProductModel.objects
             .select_for_update()
             .filter(id__in=product_ids)
+            .order_by("id")
             .in_bulk()
         )
         # total_price = Decimal("0")
