@@ -144,8 +144,12 @@ class OrderStateMachine:
         """
 
         if (
-            from_status == OrderStatusType.pending
-            and to_status == OrderStatusType.cancelled
+            to_status == OrderStatusType.cancelled
+            and from_status in {
+                OrderStatusType.pending,
+                OrderStatusType.failed,
+                OrderStatusType.processing,
+            }
         ):
             InventoryService.restore(order)
 

@@ -7,7 +7,8 @@ from django.utils.translation import gettext as _
 from order.models import OrderModel
 
 
-class InventoryService:
+from order.models import (
+    InventoryReservation,\n    InventoryReservationStatus,\n    OrderModel,\n)\n\n\nclass InventoryService:
     """
     Centralized inventory mutations.
 
@@ -25,17 +26,44 @@ class InventoryService:
     @staticmethod
     @transaction.atomic
     def reserve(order: OrderModel):
-
         """
-        Reserve inventory during order creation.
+        Reserve inventory for every OrderItem exactly once.
         """
+        locked_order = (
+            OrderModel.objects
+            .select_for_update()
+            .get(pk=order.pk)
+        )
 
         for item in (
-            order.order_items
-            .select_related("product")
+            locked_order.order_items
             .order_by("product_id", "id")
-            .select_for_update()
         ):
+            reservation = (
+                InventoryReservation.objects
+                .filter(order_item_id=item.id)
+                .first()
+            )
+
+            if reservation:
+                if reservation.status != InventoryReservationStatus.RESERVED:
+                    raise ValidationError(
+                        _("Inventory reservation was already released.")
+                    )
+
+                if reservation.quantity != item.quantity:
+                    raise ValidationError(
+                        _("Inventory reservation quantity mismatch.")
+                    )
+
+                continue
+
+            product = (
+                item.product.__class__.objects
+                .select_for_update()
+                .get(pk=item.product_id)
+            )
+
             if item.quantity <= 0:
                 raise ValidationError(
                     _("Inventory quantity must be positive.")
@@ -44,38 +72,68 @@ class InventoryService:
             updated = (
                 item.product.__class__.objects
                 .filter(
-                    id=item.product_id,
+                    id=product.id,
                     stock__gte=item.quantity,
                 )
                 .update(
                     stock=F("stock") - item.quantity,
                 )
             )
+
             if updated != 1:
                 raise ValidationError(
                     _("Insufficient inventory.")
                 )
 
+            InventoryReservation.objects.create(
+                order_item=item,
+                quantity=item.quantity,
+            )
+
     @staticmethod
     @transaction.atomic
     def restore(order: OrderModel):
-
         """
-        Restore stock after cancellation.
+        Release every active inventory reservation exactly once.
         """
-
-        for item in (
-            order.order_items
-            .select_related("product")
-            .order_by("product_id", "id")
+        locked_order = (
+            OrderModel.objects
             .select_for_update()
-        ):
+            .get(pk=order.pk)
+        )
 
-            item.product.__class__.objects.filter(
-                id=item.product_id,
-            ).update(
-                stock=F("stock") + item.quantity,
+        reservations = list(
+            InventoryReservation.objects
+            .select_for_update()
+            .filter(order_item__order_id=locked_order.pk)
+            .select_related("order_item")
+            .order_by("order_item__product_id", "id")
+        )
+
+        if locked_order.order_items.exists() and (
+            len(reservations) != locked_order.order_items.count()
+        ):
+            raise ValidationError(
+                _("Order inventory reservations are incomplete.")
             )
+
+        for reservation in reservations:
+            if reservation.status != InventoryReservationStatus.RESERVED:
+                continue
+
+            product = (
+                reservation.order_item.product.__class__.objects
+                .select_for_update()
+                .get(pk=reservation.order_item.product_id)
+            )
+
+            product.__class__.objects.filter(
+                id=product.id,
+            ).update(
+                stock=F("stock") + reservation.quantity,
+            )
+
+            reservation.release()
 
     @staticmethod
     @transaction.atomic

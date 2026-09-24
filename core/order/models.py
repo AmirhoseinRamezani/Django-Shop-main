@@ -624,3 +624,67 @@ class OrderItemModel(models.Model):
 
     def __str__(self):
         return f"{self.product} x {self.quantity} (Order #{self.order_id})"
+
+
+class InventoryReservationStatus(models.TextChoices):
+    RESERVED = "RESERVED", _("Reserved")
+    RELEASED = "RELEASED", _("Released")
+
+
+class InventoryReservation(models.Model):
+    order_item = models.OneToOneField(
+        OrderItemModel,
+        on_delete=models.CASCADE,
+        related_name="inventory_reservation",
+    )
+    quantity = models.PositiveIntegerField(
+        validators=[MinValueValidator(1)],
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=InventoryReservationStatus.choices,
+        default=InventoryReservationStatus.RESERVED,
+        db_index=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    released_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(quantity__gte=1),
+                name="inventory_reservation_quantity_positive",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        status=InventoryReservationStatus.RESERVED,
+                        released_at__isnull=True,
+                    )
+                    | Q(
+                        status=InventoryReservationStatus.RELEASED,
+                        released_at__isnull=False,
+                    )
+                ),
+                name="inventory_reservation_status_consistent",
+            ),
+        ]
+
+    def release(self):
+        if self.status == InventoryReservationStatus.RELEASED:
+            return False
+
+        if self.status != InventoryReservationStatus.RESERVED:
+            raise ValidationError(
+                _("Invalid inventory reservation state.")
+            )
+
+        self.status = InventoryReservationStatus.RELEASED
+        self.released_at = timezone.now()
+        self.save(
+            update_fields=[
+                "status",
+                "released_at",
+            ]
+        )
+        return True

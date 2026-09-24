@@ -151,10 +151,6 @@ class OrderService:
             # ).update(
             #     stock=F("stock") - item.quantity
             # )
-            InventoryService.decrease(
-                product,
-                item.quantity,
-            )
             order_items.append(
                 OrderItemModel(
                     order=order,
@@ -165,6 +161,8 @@ class OrderService:
             )
 
         OrderItemModel.objects.bulk_create(order_items)
+
+        InventoryService.reserve(order)
 
         return order
     
