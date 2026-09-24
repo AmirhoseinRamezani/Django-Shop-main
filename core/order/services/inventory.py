@@ -4,11 +4,14 @@ from django.db.models import F
 from django.core.exceptions import ValidationError
 from django.utils.translation import gettext as _
 
-from order.models import OrderModel
-
-
 from order.models import (
-    InventoryReservation,\n    InventoryReservationStatus,\n    OrderModel,\n)\n\n\nclass InventoryService:
+    InventoryReservation,
+    InventoryReservationStatus,
+    OrderModel,
+)
+
+
+class InventoryService:
     """
     Centralized inventory mutations.
 
