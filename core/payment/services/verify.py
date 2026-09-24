@@ -266,6 +266,24 @@ def verify_payment(
                     "Only pending Payments can be verified."
                 )
 
+            # The gateway result belongs to the exact execution cycle that
+            # was snapshotted before external I/O. Another worker may have
+            # finalized this attempt as FAILED and started a newer retry
+            # while this verification request was still in flight. In that
+            # case the late result must never resurrect the old attempt or
+            # advance the Payment past the newer execution cycle.
+            if not attempt.is_pending:
+                raise PaymentInvariantViolation(
+                    "PaymentAttempt changed state while verification was "
+                    "in progress; the late gateway result cannot be applied."
+                )
+
+            if attempt.authority_id.strip() != attempt_snapshot.authority_id:
+                raise PaymentInvariantViolation(
+                    "PaymentAttempt gateway authority changed while "
+                    "verification was in progress."
+                )
+
             _validate_gateway_result(
                 result=result,
                 payment_snapshot=payment_snapshot,
