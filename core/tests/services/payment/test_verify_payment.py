@@ -1,9 +1,11 @@
 # core/tests/services/payment/test_verify_payment.py
 
 from unittest.mock import patch
+from datetime import timedelta
 
 import pytest
 
+from django.utils import timezone
 from tests.base import BaseTestCase
 from tests.factories.payment import PaymentAttemptFactory
 
@@ -83,6 +85,11 @@ class TestVerifyPayment(BaseTestCase):
             authority_id="AUTH-OLD",
         )
 
+        # Make terminal-transition timing deterministic. The model invariant
+        # requires finished_at >= started_at; explicit past time avoids
+        # dependence on wall-clock ordering between ORM save and transition.
+        attempt.started_at = timezone.now() - timedelta(seconds=1)
+ 
         attempt.mark_failed(
             reason="Gateway payment failed",
             response_code="-1",
