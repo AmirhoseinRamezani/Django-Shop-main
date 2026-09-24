@@ -104,10 +104,7 @@ class TestRestore:
             product=product,
         )
 
-        InventoryService.decrease(
-            product,
-            item.quantity,
-        )
+        InventoryService.reserve(paid_order)
 
         product.refresh_from_db()
 
@@ -136,15 +133,7 @@ class TestRestore:
             product=second_product,
         )
 
-        InventoryService.decrease(
-            product,
-            item1.quantity,
-        )
-
-        InventoryService.decrease(
-            second_product,
-            item2.quantity,
-        )
+        InventoryService.reserve(paid_order_with_two_products)
 
         product.refresh_from_db()
         second_product.refresh_from_db()
@@ -345,32 +334,29 @@ class TestAtomicity:
 
 class TestConsistency:
 
-    def test_restore_twice(
+    def test_restore_twice_is_idempotent(
         self,
         paid_order,
         product,
     ):
-
         item = paid_order.order_items.first()
 
-        InventoryService.decrease(
-            product,
-            item.quantity,
-        )
+        InventoryService.reserve(paid_order)
+        product.refresh_from_db()
+        reserved_stock = product.stock
 
-        InventoryService.restore(
-            paid_order,
-        )
+        InventoryService.restore(paid_order)
+        product.refresh_from_db()
+        restored_stock = product.stock
 
-        stock = product.stock
-
-        InventoryService.restore(
-            paid_order,
-        )
-
+        InventoryService.restore(paid_order)
         product.refresh_from_db()
 
-        assert product.stock == stock + item.quantity
+        reservation = item.inventory_reservation
+
+        assert reserved_stock == product.stock - item.quantity
+        assert restored_stock == product.stock
+        assert reservation.status == "RELEASED"
 
     def test_increase_then_decrease(
         self,
