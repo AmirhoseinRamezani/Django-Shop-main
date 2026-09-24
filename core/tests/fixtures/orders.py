@@ -23,9 +23,9 @@ from tests.factories.order import (
 from tests.factories.shop import CouponFactory
 
 
-# ============================================================
+# ===================================
 # BASIC ORDERS
-# ============================================================
+# ===================================
 
 
 @pytest.fixture
@@ -102,9 +102,9 @@ def expired_order(
     return order
 
 
-# ============================================================
+# ===================================
 # COUPON ORDER
-# ============================================================
+# ===================================
 
 
 @pytest.fixture
@@ -143,9 +143,9 @@ def order_with_coupon(
     return order
 
 
-# ============================================================
+# ===================================
 # ORDER STATES
-# ============================================================
+# ===================================
 
 
 @pytest.fixture
@@ -285,9 +285,9 @@ def refunded_order(paid_order):
     return paid_order
 
 
-# ============================================================
+# ===================================
 # ITEMS
-# ============================================================
+# ===================================
 
 
 @pytest.fixture
@@ -340,9 +340,9 @@ def empty_order(
     )
 
 
-# ============================================================
+# ===================================
 # MULTI-PRODUCT ORDERS
-# ============================================================
+# ===================================
 
 
 @pytest.fixture
@@ -354,7 +354,8 @@ def second_product(product_factory):
     return product_factory(
         title="Second Product",
         stock=20,
-        final_price=Decimal("250000"),
+        price=Decimal("250000"),
+        discount_percent=0,
     )
 
 
@@ -362,23 +363,18 @@ def second_product(product_factory):
 def order_with_two_products(
     user,
     address,
-    product_factory,
+    product,
+    second_product,
 ):
     """
     Order containing two independent products.
+    The products are supplied by the shared ``product`` and
+    ``second_product`` fixtures so callers that need to inspect or mutate
+    those exact products operate on the same rows that belong to the order.
     """
 
-    product_1 = product_factory(
-        title="Product One",
-        stock=20,
-        final_price=Decimal("100000"),
-    )
-
-    product_2 = product_factory(
-        title="Product Two",
-        stock=20,
-        final_price=Decimal("200000"),
-    )
+    product_1 = product
+    product_2 = second_product
 
     total_price = (
         product_1.final_price
@@ -424,4 +420,17 @@ def order_with_two_products(
         price=product_2.final_price,
     )
 
+    return order
+
+@pytest.fixture
+def paid_order_with_two_products(order_with_two_products):
+    order = order_with_two_products
+    order.status = OrderStatusType.paid
+    order.paid_date = timezone.now()
+    order.save(
+        update_fields=[
+            "status",
+            "paid_date",
+        ],
+    )
     return order

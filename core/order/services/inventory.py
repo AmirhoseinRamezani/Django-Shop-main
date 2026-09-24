@@ -30,25 +30,31 @@ class InventoryService:
         Reserve inventory during order creation.
         """
 
-        products = {}
-
         for item in (
             order.order_items
             .select_related("product")
             .order_by("product_id", "id")
             .select_for_update()
         ):
+            if item.quantity <= 0:
+                raise ValidationError(
+                    _("Inventory quantity must be positive.")
+                )
 
-            product = item.product
-
-            if product.id not in products:
-                products[product.id] = product
-
-            product.__class__.objects.filter(
-                id=product.id,
-            ).update(
-                stock=F("stock") - item.quantity,
+            updated = (
+                item.product.__class__.objects
+                .filter(
+                    id=item.product_id,
+                    stock__gte=item.quantity,
+                )
+                .update(
+                    stock=F("stock") - item.quantity,
+                )
             )
+            if updated != 1:
+                raise ValidationError(
+                    _("Insufficient inventory.")
+                )
 
     @staticmethod
     @transaction.atomic
@@ -74,6 +80,8 @@ class InventoryService:
     @staticmethod
     @transaction.atomic
     def increase(product, quantity):
+        if quantity <= 0:
+            raise ValidationError(_("Inventory quantity must be positive."))
 
         product.__class__.objects.filter(
             id=product.id
