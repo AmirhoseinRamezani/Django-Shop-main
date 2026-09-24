@@ -51,9 +51,9 @@ def confirm_order_payment(
         - commit everything atomically
     """
 
-    # ============================================================
+    # ===================================
     # 1. LOCK ORDER
-    # ============================================================
+    # ===================================
 
     order = (
         OrderModel.objects
@@ -63,18 +63,18 @@ def confirm_order_payment(
         )
     )
 
-    # ============================================================
+    # ===================================
     # 2. ORDER VALIDATION
-    # ============================================================
+    # ===================================
 
     if order.is_expired():
         raise ValidationError(
             _("Order expired")
         )
 
-    # ============================================================
+    # ===================================
     # 3. FIND LATEST SUCCESSFUL PAYMENT
-    # ============================================================
+    # ===================================
 
     payment = (
         PaymentRepository
@@ -97,18 +97,33 @@ def confirm_order_payment(
         order,
     )
 
-    # ============================================================
+    # ===================================
     # 4. PAYMENT IDEMPOTENCY
-    # ============================================================
+    # ===================================
 
     if payment.is_consumed:
+        # Payment consumption and the Order transition are committed in the
+        # same canonical transaction. Therefore an already-consumed Payment
+        # is idempotently complete only when the Order is already PAID too.
+        # Any other combination is a broken cross-aggregate invariant and
+        # must not be silently repaired here.
+        if order.status == OrderStatusType.paid:
+            return order
         raise ValidationError(
-            _("Payment has already been consumed")
+            _("Consumed Payment is inconsistent with Order state")
         )
 
-    # ============================================================
+    if order.status == OrderStatusType.paid:
+        # PAID without a consumed Payment cannot be produced by the canonical
+        # workflow. Refuse to create a second paid transition rather than
+        # attempting to guess which financial state should be repaired.
+        raise ValidationError(
+            _("Paid Order has an unconsumed successful Payment")
+        )
+
+    # ===================================
     # 5. PAYMENT -> ATTEMPT
-    # ============================================================
+    # ===================================
 
     attempt = (
         PaymentAttemptRepository
@@ -139,9 +154,9 @@ def confirm_order_payment(
             _("Payment attempt is not successful")
         )
 
-    # ============================================================
+    # ===================================
     # 6. CONSUME PAYMENT
-    # ============================================================
+    # ===================================
 
     payment.consume()
 
@@ -152,9 +167,9 @@ def confirm_order_payment(
         ),
     )
 
-    # ============================================================
+    # ===================================
     # 7. TRANSITION ORDER -> PAID
-    # ============================================================
+    # ===================================
 
     OrderStateMachine.transition(
         order=order,
@@ -169,25 +184,25 @@ def confirm_order_payment(
         },
     )
 
-    # ============================================================
+    # ===================================
     # 8. CONSUME COUPON
-    # ============================================================
+    # ===================================
 
     if order.coupon_id:
         CouponService.consume(
             order.coupon,
         )
 
-    # ============================================================
+    # ===================================
     # 9. RETURN
-    # ============================================================
+    # ===================================
 
     return order
 
 
-# ================================================================
+# =======================================
 # LEGACY COMPATIBILITY ADAPTER
-# ================================================================
+# =======================================
 
 def _confirm_order_payment(
     order_id: int,

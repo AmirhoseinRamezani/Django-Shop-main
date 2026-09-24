@@ -9,6 +9,7 @@ from tests.factories.payment import PaymentAttemptFactory
 from payment.enums import PaymentAttemptStatus, PaymentGateway, PaymentStatusType
 from payment.exceptions import PaymentGatewayError, PaymentInvariantViolation
 from payment.providers.base import GatewayInquiryResult
+from order.services.confirm_payment import confirm_order_payment
 from payment.repositories.payment_attempt_repository import PaymentAttemptRepository
 from payment.services.reconciliation import PaymentReconciliationService
 
@@ -71,6 +72,27 @@ class TestPaymentReconciliationService(BaseTestCase):
         assert attempt.gateway_transaction_id == "TX-RECON"
         assert payment.order.is_paid
 
+    def test_confirm_order_payment_is_idempotent_after_payment_consumption(
+        self,
+        payment_factory,
+    ):
+        payment, attempt = self._pending_payment(payment_factory)
+        with patch(
+            "payment.services.reconciliation.GatewayService.inquire",
+            return_value=self._inquiry(payment),
+        ):
+            PaymentReconciliationService.reconcile_payment(
+                payment_id=payment.pk,
+                attempt_id=attempt.pk,
+            )
+
+        order = confirm_order_payment(order_id=payment.order_id)
+
+        assert order.pk == payment.order_id
+        payment.refresh_from_db()
+        assert payment.is_consumed is True
+        assert payment.order.status == order.status
+ 
     def test_negative_inquiry_keeps_payment_and_attempt_pending(
         self,
         payment_factory,

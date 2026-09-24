@@ -71,6 +71,22 @@ class TestReserve:
 
         assert empty_order.order_items.count() == 0
 
+    def test_reserve_rejects_insufficient_stock_without_partial_decrement(
+        self,
+        paid_order,
+        product,
+    ):
+        item = paid_order.order_items.get(product=product)
+        product.stock = item.quantity - 1
+        product.save(update_fields=["stock"])
+        stock_before = product.stock
+
+        with pytest.raises(ValidationError):
+            InventoryService.reserve(paid_order)
+
+        product.refresh_from_db()
+        assert product.stock == stock_before
+
 
 # ==========================================================
 # Restore
@@ -200,6 +216,19 @@ class TestIncrease:
         product.refresh_from_db()
 
         assert product.stock == old_stock + qty
+
+    
+    def test_rejects_non_positive_quantity(
+        self,
+        product,
+    ):
+        old_stock = product.stock
+
+        with pytest.raises(ValidationError):
+            InventoryService.increase(product, 0)
+
+        product.refresh_from_db()
+        assert product.stock == old_stock
 
 
 # ==========================================================
