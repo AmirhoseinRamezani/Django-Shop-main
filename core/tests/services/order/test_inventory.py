@@ -279,9 +279,8 @@ class TestAtomicity:
 
         item = paid_order.order_items.first()
 
-        InventoryService.decrease(
-            product,
-            item.quantity,
+        InventoryService.reserve(
+            paid_order,
         )
 
         product.refresh_from_db()
