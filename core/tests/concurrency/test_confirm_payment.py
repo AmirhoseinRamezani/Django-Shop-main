@@ -3,8 +3,8 @@ import threading
 
 import pytest
 
-from django.core.exceptions import ValidationError
-
+from order.events.order_event import OrderEventType
+from order.models import OrderStatusType
 from order.services.confirm_payment import confirm_order_payment
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -12,7 +12,7 @@ pytestmark = pytest.mark.django_db(transaction=True)
 
 class TestConcurrentConfirmPayment:
 
-    def test_only_one_confirm_succeeds(
+    def test_concurrent_confirm_is_idempotent(
         self,
         order,
         successful_payment,
@@ -40,7 +40,9 @@ class TestConcurrentConfirmPayment:
         order.refresh_from_db()
         successful_payment.refresh_from_db()
 
-        assert len(results) == 1
-        assert len(errors) == 1
+        assert len(results) == 2
+        assert errors == []
 
         assert successful_payment.is_consumed
+        assert order.status == OrderStatusType.paid
+        assert order.events.filter(type=OrderEventType.PAID).count() == 1

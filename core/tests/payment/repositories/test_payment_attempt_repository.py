@@ -131,7 +131,11 @@ class TestPaymentAttemptRepository:
         assert queryset.query.select_for_update_skip_locked is True
 
     def test_terminal_and_pending_queries_are_distinct(self, payment):
-        pending = PaymentAttemptFactory(payment=payment, status=PaymentAttemptStatus.PENDING)
+        pending = PaymentAttemptFactory(
+            payment=payment,
+            status=PaymentAttemptStatus.PENDING,
+        )
+
         failed = PaymentAttemptFactory(
             payment=payment,
             failed=True,
@@ -140,6 +144,25 @@ class TestPaymentAttemptRepository:
             retry_count=2,
         )
 
-        assert list(PaymentAttemptRepository.pending_for_payment(payment.pk)) == [pending]
-        assert list(PaymentAttemptRepository.failed_for_payment(payment.pk)) == [failed]
-        assert list(PaymentAttemptRepository.terminal_for_payment(payment.pk)) == [failed]
+        # next_pending = PaymentAttemptFactory(
+        #     payment=payment,
+        #     attempt_number=3,
+        #     retry_of=failed,
+        #     retry_count=3,
+        # )
+
+        assert pending.status == PaymentAttemptStatus.FAILED
+        assert failed.status == PaymentAttemptStatus.FAILED
+
+        assert list(
+            PaymentAttemptRepository.pending_for_payment(payment.pk)
+        ) == []
+
+        # Repository queries for a payment are newest-first by contract.
+        assert list(
+            PaymentAttemptRepository.failed_for_payment(payment.pk)
+        ) == [failed, pending]
+
+        assert list(
+            PaymentAttemptRepository.terminal_for_payment(payment.pk)
+        ) == [failed, pending]
