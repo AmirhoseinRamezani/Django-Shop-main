@@ -223,10 +223,11 @@ class RefundService:
                 refund=refund,
             )
         except PaymentGatewayNotSupportedError:
-            return cls._finalize_failure(
+            return cls._record_pending_gateway_evidence(
                 payment_id=payment_id,
                 refund_id=refund.pk,
-                reason="Gateway refund operation is not supported.",
+                response_code="UNSUPPORTED",
+                gateway_message="Gateway refund operation is not supported.",
             )
         except PaymentGatewayError as exc:
             return cls._record_pending_gateway_error(
