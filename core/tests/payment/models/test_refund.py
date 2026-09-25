@@ -1,16 +1,15 @@
 from decimal import Decimal
 
 import pytest
-from django.core.exceptions import ValidationError
-
 from payment.enums import RefundStatus
 from payment.exceptions import (
+    PaymentCurrencyMismatchError,
     PaymentGatewayIdentityConflictError,
     PaymentInvalidTransitionError,
     PaymentInvariantViolation,
+    PaymentRefundAmountInvalidError,
 )
-from payment.models import Refund
-from tests.factories.payment import PaymentFactory, RefundFactory
+from tests.factories.payment import RefundFactory
 
 
 pytestmark = pytest.mark.django_db
@@ -182,7 +181,7 @@ class TestRefundDomain:
             amount=Decimal("1100000"),
         )
 
-        with pytest.raises(Exception):
+        with pytest.raises(PaymentRefundAmountInvalidError):
             refund.validate_against_payment(
                 payment_amount=Decimal("1000000"),
                 payment_currency=refund.currency,
@@ -194,7 +193,7 @@ class TestRefundDomain:
             amount=Decimal("300000"),
         )
 
-        with pytest.raises(Exception):
+        with pytest.raises(PaymentCurrencyMismatchError):
             refund.validate_against_payment(
                 payment_amount=Decimal("1000000"),
                 payment_currency="USD",
