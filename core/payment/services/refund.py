@@ -105,7 +105,7 @@ class RefundService:
         idempotency_key: str,
         reason,
         reason_detail: str = "",
-        actor: Any = None,
+        actor: Any,
         ip_address: str | None = None,
         user_agent: str = "",
         meta: dict[str, Any] | None = None,
@@ -136,9 +136,7 @@ class RefundService:
                     "Payment ownership changed while refund was starting."
                 )
 
-            OrderPolicy.can_refund_order(locked_order)
-            if actor is not None:
-                OrderPolicy.can_refund(actor, locked_order)
+            OrderPolicy.can_refund(actor, locked_order)
 
             PaymentPolicy.validate_order_financial_snapshot(
                 payment,
@@ -496,6 +494,11 @@ class RefundService:
                 )
 
             if refund.is_success:
+                refund.mark_success(
+                    gateway_reference=gateway_reference,
+                    gateway_transaction_id=gateway_transaction_id,
+                )
+                RefundRepository.save_success(refund)
                 cls._sync_payment_refund_state(
                     payment=payment,
                 )

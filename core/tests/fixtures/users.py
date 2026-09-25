@@ -22,3 +22,8 @@ def user(db):
 def profile(db, **kwargs):
     return ProfileFactory()
     # return UserFactory()
+
+
+@pytest.fixture
+def admin_user(db):
+    return UserFactory(admin=True)

@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 from django.utils import timezone
+from django.core.exceptions import PermissionDenied
 
 from payment.enums import PaymentAttemptStatus, PaymentGateway, PaymentStatusType, RefundStatus
 from order.models import OrderStatusType
@@ -12,6 +13,7 @@ from payment.exceptions import (
     PaymentGatewayNotSupportedError,
     PaymentInvariantViolation,
     PaymentRefundAmountInvalidError,
+    PaymentGatewayIdentityConflictError,
 )
 from payment.models import Refund
 from payment.providers.base import (
@@ -63,7 +65,7 @@ def refund_result(
 
 
 class TestRefundService:
-    def test_partial_refund_is_reserved_and_succeeds(self):
+    def test_partial_refund_is_reserved_and_succeeds(self, admin_user):
         payment = refundable_payment()
 
         with patch(
@@ -75,6 +77,7 @@ class TestRefundService:
                 amount=Decimal("400000"),
                 idempotency_key="refund-partial-1",
                 reason="customer_request",
+                actor=admin_user,
             )
 
         refund.refresh_from_db()
@@ -86,7 +89,7 @@ class TestRefundService:
         assert payment.is_refunded is False
         gateway.assert_called_once()
 
-    def test_full_refund_marks_payment_fully_refunded(self):
+    def test_full_refund_marks_payment_fully_refunded(self, admin_user):
         payment = refundable_payment()
 
         with patch(
@@ -98,6 +101,7 @@ class TestRefundService:
                 amount=payment.amount,
                 idempotency_key="refund-full-1",
                 reason="customer_request",
+                actor=admin_user,
             )
 
         refund.refresh_from_db()
@@ -106,7 +110,7 @@ class TestRefundService:
         assert refund.status == RefundStatus.SUCCESS
         assert payment.is_refunded is True
 
-    def test_pending_refund_reservation_blocks_over_refund(self):
+    def test_pending_refund_reservation_blocks_over_refund(self, admin_user):
         payment = refundable_payment()
         RefundFactory(
             payment=payment,
@@ -123,12 +127,13 @@ class TestRefundService:
                     amount=Decimal("400000"),
                     idempotency_key="refund-over-reserved-1",
                     reason="customer_request",
+                actor=admin_user,
                 )
 
         gateway.assert_not_called()
         assert Refund.objects.filter(payment=payment).count() == 1
 
-    def test_same_idempotency_key_returns_existing_refund_without_second_gateway_call(self):
+    def test_same_idempotency_key_returns_existing_refund_without_second_gateway_call(self, admin_user):
         payment = refundable_payment()
 
         with patch(
@@ -140,19 +145,21 @@ class TestRefundService:
                 amount=Decimal("300000"),
                 idempotency_key="refund-idempotent-1",
                 reason="customer_request",
+                actor=admin_user,
             )
             second = RefundService.refund(
                 payment_id=payment.pk,
                 amount=Decimal("300000"),
                 idempotency_key="refund-idempotent-1",
                 reason="customer_request",
+                actor=admin_user,
             )
 
         assert first.pk == second.pk
         assert Refund.objects.filter(payment=payment).count() == 1
         gateway.assert_called_once()
 
-    def test_same_idempotency_key_with_different_amount_is_rejected(self):
+    def test_same_idempotency_key_with_different_amount_is_rejected(self, admin_user):
         payment = refundable_payment()
 
         with patch(
@@ -164,6 +171,7 @@ class TestRefundService:
                 amount=Decimal("300000"),
                 idempotency_key="refund-key-reuse-1",
                 reason="customer_request",
+                actor=admin_user,
             )
 
         with pytest.raises(PaymentRefundAmountInvalidError):
@@ -172,9 +180,10 @@ class TestRefundService:
                 amount=Decimal("200000"),
                 idempotency_key="refund-key-reuse-1",
                 reason="customer_request",
+                actor=admin_user,
             )
 
-    def test_gateway_transport_error_keeps_refund_pending(self):
+    def test_gateway_transport_error_keeps_refund_pending(self, admin_user):
         payment = refundable_payment()
 
         with patch(
@@ -189,6 +198,7 @@ class TestRefundService:
                 amount=Decimal("300000"),
                 idempotency_key="refund-unknown-1",
                 reason="customer_request",
+                actor=admin_user,
             )
 
         refund.refresh_from_db()
@@ -197,7 +207,7 @@ class TestRefundService:
         assert refund.finished_at is None
         gateway.assert_called_once()
 
-    def test_definitive_gateway_rejection_marks_refund_failed(self):
+    def test_definitive_gateway_rejection_marks_refund_failed(self, admin_user):
         payment = refundable_payment()
 
         with patch(
@@ -214,6 +224,7 @@ class TestRefundService:
                 amount=Decimal("300000"),
                 idempotency_key="refund-rejected-1",
                 reason="customer_request",
+                actor=admin_user,
             )
 
         refund.refresh_from_db()
@@ -222,7 +233,7 @@ class TestRefundService:
         assert refund.failure_reason
         assert refund.finished_at is not None
 
-    def test_gateway_success_without_identity_remains_pending(self):
+    def test_gateway_success_without_identity_remains_pending(self, admin_user):
         payment = refundable_payment()
 
         with patch(
@@ -238,6 +249,7 @@ class TestRefundService:
                 amount=Decimal("300000"),
                 idempotency_key="refund-no-identity-1",
                 reason="customer_request",
+                actor=admin_user,
             )
 
         refund.refresh_from_db()
@@ -245,7 +257,7 @@ class TestRefundService:
         assert refund.status == RefundStatus.PENDING
         assert refund.finished_at is None
 
-    def test_pending_refund_returned_by_idempotent_retry_is_not_executed_again(self):
+    def test_pending_refund_returned_by_idempotent_retry_is_not_executed_again(self, admin_user):
         payment = refundable_payment()
         pending = RefundFactory(
             payment=payment,
@@ -262,13 +274,14 @@ class TestRefundService:
                 amount=Decimal("300000"),
                 idempotency_key="refund-pending-retry-1",
                 reason="customer_request",
+                actor=admin_user,
             )
 
         assert result.pk == pending.pk
         assert result.status == RefundStatus.PENDING
         gateway.assert_not_called()
 
-    def test_stale_pending_refund_is_not_reexecuted_by_normal_retry(self):
+    def test_stale_pending_refund_is_not_reexecuted_by_normal_retry(self, admin_user):
         payment = refundable_payment()
         pending = RefundFactory(
             payment=payment,
@@ -298,6 +311,7 @@ class TestRefundService:
                 amount=Decimal("300000"),
                 idempotency_key="refund-stale-retry-1",
                 reason="customer_request",
+                actor=admin_user,
             )
 
         result.refresh_from_db()
@@ -306,7 +320,7 @@ class TestRefundService:
         assert result.status == RefundStatus.PENDING
         gateway.assert_not_called()
 
-    def test_terminal_success_is_not_modified_by_late_finalize(self):
+    def test_terminal_success_is_not_modified_by_late_finalize(self, admin_user):
         payment = refundable_payment()
 
         with patch(
@@ -318,6 +332,7 @@ class TestRefundService:
                 amount=Decimal("300000"),
                 idempotency_key="refund-terminal-1",
                 reason="customer_request",
+                actor=admin_user,
             )
 
         original_finished_at = refund.finished_at
@@ -336,7 +351,7 @@ class TestRefundService:
         assert result.status == RefundStatus.SUCCESS
         assert result.finished_at == original_finished_at
 
-    def test_refund_ownership_is_verified_during_finalization(self):
+    def test_refund_ownership_is_verified_during_finalization(self, admin_user):
         payment_a = refundable_payment()
         payment_b = refundable_payment()
 
@@ -356,7 +371,7 @@ class TestRefundService:
         refund.refresh_from_db()
         assert refund.status == RefundStatus.PENDING
 
-    def test_gateway_is_called_after_reservation_commit(self):
+    def test_gateway_is_called_after_reservation_commit(self, admin_user):
         payment = refundable_payment()
         observed = {}
 
@@ -377,12 +392,13 @@ class TestRefundService:
                 amount=Decimal("250000"),
                 idempotency_key="refund-boundary-1",
                 reason="customer_request",
+                actor=admin_user,
             )
 
         assert observed["refund_exists"] is True
         assert refund.status == RefundStatus.SUCCESS
 
-    def test_pending_refund_recovery_uses_inquiry_and_can_finalize_success(self):
+    def test_pending_refund_recovery_uses_inquiry_and_can_finalize_success(self, admin_user):
         payment = refundable_payment()
         pending = RefundFactory(
             payment=payment,
@@ -422,7 +438,7 @@ class TestRefundService:
         gateway.assert_called_once()
         refund_gateway.assert_not_called()
 
-    def test_pending_refund_recovery_keeps_pending_when_provider_reports_pending(self):
+    def test_pending_refund_recovery_keeps_pending_when_provider_reports_pending(self, admin_user):
         payment = refundable_payment()
         pending = RefundFactory(
             payment=payment,
@@ -456,7 +472,7 @@ class TestRefundService:
         assert result.response_code == "PENDING"
         gateway.assert_called_once()
 
-    def test_pending_refund_recovery_marks_definitive_failure(self):
+    def test_pending_refund_recovery_marks_definitive_failure(self, admin_user):
         payment = refundable_payment()
         pending = RefundFactory(
             payment=payment,
@@ -489,7 +505,7 @@ class TestRefundService:
         assert result.failure_reason == "Provider rejected refund"
         assert result.finished_at is not None
 
-    def test_pending_refund_recovery_does_not_retry_refund_execution(self):
+    def test_pending_refund_recovery_does_not_retry_refund_execution(self, admin_user):
         payment = refundable_payment()
         pending = RefundFactory(
             payment=payment,
@@ -523,7 +539,7 @@ class TestRefundService:
 
 
 
-    def test_pending_refund_recovery_stays_pending_without_provider_inquiry_support(self):
+    def test_pending_refund_recovery_stays_pending_without_provider_inquiry_support(self, admin_user):
         payment = refundable_payment()
         pending = RefundFactory(
             payment=payment,
@@ -548,3 +564,116 @@ class TestRefundService:
         assert result.status == RefundStatus.PENDING
         assert result.finished_at is None
         inquiry_gateway.assert_called_once()
+
+
+    def test_refund_rejects_explicit_missing_actor(self, payment):
+        with pytest.raises(PermissionDenied):
+            RefundService.refund(
+                payment_id=payment.pk,
+                amount=Decimal("100000"),
+                idempotency_key="refund-no-actor-1",
+                reason="customer_request",
+                actor=None,
+            )
+
+    def test_refund_rejects_non_staff_actor(self, payment):
+        actor = UserFactory()
+        with pytest.raises(PermissionDenied):
+            RefundService.refund(
+                payment_id=payment.pk,
+                amount=Decimal("100000"),
+                idempotency_key="refund-non-staff-1",
+                reason="customer_request",
+                actor=actor,
+            )
+
+    def test_duplicate_success_with_same_gateway_identity_is_idempotent(self, admin_user):
+        payment = refundable_payment()
+        with patch(
+            "payment.services.refund.GatewayService.refund",
+            return_value=refund_result(reference="REFUND-SAME"),
+        ):
+            refund = RefundService.refund(
+                payment_id=payment.pk,
+                amount=Decimal("300000"),
+                idempotency_key="refund-same-identity-1",
+                reason="customer_request",
+                actor=admin_user,
+            )
+
+        result = RefundService._finalize_success(
+            payment_id=payment.pk,
+            refund_id=refund.pk,
+            gateway_reference="REFUND-SAME",
+            gateway_transaction_id="",
+            response_code="100",
+            gateway_message="Duplicate success",
+            latency_ms=1,
+        )
+
+        result.refresh_from_db()
+        assert result.gateway_reference == "REFUND-SAME"
+        assert result.status == RefundStatus.SUCCESS
+
+    def test_duplicate_success_with_conflicting_gateway_identity_is_rejected(self, admin_user):
+        payment = refundable_payment()
+        with patch(
+            "payment.services.refund.GatewayService.refund",
+            return_value=refund_result(reference="REFUND-A"),
+        ):
+            refund = RefundService.refund(
+                payment_id=payment.pk,
+                amount=Decimal("300000"),
+                idempotency_key="refund-conflict-identity-1",
+                reason="customer_request",
+                actor=admin_user,
+            )
+
+        with pytest.raises(PaymentGatewayIdentityConflictError):
+            RefundService._finalize_success(
+                payment_id=payment.pk,
+                refund_id=refund.pk,
+                gateway_reference="REFUND-B",
+                gateway_transaction_id="",
+                response_code="100",
+                gateway_message="Conflicting duplicate success",
+                latency_ms=1,
+            )
+
+        refund.refresh_from_db()
+        assert refund.gateway_reference == "REFUND-A"
+        assert refund.status == RefundStatus.SUCCESS
+
+    def test_success_finalization_enriches_missing_gateway_identity(self, admin_user):
+        payment = refundable_payment()
+        pending = RefundFactory(
+            payment=payment,
+            amount=Decimal("300000"),
+            idempotency_key="refund-enrich-identity-1",
+            status=RefundStatus.PENDING,
+        )
+
+        first = RefundService._finalize_success(
+            payment_id=payment.pk,
+            refund_id=pending.pk,
+            gateway_reference="",
+            gateway_transaction_id="TX-A",
+            response_code="100",
+            gateway_message="Success",
+            latency_ms=1,
+        )
+        assert first.status == RefundStatus.SUCCESS
+
+        result = RefundService._finalize_success(
+            payment_id=payment.pk,
+            refund_id=pending.pk,
+            gateway_reference="REF-A",
+            gateway_transaction_id="TX-A",
+            response_code="100",
+            gateway_message="Duplicate success with enrichment",
+            latency_ms=1,
+        )
+
+        result.refresh_from_db()
+        assert result.gateway_reference == "REF-A"
+        assert result.gateway_transaction_id == "TX-A"
