@@ -5,8 +5,11 @@ import pytest
 from django.core.exceptions import PermissionDenied
 
 from order.models import OrderStatusType
-from payment.enums import PaymentAttemptStatus, PaymentGateway, PaymentStatusType, RefundStatus
-from payment.exceptions import PaymentInvariantViolation
+from payment.enums import (
+    PaymentAttemptStatus,
+    PaymentGateway,
+    PaymentStatusType,
+)
 from payment.models import Refund
 from payment.providers.base import GatewayCallback, GatewayVerificationResult
 from payment.services.callback import verify_callback
