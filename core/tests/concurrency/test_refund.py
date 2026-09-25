@@ -15,7 +15,7 @@ from tests.factories.payment import PaymentAttemptFactory, PaymentFactory
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
-def test_concurrent_refunds_never_over_refund_one_payment():
+def test_concurrent_refunds_never_over_refund_one_payment(admin_user):
     payment = PaymentFactory(
         order__status=OrderStatusType.paid,
         order__paid_date=timezone.now(),
@@ -41,6 +41,7 @@ def test_concurrent_refunds_never_over_refund_one_payment():
                 amount=Decimal(amount),
                 idempotency_key=idempotency_key,
                 reason="customer_request",
+                actor=admin_user,
             )
             results.append(result.pk)
         except PaymentRefundAmountInvalidError as exc:

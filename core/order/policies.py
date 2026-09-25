@@ -47,8 +47,8 @@ class OrderPolicy:
         the single order-side business eligibility rule used by financial
         refund workflows.
         """
-        if order is None or not order.is_paid:
-            raise PermissionDenied(_("Only paid orders can be refunded"))
+        if order is None or not order.can_refund():
+            raise PermissionDenied(_("Order is not refundable"))
 
         return True
 
