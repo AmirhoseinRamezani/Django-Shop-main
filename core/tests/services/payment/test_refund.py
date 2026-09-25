@@ -677,3 +677,31 @@ class TestRefundService:
         result.refresh_from_db()
         assert result.gateway_reference == "REF-A"
         assert result.gateway_transaction_id == "TX-A"
+
+
+    def test_unsupported_refund_capability_stays_pending_with_explicit_evidence(
+        self,
+        admin_user,
+    ):
+        payment = refundable_payment()
+
+        with patch(
+            "payment.services.refund.GatewayService.refund",
+            side_effect=PaymentGatewayNotSupportedError(
+                "Refund is not supported.",
+            ),
+        ) as gateway:
+            refund = RefundService.refund(
+                payment_id=payment.pk,
+                amount=Decimal("300000"),
+                idempotency_key="refund-unsupported-1",
+                reason="customer_request",
+                actor=admin_user,
+            )
+
+        refund.refresh_from_db()
+        assert refund.status == RefundStatus.PENDING
+        assert refund.finished_at is None
+        assert refund.response_code == "UNSUPPORTED"
+        assert refund.gateway_message == "Gateway refund operation is not supported."
+        gateway.assert_called_once()
