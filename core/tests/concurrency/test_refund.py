@@ -81,3 +81,65 @@ def test_concurrent_refunds_never_over_refund_one_payment(admin_user):
     assert sum(
         amount for amount, status in refunds if status == RefundStatus.SUCCESS
     ) == Decimal("600000")
+
+
+def test_concurrent_same_idempotency_key_creates_one_refund_and_one_gateway_call(admin_user):
+    payment = PaymentFactory(
+        order__status=OrderStatusType.paid,
+        order__paid_date=timezone.now(),
+        order__payable_price=Decimal("1000000"),
+        amount=Decimal("1000000"),
+        status=PaymentStatusType.SUCCESS,
+        is_consumed=True,
+        is_refunded=False,
+    )
+    PaymentAttemptFactory(
+        payment=payment,
+        attempt_number=1,
+        success=True,
+    )
+
+    results = []
+
+    def refund():
+        result = RefundService.refund(
+            payment_id=payment.pk,
+            amount=Decimal("600000"),
+            idempotency_key="refund-concurrent-same-key",
+            reason="customer_request",
+            actor=admin_user,
+        )
+        results.append(result)
+
+    with patch(
+        "payment.services.refund.GatewayService.refund",
+        side_effect=lambda **kwargs: GatewayRefundResult(
+            success=True,
+            gateway=PaymentGateway.ZARINPAL,
+            gateway_reference=f"REFUND-{kwargs['refund'].pk}",
+            gateway_transaction_id=f"TXN-{kwargs['refund'].pk}",
+            response_code="100",
+            message="Refund successful",
+        ),
+    ) as gateway:
+        runner = ConcurrentRunner()
+        runner.run(
+            refund,
+            refund,
+        )
+
+    assert len(results) == 2
+    assert results[0].pk == results[1].pk
+    gateway.assert_called_once()
+
+    payment.refresh_from_db()
+    refunds = list(
+        payment.refunds.order_by("pk").values_list(
+            "amount",
+            "status",
+        )
+    )
+
+    assert refunds == [
+        (Decimal("600000"), RefundStatus.SUCCESS),
+    ]
