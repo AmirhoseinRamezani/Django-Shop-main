@@ -141,6 +141,20 @@ class PaymentAttemptFactory(BaseFactory):
         terminal_kwargs["status"] = PaymentAttemptStatus.PENDING
         terminal_kwargs["finished_at"] = None
 
+        # A retry must not create a second PENDING attempt for the same
+        # Payment. When the test explicitly identifies the predecessor via
+        # ``retry_of``, terminalize that predecessor before inserting the new
+        # terminal attempt. This mirrors the production retry lifecycle
+        # without weakening the database invariant.
+        retry_of = kwargs.get("retry_of")
+        if retry_of is not None and retry_of.is_pending:
+            retry_of.mark_failed(reason="Previous attempt superseded by retry")
+            retry_of.save(update_fields=(
+                "status",
+                "failure_reason",
+                "finished_at",
+            ))
+        
         obj = super()._create(
             model_class,
             *args,

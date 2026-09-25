@@ -1,0 +1,13 @@
+diff --git a/tests/payment/repositories/test_payment_attempt_repository.py b/tests/payment/repositories/test_payment_attempt_repository.py
+index 1592579..7e001fc 100644
+--- a/tests/payment/repositories/test_payment_attempt_repository.py
++++ b/tests/payment/repositories/test_payment_attempt_repository.py
+@@ -141,5 +141,6 @@ class TestPaymentAttemptRepository:
+         )
+ 
+         assert list(PaymentAttemptRepository.pending_for_payment(payment.pk)) == [pending]
+-        assert list(PaymentAttemptRepository.failed_for_payment(payment.pk)) == [failed]
+-        assert list(PaymentAttemptRepository.terminal_for_payment(payment.pk)) == [failed]
++        # Repository queries for a payment are newest-first by contract.
++        assert list(PaymentAttemptRepository.failed_for_payment(payment.pk)) == [failed, pending]
++        assert list(PaymentAttemptRepository.terminal_for_payment(payment.pk)) == [failed, pending]
