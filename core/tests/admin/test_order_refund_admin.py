@@ -1,6 +1,4 @@
 from types import SimpleNamespace
-from unittest.mock import Mock
-
 import pytest
 from django.urls import reverse
 
@@ -26,7 +24,6 @@ def test_order_admin_refund_view_requires_staff(client, user, paid_order, consum
 @pytest.mark.django_db
 def test_order_admin_refund_view_confirms_and_delegates_to_service(
     client,
-    admin_user,
     paid_order,
     consumed_payment,
     mocker,
