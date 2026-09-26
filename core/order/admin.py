@@ -6,6 +6,7 @@ from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
+from django.utils.html import format_html
 
 from .models import (
     CouponModel,
@@ -72,7 +73,7 @@ class OrderAdmin(admin.ModelAdmin):
                 % (self.opts.app_label, self.opts.model_name),
                 args=[obj.pk],
             )
-            return admin.utils.format_html('<a href="{}">Refund</a>', url)
+            return format_html('<a href="{}">Refund</a>', url)
         return "-"
 
     refund_action.short_description = "Refund"
