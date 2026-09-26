@@ -72,9 +72,9 @@ def test_order_admin_refund_link_is_only_exposed_for_refundable_orders(
     admin_user,
     paid_order,
     consumed_payment,
-    returned_order,
+    pending_order,
 ):
     admin_obj = OrderAdmin(paid_order.__class__, None)
 
     assert "Refund" in str(admin_obj.refund_action(paid_order))
-    assert admin_obj.refund_action(returned_order) == "-"
+    assert admin_obj.refund_action(pending_order) == "-"
