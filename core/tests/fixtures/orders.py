@@ -14,7 +14,7 @@ from order.models import (
     OrderStatusType,
     SaleType,
 )
-
+from order.admin import OrderAdmin
 from tests.factories.order import (
     OrderFactory,
     OrderItemFactory,
@@ -101,7 +101,21 @@ def expired_order(
 
     return order
 
+# ===================================
+# ADMIN ORDER
+# ===================================
+@pytest.mark.django_db
+def test_order_admin_refund_link_is_only_exposed_for_refundable_orders(
+    admin_user,
+    paid_order,
+    consumed_payment,
+    return_requested_order,
+):
+    admin_obj = OrderAdmin(paid_order.__class__, None)
 
+    assert "Refund" in str(admin_obj.refund_action(paid_order))
+    assert admin_obj.refund_action(return_requested_order) == "-"
+    
 # ===================================
 # COUPON ORDER
 # ===================================
