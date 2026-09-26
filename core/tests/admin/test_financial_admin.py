@@ -1,3 +1,4 @@
+# core\tests\admin\test_financial_admin.py
 import pytest
 from django.contrib.admin.sites import AdminSite
 

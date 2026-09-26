@@ -22,8 +22,8 @@ from payment.providers.base import (
 )
 from payment.repositories.refund_repository import RefundRepository
 from payment.services.refund import RefundService
-from tests.factories.payment import PaymentAttemptFactory, PaymentFactory, RefundFactory
-
+from tests.factories.payment import PaymentAttemptFactory, PaymentFactory ,RefundFactory
+from tests.factories.accounts import UserFactory
 
 pytestmark = pytest.mark.django_db
 
