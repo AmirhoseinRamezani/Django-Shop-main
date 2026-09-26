@@ -1,0 +1,28 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<div id="content-main">
+    <h1>Confirm Order Refund</h1>
+
+    <p>
+        Order #{{ order.pk }} will be refunded through the Payment workflow.
+    </p>
+
+    <ul>
+        <li>Payment: #{{ payment.pk }}</li>
+        <li>Amount: {{ payment.amount }} {{ payment.currency }}</li>
+        <li>Status: {{ payment.get_status_display }}</li>
+    </ul>
+
+    <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="idempotency_key" value="{{ idempotency_key }}">
+        <div class="submit-row">
+            <input type="submit" value="Confirm refund">
+            <a href="{% url 'admin:order_ordermodel_changelist' %}" class="button cancel-link">
+                Cancel
+            </a>
+        </div>
+    </form>
+</div>
+{% endblock %}
