@@ -33,7 +33,11 @@ class CartBuilder:
         self,
         product=None,
         qty=1,
+        *,
+        quantity=None,
     ):
+        if quantity is not None:
+            qty = quantity
 
         product = product or ProductFactory()
 
@@ -50,9 +54,13 @@ class CartBuilder:
     def many(self, count=5):
 
         for _ in range(count):
-
             self.with_item()
 
+        return self
+
+    def add_many(self, products):
+        for product in products:
+            self.with_item(product)
         return self
 
     # ----------------------------

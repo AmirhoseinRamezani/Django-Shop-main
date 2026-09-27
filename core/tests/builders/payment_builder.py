@@ -126,6 +126,19 @@ class PaymentScenarioBuilder(BaseBuilder[PaymentScenario]):
     # ================================
     # PAYMENT STATES
     # ================================
+    def for_order(self, order: OrderModel) -> PaymentScenarioBuilder:
+        """Compatibility alias for with_order()."""
+        return self.with_order(order)
+
+
+    def pending(self) -> PaymentScenarioBuilder:
+        return self.pending_payment()
+
+    def success(self) -> PaymentScenarioBuilder:
+        return self.successful_payment()
+
+    def failed(self) -> PaymentScenarioBuilder:
+        return self.failed_payment()
 
     def pending_payment(self) -> PaymentScenarioBuilder:
         """
@@ -505,3 +518,6 @@ class PaymentScenarioBuilder(BaseBuilder[PaymentScenario]):
                 )
 
         return logs
+
+# Compatibility name for the canonical payment scenario builder.
+PaymentBuilder = PaymentScenarioBuilder
