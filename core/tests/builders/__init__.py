@@ -7,14 +7,17 @@ from tests.builders.base import BaseBuilder
 
 from tests.builders.order_builder import (
     OrderScenario,
+    OrderBuilder,
     OrderScenarioBuilder,
 )
 from tests.builders.payment_builder import (
     PaymentScenario,
+    PaymentBuilder,
     PaymentScenarioBuilder,
 )
 
 from tests.builders.outbox_builder import OutboxBuilder
+from tests.builders.address_builder import AddressBuilder
 from tests.builders.cart_builder import CartBuilder
 from tests.builders.checkout_builder import CheckoutBuilder
 from tests.builders.coupon_builder import CouponBuilder
@@ -29,11 +32,14 @@ __all__ = [
     "AccountScenarioBuilder",
     "BaseBuilder",
     "OrderScenario",
+    "OrderBuilder",
     "OrderScenarioBuilder",
     "PaymentScenario",
+    "PaymentBuilder",
     "PaymentScenarioBuilder",
     "ScenarioBuilder",
     
+    "AddressBuilder",
     "CartBuilder",
     "CheckoutBuilder",
     "CouponBuilder",

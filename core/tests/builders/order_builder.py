@@ -112,6 +112,10 @@ class OrderScenarioBuilder(BaseBuilder[OrderScenario]):
 
         return self
 
+    def pending(self) -> OrderScenarioBuilder:
+        self._order_trait = None
+        return self
+
     def paid(self) -> OrderScenarioBuilder:
         self._order_trait = "paid"
         return self
@@ -202,3 +206,6 @@ class OrderScenarioBuilder(BaseBuilder[OrderScenario]):
             return self._products[index]
 
         return ProductFactory.create()
+
+# Compatibility name for the canonical order scenario builder.
+OrderBuilder = OrderScenarioBuilder
