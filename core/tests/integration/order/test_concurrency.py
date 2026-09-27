@@ -8,6 +8,7 @@ from django.core.exceptions import ValidationError
 from order.services.confirm_payment import (
     confirm_order_payment,
 )
+from order.services.order import OrderService
 
 
 class ConfirmPaymentConcurrencyTests(TransactionTestCase):
@@ -198,7 +199,10 @@ class StockConcurrencyTests(TransactionTestCase):
             AddressBuilder,
         )
 
-        self.user = UserBuilder().build()
+        self.users = [
+            UserBuilder().build(),
+            UserBuilder().build(),
+        ]
 
         self.product = (
             ProductBuilder()
@@ -206,19 +210,20 @@ class StockConcurrencyTests(TransactionTestCase):
             .build()
         )
 
-        self.address = (
+        self.addresses = [
             AddressBuilder()
-            .for_user(self.user)
+            .for_user(user)
             .build()
-        )
+            for user in self.users
+        ]
 
-    def create_order(self, errors):
+    def create_order(self, user, address, barrier, errors):
 
         from tests.builders import CartBuilder
 
         cart = (
             CartBuilder()
-            .for_user(self.user)
+            .for_user(user)
             .add(
                 self.product,
                 quantity=1,
@@ -226,11 +231,13 @@ class StockConcurrencyTests(TransactionTestCase):
             .build()
         )
 
+        barrier.wait()
+
         try:
 
             OrderService.create_online_order(
-                user=self.user,
-                address=self.address,
+                user=user,
+                address=address,
                 cart=cart,
             )
 
@@ -241,15 +248,16 @@ class StockConcurrencyTests(TransactionTestCase):
     def test_stock_never_negative(self):
 
         errors = []
+        barrier = threading.Barrier(2)
 
         t1 = threading.Thread(
             target=self.create_order,
-            args=(errors,),
+            args=(self.users[0], self.addresses[0], barrier, errors),
         )
 
         t2 = threading.Thread(
             target=self.create_order,
-            args=(errors,),
+            args=(self.users[1], self.addresses[1], barrier, errors),
         )
 
         t1.start()

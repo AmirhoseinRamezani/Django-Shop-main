@@ -67,6 +67,9 @@ class OrderScenarioBuilder(BaseBuilder[OrderScenario]):
         self._user = user
         return self
 
+    # Backward-compatible alias for existing scenario callers.
+    for_user = with_user
+
     def with_coupon(
         self,
         coupon: Optional[CouponModel] = None,
