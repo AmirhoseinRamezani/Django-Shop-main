@@ -58,7 +58,6 @@ class PaymentScenarioBuilder(BaseBuilder[PaymentScenario]):
     High-level builder for payment scenarios.
 
     The builder composes:
-
         User
         Order
         Payment
@@ -306,7 +305,6 @@ class PaymentScenarioBuilder(BaseBuilder[PaymentScenario]):
     def _resolve_order(self) -> tuple[User, OrderModel]:
         """
         Resolve the order/user context.
-
         An externally supplied order is always reused.
         """
         if self._order is not None:

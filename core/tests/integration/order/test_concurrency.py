@@ -3,8 +3,7 @@ import threading
 
 from django.test import TransactionTestCase
 
-from django.core.exceptions import ValidationError
-
+from order.models import OrderStatusType
 from order.services.confirm_payment import (
     confirm_order_payment,
 )
@@ -29,13 +28,16 @@ class ConfirmPaymentConcurrencyTests(TransactionTestCase):
             .for_user(self.user)
             .pending()
             .build()
+            .order
         )
 
         self.payment = (
             PaymentBuilder()
             .for_order(self.order)
             .success()
+            .successful_attempt()
             .build()
+            .payment
         )
 
     def worker(self, errors):
@@ -50,33 +52,35 @@ class ConfirmPaymentConcurrencyTests(TransactionTestCase):
 
         errors = []
 
-        t1 = threading.Thread(
-            target=self.worker,
-            args=(errors,),
-        )
-
-        t2 = threading.Thread(
-            target=self.worker,
-            args=(errors,),
-        )
-
-        t1.start()
-        t2.start()
-
-        t1.join()
-        t2.join()
-
-        self.payment.refresh_from_db()
-
-        self.assertTrue(self.payment.is_consumed)
-
-        self.assertEqual(len(errors), 1)
-
-        self.assertIsInstance(
-            errors[0],
-            ValidationError,
-        )
+        threads = [
+            threading.Thread(
+                target=self.worker,
+                args=(errors,),
+                )
+                for _ in range(2)
+        ]
         
+        for thread in threads:
+            thread.start()
+            
+        for thread in threads:
+            thread.join()
+        
+        self.payment.refresh_from_db()
+        self.order.refresh_from_db()
+        
+        self.assertEqual(
+            errors,
+            [],
+        )
+        self.assertTrue(
+            self.payment.is_consumed,
+            )
+        self.assertEqual(
+            self.order.status,
+            OrderStatusType.paid,
+            )
+    
 class CouponConsumeConcurrencyTests(TransactionTestCase):
 
     reset_sequences = True
@@ -100,11 +104,13 @@ class CouponConsumeConcurrencyTests(TransactionTestCase):
             .with_coupon(self.coupon)
             .pending()
             .build()
+            .order
         )
 
         PaymentBuilder()\
             .for_order(self.order)\
             .success()\
+            .successful_attempt()\
             .build()
 
     def worker(self):
@@ -116,21 +122,22 @@ class CouponConsumeConcurrencyTests(TransactionTestCase):
 
     def test_coupon_used_once(self):
 
-        t1 = threading.Thread(target=self.worker)
-        t2 = threading.Thread(target=self.worker)
-
-        t1.start()
-        t2.start()
-
-        t1.join()
-        t2.join()
-
+        threads = [
+            threading.Thread(
+                target=self.worker,
+            )
+            for _ in range(2)
+        ]
+        
+        for thread in threads:
+            thread.start()
+            
+        for thread in threads:
+            thread.join()
+        
         self.coupon.refresh_from_db()
-
-        self.assertEqual(
-            self.coupon.used_count,
-            1,
-        )
+        
+        self.assertEqual( self.coupon.used_count ,1 )
         
         
 class OrderStatusConcurrencyTests(TransactionTestCase):
@@ -152,11 +159,13 @@ class OrderStatusConcurrencyTests(TransactionTestCase):
             .for_user(user)
             .pending()
             .build()
+            .order
         )
 
         PaymentBuilder()\
             .for_order(self.order)\
             .success()\
+            .successful_attempt()\
             .build()
 
     def worker(self):
@@ -173,17 +182,17 @@ class OrderStatusConcurrencyTests(TransactionTestCase):
             for _ in range(5)
         ]
 
-        for t in threads:
-            t.start()
+        for thread in threads:
+            thread.start()
 
-        for t in threads:
-            t.join()
+        for thread in threads:
+            thread.join()
 
         self.order.refresh_from_db()
 
         self.assertEqual(
             self.order.status,
-            self.order.status.paid,
+            OrderStatusType.paid,
         )
         
 class StockConcurrencyTests(TransactionTestCase):
@@ -250,30 +259,33 @@ class StockConcurrencyTests(TransactionTestCase):
         errors = []
         barrier = threading.Barrier(2)
 
-        t1 = threading.Thread(
-            target=self.create_order,
-            args=(self.users[0], self.addresses[0], barrier, errors),
-        )
-
-        t2 = threading.Thread(
-            target=self.create_order,
-            args=(self.users[1], self.addresses[1], barrier, errors),
-        )
-
-        t1.start()
-        t2.start()
-
-        t1.join()
-        t2.join()
-
+        threads = [
+            threading.Thread(
+                target=self.create_order,
+                args=(
+                    self.users[index],
+                    self.addresses[index],
+                    barrier,
+                    errors,
+                ),
+            )
+            for index in range(2)
+        ]
+        
+        for thread in threads:
+            thread.start()
+        
+        for thread in threads:
+            thread.join()
+        
         self.product.refresh_from_db()
-
-        self.assertEqual(
+        self.assertEqual( 
             self.product.stock,
             0,
         )
-
         self.assertEqual(
             len(errors),
             1,
         )
+
+        
