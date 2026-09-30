@@ -3,6 +3,7 @@ import pytest
 
 from order.models import OrderStatusType
 from order.services.state_machine import OrderStateMachine
+from order.services.inventory import InventoryService
 
 from tests.assertions import (
     refresh,
@@ -21,14 +22,13 @@ class TestCancelFlow:
     ):
         initial_stock = product.stock
 
-        order = (
+        scenario = (
             order_builder
             .with_item(product, quantity=4)
             .build()
         )
-
-        product.stock -= 4
-        product.save(update_fields=["stock"])
+        order = scenario.order
+        InventoryService.reserve(order)
 
         OrderStateMachine.transition(
             order=order,

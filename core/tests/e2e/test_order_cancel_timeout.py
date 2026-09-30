@@ -5,6 +5,7 @@ from order.models import OrderStatusType
 from order.services.state_machine import (
     OrderStateMachine,
 )
+from order.services.inventory import InventoryService
 
 
 pytestmark = pytest.mark.django_db
@@ -17,11 +18,13 @@ class TestTimeout:
         order_builder,
         product,
     ):
-        order = (
+        scenario = (
             order_builder
-            .with_item(product, 2)
+            .with_item(product, quantity=2)
             .build()
         )
+        order = scenario.order
+        InventoryService.reserve(order)
 
         OrderStateMachine.transition(
             order=order,

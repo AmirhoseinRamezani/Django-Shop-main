@@ -41,8 +41,12 @@ class TestGenerateOTP:
 
         assert otp1.id == otp2.id
 
-    def test_different_purpose(self, email):
+    def test_different_purpose(self, email, mocker):
 
+        mocker.patch(
+            "accounts.services.otp_service._rate_limit_check",
+        )
+        
         otp1 = generate_or_reuse_otp(
             email=email,
             purpose=OTPPurpose.LOGIN,
@@ -73,14 +77,18 @@ class TestVerify:
                 purpose=OTPPurpose.LOGIN,
             )
 
-    def test_expired(self, freezer, email):
+    def test_expired(self, email):
 
         otp = generate_or_reuse_otp(
             email=email,
             purpose=OTPPurpose.LOGIN,
         )
 
-        freezer.tick(121)
+        from django.utils import timezone
+        from datetime import timedelta
+
+        otp.expire_at = timezone.now() - timedelta(seconds=1)
+        otp.save(update_fields=["expire_at"])
 
         with pytest.raises(ValidationError):
 

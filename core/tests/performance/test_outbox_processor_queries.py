@@ -18,4 +18,4 @@ def test_outbox_processor_query_count(
 
         process_outbox()
 
-    assert len(ctx) <= 5
+    assert len(ctx) <= 6

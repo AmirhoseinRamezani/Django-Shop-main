@@ -448,3 +448,12 @@ def paid_order_with_two_products(order_with_two_products):
         ],
     )
     return order
+
+@pytest.fixture
+def order_factory():
+    return OrderFactory
+
+
+@pytest.fixture
+def order_item_factory():
+    return OrderItemFactory

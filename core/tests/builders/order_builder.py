@@ -48,6 +48,7 @@ class OrderScenarioBuilder(BaseBuilder[OrderScenario]):
         "_coupon",
         "_with_coupon",
         "_item_count",
+        "_item_quantity",
         "_products",
         "_order_trait",
     )
@@ -59,6 +60,7 @@ class OrderScenarioBuilder(BaseBuilder[OrderScenario]):
         self._coupon: Optional[CouponModel] = None
         self._with_coupon = False
         self._item_count = 0
+        self._item_quantity = 1
         self._products: list[ProductModel] = []
         self._order_trait: Optional[str] = None
 
@@ -85,6 +87,20 @@ class OrderScenarioBuilder(BaseBuilder[OrderScenario]):
         if coupon is not None:
             self._coupon = coupon
 
+        return self
+
+    def with_item(
+        self,
+        product: Optional[ProductModel] = None,
+        quantity: int = 1,
+    ) -> OrderScenarioBuilder:
+        """Backward-compatible single-item scenario helper."""
+        if quantity < 1:
+            raise ValueError("quantity must be greater than zero")
+
+        self._item_count = 1
+        self._item_quantity = quantity
+        self._products = [product] if product is not None else []
         return self
 
     def with_items(
@@ -198,6 +214,7 @@ class OrderScenarioBuilder(BaseBuilder[OrderScenario]):
             item = OrderItemFactory.create(
                 order=order,
                 product=product,
+                quantity=self._item_quantity,
             )
 
             items.append(item)

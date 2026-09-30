@@ -504,7 +504,7 @@ class OrderModel(models.Model):
         Prevent duplicate gateway redirects
         """
         return self.payments.filter(
-            status = PaymentStatusType.pending  # OrderStatusType.pending
+            status = PaymentStatusType.PENDING
         ).exists()
 
     def mark_failed(self):

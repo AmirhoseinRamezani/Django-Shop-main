@@ -4,6 +4,7 @@ import pytest
 from django.core.management import call_command
 
 from tests.base import BaseTestCase
+from order.services.inventory import InventoryService
 
 
 pytestmark = [
@@ -34,8 +35,7 @@ class TestExpirePendingOrders(BaseTestCase):
             quantity=2,
         )
 
-        product.stock = 3
-        product.save()
+        InventoryService.reserve(order)
 
         call_command(
             "expire_pending_orders"

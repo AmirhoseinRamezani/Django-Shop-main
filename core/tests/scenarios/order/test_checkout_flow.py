@@ -9,6 +9,7 @@ from order.models import (
 )
 
 from payment.enums import PaymentStatusType
+from tests.factories.payment import PaymentAttemptFactory
 
 pytestmark = pytest.mark.django_db
 
@@ -50,7 +51,11 @@ class TestCheckoutFlow:
 
         payment = payment_factory(
             order=order,
-            status=PaymentStatusType.success,
+            status=PaymentStatusType.SUCCESS,
+        )
+        PaymentAttemptFactory(
+            payment=payment,
+            success=True,
         )
 
         confirm_order_payment(

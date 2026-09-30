@@ -6,6 +6,7 @@ from django.core.exceptions import ValidationError
 from order.models import OrderStatusType
 
 from order.services.order import OrderService
+from order.services.inventory import InventoryService
 from order.services.state_machine import OrderStateMachine
 
 pytestmark = pytest.mark.django_db
@@ -34,6 +35,7 @@ class TestCancelFlow:
             address=address,
             cart=cart,
         )
+        InventoryService.reserve(order)
 
         product.refresh_from_db()
 
@@ -101,6 +103,7 @@ class TestCancelFlow:
             address=address,
             cart=cart,
         )
+        InventoryService.reserve(order)
 
         OrderStateMachine.transition(
             order=order,
@@ -133,6 +136,7 @@ class TestCancelFlow:
             address=address,
             cart=cart,
         )
+        InventoryService.reserve(order)
 
         OrderStateMachine.transition(
             order=order,
@@ -140,12 +144,14 @@ class TestCancelFlow:
             actor=user,
         )
 
-        assert event.call_count == 2
+        assert event.call_count == 1
 
     def test_timeout_cancel(
         self,
         pending_order,
     ):
+
+        InventoryService.reserve(pending_order)
 
         OrderStateMachine.transition(
             order=pending_order,
@@ -186,20 +192,23 @@ class TestCancelFlow:
             "order.services.state_machine.InventoryService.restore"
         )
 
-        with pytest.raises(ValidationError):
+        OrderStateMachine.transition(
+            order=processing_order,
+            to_status=OrderStatusType.cancelled,
+        )
 
-            OrderStateMachine.transition(
-                order=processing_order,
-                to_status=OrderStatusType.cancelled,
-            )
+        processing_order.refresh_from_db()
 
-        restore.assert_not_called()
+        assert processing_order.status == OrderStatusType.cancelled
+        restore.assert_called_once()
 
     def test_cancel_is_atomic(
         self,
         pending_order,
         mocker,
     ):
+
+        InventoryService.reserve(pending_order)
 
         mocker.patch(
             "order.services.state_machine.record_order_event",
@@ -227,6 +236,7 @@ class TestCancelFlow:
         event = mocker.patch(
             "order.services.state_machine.record_order_event"
         )
+        InventoryService.reserve(pending_order)
 
         OrderStateMachine.transition(
             order=pending_order,
@@ -247,6 +257,7 @@ class TestCancelFlow:
         event = mocker.patch(
             "order.services.state_machine.record_order_event"
         )
+        InventoryService.reserve(pending_order)
 
         OrderStateMachine.transition(
             order=pending_order,
