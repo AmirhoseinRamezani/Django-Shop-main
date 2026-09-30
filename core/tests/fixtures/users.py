@@ -27,3 +27,13 @@ def profile(db, **kwargs):
 @pytest.fixture
 def admin_user(db):
     return UserFactory(admin=True)
+
+
+@pytest.fixture
+def device_session(db, user):
+    return DeviceSessionFactory(user=user)
+
+
+@pytest.fixture
+def email(user):
+    return user.email

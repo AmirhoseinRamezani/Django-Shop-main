@@ -1185,13 +1185,17 @@ class PaymentAttemptRepository(
                 )
             )
 
-        # Validate the complete in-memory aggregate before persistence.
-
-        # Uniqueness is intentionally excluded from preflight validation because
-        # concurrent uniqueness is authoritative at the database layer.
-        attempt.full_clean(
-            validate_unique=False,
-        )
+        # Validate domain invariants without running ORM-backed field/constraint
+        # validation on the update hot path.
+        #
+        # ``full_clean()`` is intentionally used by ``create()`` before INSERT,
+        # but on an existing attempt it also evaluates database-backed
+        # constraints and foreign-key validation, producing a large number of
+        # extra SELECTs for a single state transition. PostgreSQL remains the
+        # final authority for those structural constraints; this path only needs
+        # the model's deterministic in-memory invariants before UPDATE.
+        attempt.clean()
+        
         attempt.save(
             update_fields=fields,
         )

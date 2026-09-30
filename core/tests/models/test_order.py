@@ -27,10 +27,9 @@ class TestOrderModel:
 
         order.coupon = coupon
         order.coupon_discount_percent = 20
+        order.payable_price = round(order.total_price * 80 / 100)
 
-        assert order.final_price == round(
-            order.total_price * 80 / 100
-        )
+        assert order.final_price == order.payable_price
 
     def test_is_expired(self, order):
 

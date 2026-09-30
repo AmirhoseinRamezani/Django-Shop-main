@@ -1,10 +1,9 @@
 # tests/integration/test_order_cancel_flow.py
 import pytest
 
-from django.db.models import F
-
 from order.models import OrderStatusType
 from order.services.state_machine import OrderStateMachine
+from order.services.inventory import InventoryService
 
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -18,10 +17,10 @@ def test_cancel_restores_stock(
 
     before = product.stock
 
-    product.stock = F("stock") - order_item.quantity
-    product.save(update_fields=["stock"])
+    InventoryService.reserve(order)
 
     product.refresh_from_db()
+    assert product.stock == before - order_item.quantity
 
     OrderStateMachine.transition(
         order=order,

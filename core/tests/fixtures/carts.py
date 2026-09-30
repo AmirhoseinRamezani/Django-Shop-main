@@ -12,8 +12,17 @@ def cart(db, user):
 
 
 @pytest.fixture
+def cart_factory():
+    return CartFactory
+
+
+@pytest.fixture
 def cart_item(db, cart):
     return CartItemFactory(cart=cart)
+
+@pytest.fixture
+def cart_item_factory():
+    return CartItemFactory
 
 @pytest.fixture
 def cart_with_two_items(

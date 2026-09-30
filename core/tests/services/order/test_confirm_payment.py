@@ -254,7 +254,7 @@ class TestFailures:
     ):
         with pytest.raises(
             ValidationError,
-            match="Payment has already been consumed",
+            match="Consumed Payment is inconsistent with Order state",
         ):
             confirm_order_payment(
                 order.id,
@@ -397,22 +397,16 @@ class TestAtomic:
 
 class TestIdempotency:
 
-    def test_second_call_fails(
+    def test_second_call_is_idempotent(
         self,
         order,
         success_payment,
     ):
-        confirm_order_payment(
-            order.id,
-        )
+        first = confirm_order_payment(order.id)
+        second = confirm_order_payment(order.id)
 
-        with pytest.raises(
-            ValidationError,
-            match="Payment has already been consumed",
-        ):
-            confirm_order_payment(
-                order.id,
-            )
+        assert first.pk == second.pk
+        assert second.status == OrderStatusType.paid
 
     def test_payment_only_consumed_once(
         self,

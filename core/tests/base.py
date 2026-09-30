@@ -7,6 +7,7 @@ from tests.assertions import (
     refresh,
     assert_order_created,
     assert_order_paid,
+    assert_order_cancelled,
     assert_payment_success,
     assert_payment_pending,
     assert_processed,
@@ -52,6 +53,10 @@ class BaseTestCase:
 
     assert_processed = staticmethod(
         assert_processed
+    )
+
+    assert_order_cancelled = staticmethod(
+        assert_order_cancelled
     )
 
     def gateway(self, mocker):

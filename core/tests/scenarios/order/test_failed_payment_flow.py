@@ -34,7 +34,7 @@ class TestFailedPaymentFlow:
 
         payment_factory(
             order=order,
-            status=PaymentStatusType.failed,
+            status=PaymentStatusType.FAILED,
         )
 
         with pytest.raises(Exception):

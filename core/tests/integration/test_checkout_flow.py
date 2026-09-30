@@ -19,6 +19,10 @@ pytestmark = pytest.mark.django_db
 
 def _mock_gateway(mocker, authority="AUTH-123"):
     mocker.patch(
+        "payment.services.services.GatewayService.current_gateway",
+        return_value=PaymentGateway.ZARINPAL,
+    )
+    mocker.patch(
         "payment.services.services.GatewayService.initiate_payment",
         return_value=GatewayPaymentResult(
             success=True,
@@ -72,7 +76,7 @@ class TestCheckoutFlow:
             cart=cart,
         )
 
-        url = PaymentService.start_payment(order)
+        url = PaymentService.start_payment(order, callback_url="https://shop.test/payment/verify/")
         payment = order.payments.get()
         attempt = payment.attempts.get()
         _mock_verification(mocker, payment)
@@ -115,7 +119,7 @@ class TestCheckoutFlow:
             coupon=coupon,
         )
 
-        PaymentService.start_payment(order)
+        PaymentService.start_payment(order, callback_url="https://shop.test/payment/verify/")
         payment = order.payments.get()
         attempt = payment.attempts.get()
         _mock_verification(mocker, payment, reference="REF-COUPON")
@@ -153,7 +157,7 @@ class TestCheckoutFlow:
             cart=cart,
         )
 
-        PaymentService.start_payment(order)
+        PaymentService.start_payment(order, callback_url="https://shop.test/payment/verify/")
         payment = order.payments.get()
         attempt = payment.attempts.get()
         _mock_verification(mocker, payment, reference="REF-TWICE")
@@ -165,7 +169,7 @@ class TestCheckoutFlow:
         )
 
         payment.refresh_from_db()
-        assert payment.status == PaymentStatusType.success
+        assert payment.status == PaymentStatusType.SUCCESS
 
         second = verify_payment(
             payment_id=payment.pk,
@@ -202,7 +206,7 @@ class TestCheckoutFlow:
         product.refresh_from_db()
         assert product.stock == initial_stock - 3
 
-        PaymentService.start_payment(order)
+        PaymentService.start_payment(order, callback_url="https://shop.test/payment/verify/")
         payment = order.payments.get()
         attempt = payment.attempts.get()
         _mock_verification(mocker, payment, reference="REF-STOCK")

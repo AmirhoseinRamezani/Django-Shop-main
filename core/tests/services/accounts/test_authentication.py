@@ -82,8 +82,7 @@ class TestAuthentication:
         device_session,
     ):
 
-        device_session.is_active = False
-        device_session.save()
+        device_session.revoke()
 
         token = JWTService.create_access_token(
             user.id,

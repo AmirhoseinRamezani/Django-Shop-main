@@ -33,7 +33,9 @@ class TestCreateOnlineOrder:
 
         assert order.user == user
         assert order.order_items.count() == 1
-        assert order.status == order.status.pending
+        from order.models import OrderStatusType
+
+        assert order.status == OrderStatusType.pending
 
     def test_snapshot_created(
         self,
@@ -395,8 +397,8 @@ class TestInventory:
             cart=cart,
         )
 
-        product.final_price += 1000
-        product.save()
+        product.price += 1000
+        product.save(update_fields=["price"])
 
         item = order.order_items.first()
 

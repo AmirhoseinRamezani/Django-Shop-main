@@ -19,7 +19,7 @@ class TestRouter:
         second = Mock()
 
         monkeypatch.setitem(
-            ROUTES,
+            __import__("events.dispatchers.router", fromlist=["ROUTES"]).ROUTES,
             "topic.test",
             (
                 first,

@@ -26,5 +26,10 @@ def coupon(db):
 
 
 @pytest.fixture
+def coupon_factory():
+    return CouponFactory
+
+
+@pytest.fixture
 def expired_coupon(db):
     return CouponFactory(expired=True)
