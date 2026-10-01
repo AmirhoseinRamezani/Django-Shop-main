@@ -23,8 +23,9 @@ def test_coupon_consumed_after_payment(
     order.save(update_fields=["coupon"])
 
     handle_successful_payment(
-        authority=successful_payment.authority_id,
-        ref_id="123",
+        payment_id=successful_payment.pk,
+        attempt_id=successful_payment.attempts.get().pk,
+        ref_id="REF-SUCCESSFUL",
         response={},
         session=DummySession(),
     )

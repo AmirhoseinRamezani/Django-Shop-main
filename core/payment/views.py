@@ -1,97 +1,141 @@
-# payments/views.py
+# payment/views.py
 from django.views import View
-from django.shortcuts import redirect, get_object_or_404
-from django.urls import reverse_lazy
-from django.db import transaction
-from django.core.exceptions import ValidationError
+from django.shortcuts import (
+    get_object_or_404,
+    redirect,
+)
+from django.urls import reverse, reverse_lazy
+
 from django.contrib.auth.mixins import LoginRequiredMixin
 
-from .models import PaymentModel, PaymentStatusType
-from .zarinpal_client import ZarinPalSandbox
-from order.models import OrderModel, OrderStatusType
-from cart.cart import CartSession
-from payment.services.payment_flow import handle_successful_payment
+from payment.exceptions import (
+    PaymentCallbackError,
+    PaymentGatewayError,
+    PaymentCallbackIdentityMismatchError,
+)
+from payment.services.callback import resolve_callback
+from payment.services.gateway_service import GatewayService
+
+from payment.services.payment_flow import (
+    handle_successful_payment,
+)
+
+from payment.services.retry import (
+    RetryPaymentService,
+)
+
+from order.models import (
+    OrderModel,
+)
 
 
 class PaymentVerifyView(View):
     """
-    Single source of truth for payment verification.
-    Responsible for:
-    - Verifying payment with gateway
-    - Updating payment & order status
-    - Consuming coupon (if exists)
+    Gateway callback.
+
+    Responsibilities
+
+    - verify gateway callback
+    - finalize payment
+    - clear session cart
+
+    Business logic lives inside services.
     """
 
-    @transaction.atomic
-    def get(self, request, *args, **kwargs):
+    def get(
+        self,
+        request,
+        *args,
+        **kwargs,
+    ):
+        payload = request.GET.dict()
         authority = request.GET.get("Authority")
 
-        # Invalid callback
         if not authority:
-            return redirect(reverse_lazy("order:failed"))
+            return redirect(
+                reverse_lazy("order:failed")
+            )
 
-        # Lock payment row
-        payment = get_object_or_404(
-            PaymentModel.objects.select_for_update(),
-            authority_id=authority
-        )
-        zarinpal = ZarinPalSandbox()
-        response = zarinpal. verify_payment(
-            int(payment.amount),
-            payment.authority_id
-        )
-        
-        # Save raw gateway response
-        # payment.response_json = response
-        # payment.response_code = response.get("Status")
-
-        status_code = response.get("Status")
-
-        if status_code in (100, 101):
-            handle_successful_payment (
+        try:
+            resolution = resolve_callback(
                 authority=authority,
-                ref_id=response.get("RefID"),
-                response=response,
+            )
+
+            callback = GatewayService.parse_callback(
+                payload=payload,
+                gateway=resolution.gateway,
+            )
+
+            callback_authority = str(
+                callback.authority or ""
+            ).strip()
+
+            if callback_authority != resolution.authority:
+                raise PaymentCallbackIdentityMismatchError(
+                    "Parsed gateway callback authority does not match "
+                    "the resolved PaymentAttempt."
+                )
+
+            handle_successful_payment(
+                payment_id=resolution.payment_id,
+                attempt_id=resolution.attempt_id,
+                ref_id=request.GET.get("RefID"),
+                response=payload,
                 session=request.session,
             )
-            return redirect(reverse_lazy("order:completed"))
 
-        payment.mark_failed(response=response)
-        return redirect(reverse_lazy("order:failed"))
-            
-class RetryPaymentView(LoginRequiredMixin, View):
+        except PaymentCallbackError:
+            return redirect(
+                reverse_lazy("order:failed")
+            )
 
-    @transaction.atomic
-    def post(self, request, order_id):
-        order = get_object_or_404(
-            OrderModel.objects.select_for_update(),
-            id=order_id,
-            user=request.user
-        )
+        except PaymentGatewayError as exc:
+            if exc.retryable:
+                raise
 
-        if not order.can_retry_payment():
-            raise ValidationError("این سفارش قابل پرداخت مجدد نیست")
-
-        if order.payments.filter(
-            status=PaymentStatusType.pending
-        ).exists():
-            raise ValidationError("پرداختی در حال انجام است")
-
-        # expire old payments
-        order.payments.filter(
-            status=PaymentStatusType.pending
-        ).update(status=PaymentStatusType.failed)
-
-        zarinpal = ZarinPalSandbox()
-        response = zarinpal.payment_request(order.get_payable_price())
-
-        payment = PaymentModel.objects.create(
-            order=order,
-            authority_id=response["Authority"],
-            amount=order.get_payable_price(),
-            status=PaymentStatusType.pending
-        )
+            return redirect(
+                reverse_lazy("order:failed")
+            )
 
         return redirect(
-            zarinpal.generate_payment_url(payment.authority_id)
+            reverse_lazy("order:completed")
         )
+
+
+class RetryPaymentView(
+    LoginRequiredMixin,
+    View,
+):
+    """
+    Retry the existing Payment through a new PaymentAttempt.
+
+    The view performs authentication/ownership and constructs the callback
+    URL. Transaction boundaries and retry orchestration belong to the service.
+    """
+
+    def post(
+        self,
+        request,
+        order_id,
+        *args,
+        **kwargs,
+    ):
+        order = get_object_or_404(
+            OrderModel,
+            pk=order_id,
+            user=request.user,
+        )
+
+        callback_url = request.build_absolute_uri(
+            reverse("payment:verify"),
+        )
+
+        payment_url = RetryPaymentService.retry(
+            order=order,
+            callback_url=callback_url,
+            ip_address=request.META.get("REMOTE_ADDR"),
+            user_agent=request.META.get("HTTP_USER_AGENT", ""),
+            idempotency_key=request.headers.get("Idempotency-Key"),
+        )
+
+        return redirect(payment_url)

@@ -1,18 +1,35 @@
+# tests/fixtures/coupons.py
 import pytest
 
 from order.models import CouponModel
 
 
 @pytest.fixture
-def coupon():
+def used_coupon(coupon):
 
-    return CouponModel.objects.create(
-
-        code="OFF20",
-
-        discount_percent=20,
-
-        max_limit_usage=5,
-
-        is_active=True,
+    coupon.used_count = coupon.max_limit_usage
+    coupon.save(
+        update_fields=[
+            "used_count",
+        ]
     )
+
+    return coupon
+    
+from tests.factories.shop import (
+    CouponFactory,
+)
+
+@pytest.fixture
+def coupon(db):
+    return CouponFactory()
+
+
+@pytest.fixture
+def coupon_factory():
+    return CouponFactory
+
+
+@pytest.fixture
+def expired_coupon(db):
+    return CouponFactory(expired=True)

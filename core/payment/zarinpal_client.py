@@ -1,3 +1,4 @@
+# payment/zarinpal_client.py
 import requests
 from django.conf import settings
 
@@ -41,7 +42,7 @@ class ZarinPalSandbox:
         }
         return requests.post(self.PAYMENT_REQUEST_URL, json=payload).json()
 
-    def payment_verify(self, amount, authority):
+    def verify_payment(self, amount, authority):
         payload = {
             "MerchantID": self.merchant_id,
             "Amount": amount,

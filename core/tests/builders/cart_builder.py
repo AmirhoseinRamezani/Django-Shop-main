@@ -1,53 +1,74 @@
-# tests/builders/cart.py
-from tests.builders.base import Builder
+# tests/builders/cart_builder.py
 
-from tests.factories.cart import (
-    CartFactory,
-    CartItemFactory,
-)
+from cart.models import CartModel, CartItemModel
 
+from tests.factories.accounts import UserFactory
+from tests.factories.shop import ProductFactory
 
-class CartBuilder(Builder):
+class CartBuilder:
 
     def __init__(self):
 
-        super().__init__()
+        self.user = UserFactory()
 
-        self.items = []
+        self.cart = CartModel.objects.create(
+            user=self.user
+        )
+
+    # ----------------------------
 
     def for_user(self, user):
 
-        self.kwargs["user"] = user
+        self.user = user
+
+        self.cart.user = user
+
+        self.cart.save(update_fields=["user"])
 
         return self
+
+    # ----------------------------
 
     def with_item(
         self,
-        product,
-        quantity=1,
+        product=None,
+        qty=1,
+        *,
+        quantity=None,
     ):
+        if quantity is not None:
+            qty = quantity
 
-        self.items.append(
-            (
-                product,
-                quantity,
-            )
+        product = product or ProductFactory()
+
+        CartItemModel.objects.create(
+            cart=self.cart,
+            product=product,
+            quantity=qty,
         )
 
         return self
 
+    # ----------------------------
+
+    def many(self, count=5):
+
+        for _ in range(count):
+            self.with_item()
+
+        return self
+
+    def add_many(self, products):
+        for product in products:
+            self.with_item(product)
+        return self
+
+    # ----------------------------
+
     def build(self):
 
-        cart = CartFactory(
-            **self.kwargs
-        )
+        return self.cart
 
-        for product, quantity in self.items:
-
-            CartItemFactory(
-                cart=cart,
-                product=product,
-                quantity=quantity,
-            )
-
-        return cart
+    # Backward-compatible aliases for older builder callers.
+    with_user = for_user
+    add = with_item

@@ -1,7 +1,7 @@
 # tests/factories/cart.py
 import factory
 
-from tests.base import BaseFactory
+from tests.factories.base import BaseFactory
 
 from cart.models import (
     CartModel,

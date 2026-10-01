@@ -44,7 +44,7 @@ class UserManager(BaseUserManager):
 
         return self.create_user(email, password, **extra_fields)
 
-
+            
 class User(AbstractBaseUser, PermissionsMixin):
     email = models.EmailField(_("email address"), unique=True)
 
@@ -72,6 +72,7 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return self.email
+    
 
 
 class Profile(models.Model):
@@ -106,9 +107,11 @@ class Profile(models.Model):
 
     def __str__(self):
         return self.get_fullname()
+    
+    @receiver(post_save, sender=User)
+    def create_profile(sender, instance, created, **kwargs):
+        if created:
+            Profile.objects.create(user=instance)
 
 
-@receiver(post_save, sender=User)
-def create_profile(sender, instance, created, **kwargs):
-    if created:
-        Profile.objects.create(user=instance)
+    

@@ -1,8 +1,7 @@
 # tests/matchers/payment.py
-from payment.models import (
+from payment.enums import (
     PaymentStatusType,
 )
-
 
 def pending(payment):
 
@@ -11,7 +10,7 @@ def pending(payment):
     assert (
         payment.status
         ==
-        PaymentStatusType.pending
+        PaymentStatusType.PENDING
     )
 
 
@@ -22,7 +21,7 @@ def success(payment):
     assert (
         payment.status
         ==
-        PaymentStatusType.success
+        PaymentStatusType.SUCCESS
     )
 
 

@@ -1,81 +1,231 @@
 # tests/builders/order_builder.py
-from tests.builders.base import Builder
+"""
+Order scenario builders.
 
+Builders compose existing order/shop/account factories.
+They do not implement order business logic.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Optional
+
+from accounts.models import User
+from order.models import OrderItemModel ,OrderModel ,CouponModel
+from shop.models import ProductModel
+
+from tests.builders.accounts_builder import AccountScenarioBuilder
+from tests.builders.base import BaseBuilder
 from tests.factories.order import (
     OrderFactory,
     OrderItemFactory,
 )
+from tests.factories.shop import (
+    CouponFactory,
+    ProductFactory,
+)
 
+@dataclass(frozen=True)
+class OrderScenario:
+    """Result of an order scenario."""
 
-class OrderBuilder(Builder):
+    user: User
+    order: OrderModel
+    items: tuple[OrderItemModel, ...] = ()
+    coupon: Optional[CouponModel] = None
 
-    def __init__(self):
+class OrderScenarioBuilder(BaseBuilder[OrderScenario]):
+    """
+    Builder for meaningful order test scenarios.
 
+    The builder composes existing factories and does not implement
+    pricing, stock, coupon, or order-state business rules.
+    """
+
+    __slots__ = (
+        "_user",
+        "_coupon",
+        "_with_coupon",
+        "_item_count",
+        "_item_quantity",
+        "_products",
+        "_order_trait",
+    )
+
+    def __init__(self) -> None:
         super().__init__()
 
-        self.items = []
+        self._user: Optional[User] = None
+        self._coupon: Optional[CouponModel] = None
+        self._with_coupon = False
+        self._item_count = 0
+        self._item_quantity = 1
+        self._products: list[ProductModel] = []
+        self._order_trait: Optional[str] = None
 
-    def for_user(self, user):
-
-        self.kwargs["user"] = user
-
+    def with_user(self, user: User) -> OrderScenarioBuilder:
+        """Reuse an externally-created user."""
+        self._user = user
         return self
 
-    def with_coupon(self, coupon):
+    # Backward-compatible alias for existing scenario callers.
+    for_user = with_user
 
-        self.kwargs["coupon"] = coupon
+    def with_coupon(
+        self,
+        coupon: Optional[CouponModel] = None,
+    ) -> OrderScenarioBuilder:
+        """
+        Attach a coupon to the order.
 
-        return self
+        An externally supplied coupon is reused. Otherwise the existing
+        CouponFactory creates the coupon during build().
+        """
+        self._with_coupon = True
 
-    def paid(self):
-
-        self.kwargs["paid"] = True
-
-        return self
-
-    def processing(self):
-
-        self.kwargs["processing"] = True
-
-        return self
-
-    def cancelled(self):
-
-        self.kwargs["cancelled"] = True
+        if coupon is not None:
+            self._coupon = coupon
 
         return self
 
     def with_item(
         self,
-        product,
-        quantity=1,
-        price=None,
-    ):
+        product: Optional[ProductModel] = None,
+        quantity: int = 1,
+    ) -> OrderScenarioBuilder:
+        """Backward-compatible single-item scenario helper."""
+        if quantity < 1:
+            raise ValueError("quantity must be greater than zero")
 
-        self.items.append(
-            {
-                "product": product,
-                "quantity": quantity,
-                "price": price,
-            }
-        )
+        self._item_count = 1
+        self._item_quantity = quantity
+        self._products = [product] if product is not None else []
+        return self
+
+    def with_items(
+        self,
+        count: int = 1,
+        products: Optional[list[ProductModel]] = None,
+    ) -> OrderScenarioBuilder:
+        """
+        Request order items.
+
+        Supplied products are reused. Missing products are created from
+        ProductFactory during build().
+        """
+        if count < 0:
+            raise ValueError(
+                "count must be greater than or equal to zero"
+            )
+
+        if products is not None and len(products) > count:
+            raise ValueError(
+                "The number of supplied products cannot exceed item count."
+            )
+
+        self._item_count = count
+
+        if products is not None:
+            self._products = list(products)
 
         return self
 
-    def build(self):
+    def pending(self) -> OrderScenarioBuilder:
+        self._order_trait = None
+        return self
 
-        order = OrderFactory(
-            **self.kwargs
+    def paid(self) -> OrderScenarioBuilder:
+        self._order_trait = "paid"
+        return self
+
+    def processing(self) -> OrderScenarioBuilder:
+        self._order_trait = "processing"
+        return self
+
+    def shipped(self) -> OrderScenarioBuilder:
+        self._order_trait = "shipped"
+        return self
+
+    def delivered(self) -> OrderScenarioBuilder:
+        self._order_trait = "delivered"
+        return self
+
+    def cancelled(self) -> OrderScenarioBuilder:
+        self._order_trait = "cancelled"
+        return self
+
+    def expired(self) -> OrderScenarioBuilder:
+        self._order_trait = "expired"
+        return self
+
+    def build(self) -> OrderScenario:
+        self._mark_built()
+
+        user = self._resolve_user()
+
+        coupon = self._resolve_coupon()
+
+        order_kwargs: dict[str, object] = {
+            "user": user,
+        }
+
+        if coupon is not None:
+            order_kwargs["coupon"] = coupon
+
+        if self._order_trait is not None:
+            order_kwargs[self._order_trait] = True
+
+        order = OrderFactory.create(**order_kwargs)
+
+        items = self._build_items(order)
+
+        return OrderScenario(
+            user=user,
+            order=order,
+            items=tuple(items),
+            coupon=coupon,
         )
 
-        for item in self.items:
+    def _resolve_user(self) -> User:
+        if self._user is not None:
+            return self._user
 
-            OrderItemFactory(
+        return AccountScenarioBuilder().build().user
+
+    def _resolve_coupon(self) -> Optional[CouponModel]:
+        if not self._with_coupon:
+            return None
+
+        if self._coupon is not None:
+            return self._coupon
+
+        return CouponFactory.create()
+
+    def _build_items(
+        self,
+        order: OrderModel,
+    ) -> list[OrderItemModel]:
+        items: list[OrderItemModel] = []
+
+        for index in range(self._item_count):
+            product = self._resolve_product(index)
+
+            item = OrderItemFactory.create(
                 order=order,
-                product=item["product"],
-                quantity=item["quantity"],
-                price=item["price"]
-                or item["product"].final_price,
+                product=product,
+                quantity=self._item_quantity,
             )
 
-        return order
+            items.append(item)
+
+        return items
+
+    def _resolve_product(self, index: int) -> ProductModel:
+        if index < len(self._products):
+            return self._products[index]
+
+        return ProductFactory.create()
+
+# Compatibility name for the canonical order scenario builder.
+OrderBuilder = OrderScenarioBuilder

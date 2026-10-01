@@ -272,3 +272,60 @@ Never introduce abstractions unless they clearly reduce duplication while improv
 
 Keep the testing architecture simple, explicit and easy to extend.
 
+# ===================================
+Chapter 2
+
+My goal is for the test infrastructure to have these features:
+
+Single source of truth
+Completely lazy Builders
+Factories are just model constructors
+Scenarios are composable
+Zero duplicate code
+Fluent API
+Scalable to thousands of tests
+
+tests/
+
+    base.py
+
+    assertions.py
+
+    helpers/
+
+    fixtures/
+
+    factories/
+
+        accounts.py
+        shop.py
+        cart.py
+        order.py
+        payment.py
+        events.py
+
+    builders/
+
+        base.py
+
+        checkout_builder.py
+
+        order_builder.py
+
+        payment_builder.py
+
+        cart_builder.py
+
+        outbox_builder.py
+
+        event_builder.py
+
+    scenarios/
+
+        checkout.py
+
+        payment.py
+
+        order.py
+
+        events.py

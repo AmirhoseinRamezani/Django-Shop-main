@@ -1,13 +1,16 @@
 # tests/factories/shop.py
 import factory
 from decimal import Decimal
+
 from django.utils import timezone
 from datetime import timedelta
 
-from tests.base import BaseFactory
+from tests.factories.base import BaseFactory
 
 from shop.models import (
     ProductModel,
+    ProductCategoryModel,
+
 )
 
 from shop.constants import (
@@ -18,14 +21,31 @@ from order.models import (
     CouponModel,
     UserAddressModel,
 )
+
 from tests.factories.accounts import UserFactory
 
+# from tests.factories.shop import ProductCategoryFactory
+# from tests.factories.shop import (
+#     ProductFactory,
+#     CouponFactory,
+#     AddressFactory,
+#     ProductCategoryFactory
+# )
+class ProductCategoryFactory(BaseFactory):
+    class Meta:
+        model = ProductCategoryModel
+
+    title = factory.Sequence(lambda n: f"Category {n}")
+    slug = factory.Sequence(lambda n: f"category-{n}")
 
 class ProductFactory(BaseFactory):
 
     class Meta:
         model = ProductModel
+        skip_postgeneration_save = True
 
+    user = factory.SubFactory(UserFactory)
+    
     title = factory.Sequence(
         lambda n: f"Product {n}"
     )
@@ -35,14 +55,47 @@ class ProductFactory(BaseFactory):
     )
 
     price = Decimal("100000")
-
     discount_percent = 0
-
     stock = 10
 
     status = ProductStatusType.PUBLISH
+    avg_rate = 0
 
-    is_active = True
+    sku = factory.Sequence(
+        lambda n: f"SKU-{n:08d}"
+    )
+
+    barcode = factory.Sequence(
+        lambda n: f"BARCODE-{n:012d}"
+    )
+    
+    reserved_stock = 0
+    
+    description = factory.Faker(
+        "paragraph"
+    )
+
+    brief_description = factory.Faker(
+        "sentence"
+    )
+    # is_active = True
+
+    @factory.post_generation
+    def category(self, create, extracted, **kwargs):
+
+        if not create:
+            return
+
+        categories = extracted
+
+        if categories:
+            for category in categories:
+                self.category.add(category)
+            return
+
+        self.category.add(
+            ProductCategoryFactory()
+        )
 
     class Params:
 
@@ -50,15 +103,19 @@ class ProductFactory(BaseFactory):
             status=ProductStatusType.DRAFT,
         )
 
+        unpublished = factory.Trait(
+            status=ProductStatusType.DRAFT,
+        )
+        
         out_of_stock = factory.Trait(
             stock=0,
+            reserved_stock=0,
         )
 
         discounted = factory.Trait(
             discount_percent=20,
         )
-
-
+        
 class CouponFactory(BaseFactory):
 
     class Meta:
@@ -97,7 +154,6 @@ class CouponFactory(BaseFactory):
             max_limit_usage=10,
         )
 
-
 class AddressFactory(BaseFactory):
 
     class Meta:
@@ -105,14 +161,12 @@ class AddressFactory(BaseFactory):
 
     user = factory.SubFactory(UserFactory)
 
-    address = factory.Faker("address")
+    state = "Khorasan"
+    city = "Mashhad"
+    address = "Some Street"
+    zip_code = "9187654321"
 
-    city = "Tehran"
 
-    state = "Tehran"
-
-    zip_code = "1111111111"
-    
 # CategoryFactory
 # ProductFactory
 # WishlistFactory

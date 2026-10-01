@@ -109,7 +109,27 @@ def decode_token(token: str) -> dict:
 
     except jwt.InvalidTokenError:
         raise ValidationError(_("Invalid token"))
+    
 
+def decode_access_token(token: str):
+    return jwt.decode(
+        token,
+        settings.JWT_ACCESS_SECRET,
+        algorithms=["HS256"],
+        options={
+            "require": ["exp", "iat", "jti"],
+        },
+    )
+    
+def decode_refresh_token(token: str):
+    return jwt.decode(
+        token,
+        settings.JWT_REFRESH_SECRET,
+        algorithms=["HS256"],
+        options={
+            "require": ["exp", "iat", "jti"],
+        },
+    )
 # ------------------------
 # Facade Class (for tests & future)
 # ------------------------

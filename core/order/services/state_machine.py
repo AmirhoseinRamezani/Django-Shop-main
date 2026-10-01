@@ -1,13 +1,14 @@
-# order/services/state_machine.py
-from django.db import transaction
+# core/order/services/state_machine.py
+from __future__ import annotations
+
 from django.core.exceptions import ValidationError
-from django.db.models import F
+from django.db import transaction
 from django.utils import timezone
 
-from order.models import OrderStatusType
 from order.events.order_event import OrderEventType
+from order.models import OrderStatusType
 from order.services.events import record_order_event
-from shop.models import ProductModel
+from order.services.inventory import InventoryService
 
 
 class OrderStateMachine:
@@ -26,25 +27,20 @@ class OrderStateMachine:
             OrderStatusType.processing,
             OrderStatusType.refunded,
         },
-
         OrderStatusType.processing: {
             OrderStatusType.shipped,
             OrderStatusType.cancelled,
         },
-
         OrderStatusType.shipped: {
             OrderStatusType.delivered,
             OrderStatusType.return_requested,
         },
-
         OrderStatusType.return_requested: {
             OrderStatusType.returned,
         },
-
         OrderStatusType.returned: {
             OrderStatusType.refunded,
         },
-
         OrderStatusType.delivered: set(),
         OrderStatusType.cancelled: set(),
         OrderStatusType.refunded: set(),
@@ -52,32 +48,85 @@ class OrderStateMachine:
 
     @classmethod
     @transaction.atomic
-    def transition(cls, *, order, to_status, actor=None, payload=None):
+    def transition(
+        cls,
+        *,
+        order,
+        to_status,
+        actor=None,
+        payload=None,
+    ):
+        """
+        Atomically transition an Order between valid states.
 
-        # 🔒 lock row
+        The database row is re-locked here because the state machine
+        is the final authority for concurrent status transitions.
+
+        Paid-like statuses require paid_date to be populated.
+        """
+
         order = (
             order.__class__
             .objects
             .select_for_update()
-            .get(id=order.id)
+            .get(
+                id=order.id,
+            )
         )
 
         from_status = order.status
 
-        if to_status not in cls.TRANSITIONS.get(from_status, set()):
+        if to_status not in cls.TRANSITIONS.get(
+            from_status,
+            set(),
+        ):
             raise ValidationError(
-                f"Illegal transition from {from_status} to {to_status}"
+                f"Illegal transition from "
+                f"{from_status} to {to_status}"
             )
 
-        # 🔥 Domain-specific side effects
-        cls._handle_side_effects(order, from_status, to_status)
+        cls._handle_side_effects(
+            order,
+            from_status,
+            to_status,
+        )
 
         order.status = to_status
-        order.save(update_fields=["status"])
+
+        update_fields = [
+            "status",
+        ]
+
+        # --------------------------------------------------------
+        # Paid lifecycle invariant
+        # --------------------------------------------------------
+        #
+        # Database constraint:
+        #
+        #     paid-like status <=> paid_date IS NOT NULL
+        #
+        # The state machine owns status transitions, therefore it
+        # must maintain this invariant for every pending -> paid
+        # transition.
+        # --------------------------------------------------------
+
+        if (
+            to_status == OrderStatusType.paid
+            and order.paid_date is None
+        ):
+            order.paid_date = timezone.now()
+            update_fields.append("paid_date")
+
+        order.save(
+            update_fields=update_fields,
+        )
 
         record_order_event(
             order=order,
-            type=cls._map_status_to_event(to_status, payload),
+            type=cls._map_status_to_event(
+                to_status,
+                payload,
+            ),
             actor=actor,
             payload=payload or {},
         )
@@ -85,29 +134,43 @@ class OrderStateMachine:
         return order
 
     @staticmethod
-    def _handle_side_effects(order, from_status, to_status):
+    def _handle_side_effects(
+        order,
+        from_status,
+        to_status,
+    ):
+        """
+        Execute synchronous state-transition side effects.
+        """
 
-        # restore stock when cancelling unpaid order
         if (
-            from_status == OrderStatusType.pending
-            and to_status == OrderStatusType.cancelled
+            to_status == OrderStatusType.cancelled
+            and from_status in {
+                OrderStatusType.pending,
+                OrderStatusType.failed,
+                OrderStatusType.processing,
+            }
         ):
-            for item in order.order_items.select_related("product"):
-                ProductModel.objects.filter(
-                    id=item.product_id
-                ).update(
-                    stock=F("stock") + item.quantity
-                )
+            InventoryService.restore(order)
 
     @staticmethod
-    def _map_status_to_event(status, payload=None):
-
+    def _map_status_to_event(
+        status,
+        payload=None,
+    ):
         if status == OrderStatusType.cancelled:
-            if payload and payload.get("reason") == "timeout":
+            if (
+                payload
+                and payload.get("reason") == "timeout"
+            ):
                 return OrderEventType.EXPIRED
+
             return OrderEventType.CANCELLED
 
         return {
             OrderStatusType.paid: OrderEventType.PAID,
             OrderStatusType.refunded: OrderEventType.REFUNDED,
-        }.get(status, OrderEventType.ADMIN_NOTE)
+        }.get(
+            status,
+            OrderEventType.ADMIN_NOTE,
+        )

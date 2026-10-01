@@ -36,10 +36,17 @@ class EmailOTP(models.Model):
         indexes = [
             models.Index(fields=["email", "purpose", "is_consumed"]),
         ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(
+                    attempts__gte=0
+                ),
+                name="otp_attempts_non_negative",
+            ),
+        ]
         
     def save(self, *args, **kwargs):
         if not self.expire_at:
-
             self.expire_at = timezone.now() + timedelta(minutes=2)
       
         super().save(*args, **kwargs)

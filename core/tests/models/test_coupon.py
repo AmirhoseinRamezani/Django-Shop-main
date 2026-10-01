@@ -1,6 +1,8 @@
 # tests/models/test_coupon.py
 import pytest
 
+from order.services.coupon import CouponService
+
 from django.utils import timezone
 from datetime import timedelta
 
@@ -45,7 +47,7 @@ class TestCouponModel:
         coupon.used_count = 1
         coupon.save()
 
-        coupon.rollback()
+        CouponService.rollback(coupon)
 
         coupon.refresh_from_db()
 
@@ -53,7 +55,7 @@ class TestCouponModel:
 
     def test_rollback_never_negative(self, coupon):
 
-        coupon.rollback()
+        CouponService.rollback(coupon)
 
         coupon.refresh_from_db()
 

@@ -38,9 +38,7 @@ class SessionService:
         user,
     ):
         ip = cls.get_client_ip(request)
-
         user_agent = cls.get_user_agent(request)
-
         device_hash = generate_device_hash(
             ip,
             user_agent,
@@ -72,22 +70,29 @@ class SessionService:
     @staticmethod
     @transaction.atomic
     def revoke_session(session):
-        session.is_active = False
-        session.revoked_at = timezone.now()
-
-        session.save(
-            update_fields=[
-                "is_active",
-                "revoked_at",
-            ]
+        session = (
+            DeviceSession.objects
+            .select_for_update()
+            .get(pk=session.pk)
         )
+        now = timezone.now()
+
+        if session.is_active:
+            session.is_active = False
+            session.revoked_at = now
+            session.save(
+                update_fields=[
+                    "is_active",
+                    "revoked_at",
+                ]
+            )
 
         RefreshToken.objects.filter(
-            session=session,
+            session_id=session.pk,
             is_revoked=False,
         ).update(
             is_revoked=True,
-            revoked_at=timezone.now(),
+            revoked_at=now,
         )
 
     @classmethod

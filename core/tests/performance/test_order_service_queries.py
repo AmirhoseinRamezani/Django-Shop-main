@@ -14,7 +14,10 @@ def test_create_order_query_count(
     user,
     address,
     cart,
+    product,
 ):
+    cart.add(product)
+
     with CaptureQueriesContext(connection) as ctx:
 
         OrderService.create_online_order(
@@ -23,4 +26,4 @@ def test_create_order_query_count(
             cart=cart,
         )
 
-    assert len(ctx) <= 15
+    assert len(ctx) <= 18

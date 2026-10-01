@@ -15,7 +15,6 @@ class FakerMixin:
         lambda o: slugify(o.title)
     )
 
-
 class TimestampMixin:
 
     class Meta:

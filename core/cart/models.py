@@ -29,7 +29,12 @@ class CartItemModel(models.Model):
     updated_date = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = ("cart", "product")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["cart", "product"],
+                name="unique_cart_product",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.product} × {self.quantity}"

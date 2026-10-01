@@ -4,8 +4,14 @@ from django.conf import settings
 from django.utils import timezone
 from datetime import timedelta
 from decimal import Decimal
+from django.core.validators import MinValueValidator, MaxValueValidator
+from django.core.exceptions import ValidationError
 from django.utils.translation import gettext_lazy as _
-from payment.models import PaymentStatusType
+# from payment.models import PaymentStatusType
+from payment.enums import PaymentStatusType
+from django.db.models import F
+from django.db.models import Q
+
 
 class SaleType(models.TextChoices):
     ONLINE = "ONLINE", _("Online")
@@ -41,7 +47,13 @@ class CouponModel(models.Model):
     """
 
     code = models.CharField(max_length=50, unique=True)
-    discount_percent = models.PositiveSmallIntegerField()
+    
+    discount_percent = models.PositiveSmallIntegerField(
+        validators=[
+            MinValueValidator(0),
+            MaxValueValidator(100),
+        ],
+    )
 
     # Usage control
     max_limit_usage = models.PositiveIntegerField(default=1)
@@ -56,6 +68,33 @@ class CouponModel(models.Model):
 
     class Meta:
         ordering = ["-created_date"]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(
+                    discount_percent__gte=0,
+                    discount_percent__lte=100,
+                ),
+                name="coupon_discount_percent_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(
+                    max_limit_usage__gte=0,
+                ),
+                name="coupon_max_usage_non_negative",
+            ),
+            models.CheckConstraint(
+                condition=Q(
+                    used_count__gte=0,
+                ),
+                name="coupon_used_count_non_negative",
+            ),
+            models.CheckConstraint(
+                condition=Q(
+                    used_count__lte=F("max_limit_usage"),
+                ),
+                name="coupon_used_count_lte_max_usage",
+            ),
+        ]
         
     def is_valid(self):
         """
@@ -74,22 +113,63 @@ class CouponModel(models.Model):
         return True
 
     def mark_used(self):
+        # if order.coupon:
+        # CouponModel.objects.filter(
+        #     pk=order.coupon_id
+        # ).update(
+        #     used_count=F("used_count") + 1
+        # )
+        # self.used_count =F("used_count") + 1
+        # self.save(update_fields=["used_count"])
         """
-        Consume coupon AFTER successful payment
-        Must be called inside transaction
-        """
-        self.used_count += 1
-        self.save(update_fields=["used_count"])
+        Atomically consume one coupon usage.
 
-    def rollback(self):
+        Must be called inside transaction.atomic().
         """
-        Rollback coupon usage if payment fails
-        (Normally not needed if VerifyView is correct,
-        but kept for safety)
-        """
-        if self.used_count > 0:
-            self.used_count -= 1
-            self.save(update_fields=["used_count"])
+        updated = (
+            type(self)
+            .objects
+            .filter(
+                pk=self.pk,
+                is_active=True,
+                used_count__lt=F(
+                    "max_limit_usage"
+                ),
+            )
+            .filter(
+                Q(expiration_date__isnull=True)
+                | Q(
+                    expiration_date__gt=timezone.now()
+                )
+            )
+            .update(
+                used_count=F("used_count") + 1,
+            )
+        )
+
+        if updated != 1:
+            raise ValidationError(
+                _("Coupon is no longer available.")
+            )
+
+        self.refresh_from_db(
+            fields=[
+                "used_count",
+                "is_active",
+                "max_limit_usage",
+                "expiration_date",
+            ]
+        )
+
+    # def rollback(self):
+    #     """
+    #     Rollback coupon usage if payment fails
+    #     (Normally not needed if VerifyView is correct,
+    #     but kept for safety)
+    #     """
+    #     if self.used_count > 0:
+    #         self.used_count -= 1
+    #         self.save(update_fields=["used_count"])
 
     def __str__(self):
         return self.code
@@ -129,13 +209,23 @@ class OrderModel(models.Model):
         db_index=True,
     )
 
-    total_price = models.DecimalField(max_digits=12, decimal_places=0)
+    total_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=0,
+        validators=[
+            MinValueValidator(0),
+        ],
+        help_text=_(
+            "Legacy gross order total."
+        ),
+    )
 
     # snapshot buyer
     full_name = models.CharField(max_length=255)
     phone = models.CharField(max_length=20)
     email = models.EmailField()
 
+    # paid_date = models.DateTimeField(null=True, blank=True)
     # snapshot address
     address = models.TextField()
     city = models.CharField(max_length=100)
@@ -150,6 +240,84 @@ class OrderModel(models.Model):
         related_name="orders",
     )
 
+    # -----------------------------------------
+    # Pricing
+    # -----------------------------------------
+
+    subtotal_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=0,
+        default=0,
+        validators=[
+            MinValueValidator(0),
+        ],
+        help_text=_(
+            "Total price of order items before discount."
+        ),
+    )
+
+    discount_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=0,
+        default=0,
+        validators=[
+            MinValueValidator(0),
+        ],
+        help_text=_("Total discount applied to the order."),
+    )
+
+    shipping_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=0,
+        default=0,
+        validators=[
+            MinValueValidator(0),
+        ],
+        help_text=_(
+            "Shipping cost snapshot."
+        ),
+    )
+
+    tax_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=0,
+        default=0,
+        validators=[
+            MinValueValidator(0),
+        ],
+        help_text=_(
+            "Tax amount snapshot."
+        ),
+    )
+
+    payable_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=0,
+        default=0,
+        validators=[
+            MinValueValidator(0),
+        ],
+        help_text=_("Final amount that customer must pay."),
+    )
+
+    # -----------------------------------------
+    # Lifecycle Dates
+    # -----------------------------------------
+
+    paid_date = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    completed_date = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    cancelled_date = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
     
     # ---- Coupon Snapshot ----
     coupon_code = models.CharField(max_length=50, null=True, blank=True)
@@ -159,9 +327,92 @@ class OrderModel(models.Model):
     expire_at = models.DateTimeField(db_index=True,help_text="Order expiration time for unpaid orders")
     
     
+    class Meta:
+        ordering = [
+            "-created_date",
+        ]
+        indexes = [
+            models.Index(
+                fields=[
+                    "status",
+                    "expire_at",
+                ],
+            ),
 
+            models.Index(
+                fields=[
+                    "user",
+                    "-created_date",
+                ],
+            ),
+
+            models.Index(
+                fields=[
+                    "paid_date",
+                ],
+            ),
+
+            models.Index(
+                fields=[
+                    "completed_date",
+                ],
+            ),
+
+            models.Index(
+                fields=[
+                    "cancelled_date",
+                ],
+            ),
+        ]
+
+        constraints = [
+
+            models.CheckConstraint(
+                condition=Q(discount_amount__lte=F("subtotal_price")),
+                name="discount_less_than_subtotal",
+            ),
+
+            # models.CheckConstraint(
+            #     condition=(
+            #         F("payable_price")
+            #         ==
+            #         (
+            #             F("subtotal_price")
+            #             - F("discount_amount")
+            #             + F("shipping_price")
+            #             + F("tax_amount")
+            #         )
+            #     ),
+            #     name="order_payable_price_consistent",
+            # ),
+
+            models.CheckConstraint(
+                condition=(
+                    (
+                        Q(
+                            paid_date__isnull=True
+                        )
+                        & ~Q(
+                            status__in=[
+                                OrderStatusType.paid,
+                                OrderStatusType.processing,
+                                OrderStatusType.shipped,
+                                OrderStatusType.delivered,
+                                OrderStatusType.return_requested,
+                                OrderStatusType.returned,
+                                OrderStatusType.refunded,
+                            ]
+                        )
+                    )
+                    |
+                    Q(
+                        paid_date__isnull=False
+                    )
+                ),
+                name="order_paid_date_consistent",
+            ),
+        ]
     # ----- Aging Helpers -----
-
     def age(self):
         return timezone.now() - self.created_date
 
@@ -212,18 +463,34 @@ class OrderModel(models.Model):
             OrderStatusType.returned,
         }
 
-    def get_price(self):
+
+    @property
+    def final_price(self):
         """
         Final payable price after applying coupon.
         This is the ONLY official pricing method.
         """
-        total = self.total_price
-        if self.coupon_discount_percent:
-            return round(
-                total * (100 - self.coupon_discount_percent) / 100
-            )
+        # total = self.total_price
+        # if self.coupon_discount_percent:
+        #     total = round(
+        #         total *(100 - self.coupon_discount_percent)/ 100
+        #     )
+        # return total
+        return self.payable_price
+        
+    # def get_price(self):
+    #     """
+    #     Final payable price after applying coupon.
+    #     This is the ONLY official pricing method.
+    #     """
+    #     total = self.total_price
+    #     if self.coupon_discount_percent:
+    #         return round(
+    #             total * (100 - self.coupon_discount_percent) / 100
+    #         )
 
-        return total
+    #     return total
+    
     
     # ---- Payments ----
     def last_payment(self):
@@ -237,7 +504,7 @@ class OrderModel(models.Model):
         Prevent duplicate gateway redirects
         """
         return self.payments.filter(
-            status = PaymentStatusType.pending  # OrderStatusType.pending
+            status = PaymentStatusType.PENDING
         ).exists()
 
     def mark_failed(self):
@@ -246,6 +513,53 @@ class OrderModel(models.Model):
         """
         self.status = OrderStatusType.failed
         self.save(update_fields=["status"])
+        
+    def mark_paid(self):
+
+        self.status = (
+            OrderStatusType.paid
+        )
+
+        if self.paid_date is None:
+            self.paid_date = (
+                timezone.now()
+            )
+
+        self.save(
+            update_fields=[
+                "status",
+                "paid_date",
+            ]
+        )
+
+    def mark_completed(self):
+
+        self.completed_date = (
+            timezone.now()
+        )
+
+        self.save(
+            update_fields=[
+                "completed_date",
+            ]
+        )
+
+    def mark_cancelled(self):
+
+        self.status = (
+            OrderStatusType.cancelled
+        )
+
+        self.cancelled_date = (
+            timezone.now()
+        )
+
+        self.save(
+            update_fields=[
+                "status",
+                "cancelled_date",
+            ]
+        )
     
     def __str__(self):
         return f"Order #{self.id}"
@@ -260,8 +574,16 @@ class OrderModel(models.Model):
     #     )
     
     @property
-    def is_paid(self) -> bool:
-        return self.status == OrderStatusType.paid
+    def is_paid(self):
+        return self.status in {
+            OrderStatusType.paid,
+            OrderStatusType.processing,
+            OrderStatusType.shipped,
+            OrderStatusType.delivered,
+            OrderStatusType.return_requested,
+            OrderStatusType.returned,
+            OrderStatusType.refunded,
+        }
 
     @property
     def is_completed(self) -> bool:
@@ -281,10 +603,89 @@ class OrderItemModel(models.Model):
         "shop.ProductModel",
         on_delete=models.PROTECT
     )
-    quantity = models.PositiveIntegerField(default=1)
-    price = models.DecimalField(max_digits=12, decimal_places=0)
+    # quantity = models.PositiveIntegerField(default=1)
+    # price = models.DecimalField(max_digits=12, decimal_places=0)
+    
+    quantity = models.PositiveIntegerField(
+        default=1,
+        validators=[
+            MinValueValidator(1),
+        ],
+    )
+
+    price = models.DecimalField(
+        max_digits=12,
+        decimal_places=0,
+        validators=[
+            MinValueValidator(0),
+        ],
+    )
 
     created_date = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return f"{self.product} x {self.quantity} (Order #{self.order_id})"
+
+
+class InventoryReservationStatus(models.TextChoices):
+    RESERVED = "RESERVED", _("Reserved")
+    RELEASED = "RELEASED", _("Released")
+
+
+class InventoryReservation(models.Model):
+    order_item = models.OneToOneField(
+        OrderItemModel,
+        on_delete=models.CASCADE,
+        related_name="inventory_reservation",
+    )
+    quantity = models.PositiveIntegerField(
+        validators=[MinValueValidator(1)],
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=InventoryReservationStatus.choices,
+        default=InventoryReservationStatus.RESERVED,
+        db_index=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    released_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(quantity__gte=1),
+                name="inventory_reservation_quantity_positive",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        status=InventoryReservationStatus.RESERVED,
+                        released_at__isnull=True,
+                    )
+                    | Q(
+                        status=InventoryReservationStatus.RELEASED,
+                        released_at__isnull=False,
+                    )
+                ),
+                name="inventory_reservation_status_consistent",
+            ),
+        ]
+
+    def release(self):
+        if self.status == InventoryReservationStatus.RELEASED:
+            return False
+
+        if self.status != InventoryReservationStatus.RESERVED:
+            raise ValidationError(
+                _("Invalid inventory reservation state.")
+            )
+
+        self.status = InventoryReservationStatus.RELEASED
+        self.released_at = timezone.now()
+        self.save(
+            update_fields=[
+                "status",
+                "released_at",
+            ]
+        )
+        return True

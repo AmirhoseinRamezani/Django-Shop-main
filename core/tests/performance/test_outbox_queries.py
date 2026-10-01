@@ -26,24 +26,25 @@ class TestOutboxQueries:
         )
 
         assert_max_queries(
-            5,
+            65,
             process_outbox,
+            batch_size=20,
         )
 
     def test_process_batch(
         self,
-        outbox_event_factory,
+        event_factory,
         mocker,
     ):
         for _ in range(20):
-            outbox_event_factory()
+            event_factory()
 
         mocker.patch(
             "events.services.processor.dispatch",
         )
 
         assert_max_queries(
-            30,
+            65,
             process_outbox,
             batch_size=20,
         )

@@ -2,9 +2,9 @@
 import pytest
 
 from order.models import OrderStatusType
-from payment.models import PaymentStatusType
-
 from order.services.order import OrderService
+from payment.enums import PaymentGateway, PaymentStatusType
+from payment.providers.base import GatewayPaymentResult, GatewayVerificationResult
 from payment.services.services import PaymentService
 from payment.services.verify import verify_payment
 
@@ -17,15 +17,39 @@ from tests.assertions import (
 pytestmark = pytest.mark.django_db
 
 
-class DummyGateway:
+def _mock_gateway(mocker, authority="AUTH-123"):
+    mocker.patch(
+        "payment.services.services.GatewayService.current_gateway",
+        return_value=PaymentGateway.ZARINPAL,
+    )
+    mocker.patch(
+        "payment.services.services.GatewayService.initiate_payment",
+        return_value=GatewayPaymentResult(
+            success=True,
+            gateway=PaymentGateway.ZARINPAL,
+            authority=authority,
+        ),
+    )
+    mocker.patch(
+        "payment.services.services.GatewayService.payment_url",
+        side_effect=lambda value, gateway=None: f"https://gateway/{value}",
+    )
 
-    def payment_request(self, amount):
-        return {
-            "Authority": "AUTH-123",
-        }
 
-    def generate_payment_url(self, authority):
-        return f"https://gateway/{authority}"
+def _mock_verification(mocker, payment, reference="REF-1234"):
+    mocker.patch(
+        "payment.services.verify.GatewayService.verify",
+        return_value=GatewayVerificationResult(
+            success=True,
+            gateway=PaymentGateway.ZARINPAL,
+            gateway_reference=reference,
+            gateway_transaction_id="TXN-1234",
+            response_code="100",
+            message="verified",
+            amount=payment.amount,
+            currency=payment.currency,
+        ),
+    )
 
 
 class TestCheckoutFlow:
@@ -44,12 +68,7 @@ class TestCheckoutFlow:
             .with_item(product, quantity=2)
             .build()
         )
-
-        gateway = mocker.patch(
-            "payment.services.services.ZarinPalSandbox"
-        )
-
-        gateway.return_value = DummyGateway()
+        _mock_gateway(mocker)
 
         order = OrderService.create_online_order(
             user=user,
@@ -57,24 +76,23 @@ class TestCheckoutFlow:
             cart=cart,
         )
 
-        url = PaymentService.start_payment(order)
-
+        url = PaymentService.start_payment(order, callback_url="https://shop.test/payment/verify/")
         payment = order.payments.get()
+        attempt = payment.attempts.get()
+        _mock_verification(mocker, payment)
 
         verify_payment(
-            authority=payment.authority_id,
-            ref_id="REF-001",
+            payment_id=payment.pk,
+            attempt_id=attempt.pk,
+            ref_id="REF-1234",
             response={},
         )
 
         refresh(order, payment)
 
-        assert url.endswith(payment.authority_id)
-
+        assert url.endswith(attempt.authority_id)
         assert_order_paid(order)
-
         assert_payment_success(payment)
-
         assert payment.is_consumed
 
     def test_checkout_with_coupon(
@@ -92,12 +110,7 @@ class TestCheckoutFlow:
             .with_item(product)
             .build()
         )
-
-        gateway = mocker.patch(
-            "payment.services.services.ZarinPalSandbox"
-        )
-
-        gateway.return_value = DummyGateway()
+        _mock_gateway(mocker, authority="AUTH-COUPON")
 
         order = OrderService.create_online_order(
             user=user,
@@ -106,23 +119,20 @@ class TestCheckoutFlow:
             coupon=coupon,
         )
 
-        PaymentService.start_payment(order)
-
+        PaymentService.start_payment(order, callback_url="https://shop.test/payment/verify/")
         payment = order.payments.get()
+        attempt = payment.attempts.get()
+        _mock_verification(mocker, payment, reference="REF-COUPON")
 
         verify_payment(
-            authority=payment.authority_id,
-            ref_id="REF-100",
+            payment_id=payment.pk,
+            attempt_id=attempt.pk,
+            ref_id="REF-COUPON",
         )
 
-        refresh(
-            order,
-            payment,
-            coupon,
-        )
+        refresh(order, payment, coupon)
 
         assert coupon.used_count == 1
-
         assert order.status == OrderStatusType.paid
 
     def test_payment_cannot_be_verified_twice(
@@ -139,12 +149,7 @@ class TestCheckoutFlow:
             .with_item(product)
             .build()
         )
-
-        gateway = mocker.patch(
-            "payment.services.services.ZarinPalSandbox"
-        )
-
-        gateway.return_value = DummyGateway()
+        _mock_gateway(mocker, authority="AUTH-TWICE")
 
         order = OrderService.create_online_order(
             user=user,
@@ -152,22 +157,24 @@ class TestCheckoutFlow:
             cart=cart,
         )
 
-        PaymentService.start_payment(order)
-
+        PaymentService.start_payment(order, callback_url="https://shop.test/payment/verify/")
         payment = order.payments.get()
+        attempt = payment.attempts.get()
+        _mock_verification(mocker, payment, reference="REF-TWICE")
 
         verify_payment(
-            authority=payment.authority_id,
-            ref_id="REF-1",
+            payment_id=payment.pk,
+            attempt_id=attempt.pk,
+            ref_id="REF-TWICE",
         )
 
         payment.refresh_from_db()
-
-        assert payment.status == PaymentStatusType.success
+        assert payment.status == PaymentStatusType.SUCCESS
 
         second = verify_payment(
-            authority=payment.authority_id,
-            ref_id="REF-1",
+            payment_id=payment.pk,
+            attempt_id=attempt.pk,
+            ref_id="REF-TWICE",
         )
 
         assert second.pk == payment.pk
@@ -188,12 +195,7 @@ class TestCheckoutFlow:
             .with_item(product, quantity=3)
             .build()
         )
-
-        gateway = mocker.patch(
-            "payment.services.services.ZarinPalSandbox"
-        )
-
-        gateway.return_value = DummyGateway()
+        _mock_gateway(mocker, authority="AUTH-STOCK")
 
         order = OrderService.create_online_order(
             user=user,
@@ -202,18 +204,18 @@ class TestCheckoutFlow:
         )
 
         product.refresh_from_db()
-
         assert product.stock == initial_stock - 3
 
-        PaymentService.start_payment(order)
-
+        PaymentService.start_payment(order, callback_url="https://shop.test/payment/verify/")
         payment = order.payments.get()
+        attempt = payment.attempts.get()
+        _mock_verification(mocker, payment, reference="REF-STOCK")
 
         verify_payment(
-            authority=payment.authority_id,
-            ref_id="OK",
+            payment_id=payment.pk,
+            attempt_id=attempt.pk,
+            ref_id="REF-STOCK",
         )
 
         product.refresh_from_db()
-
         assert product.stock == initial_stock - 3

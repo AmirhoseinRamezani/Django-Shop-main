@@ -1,31 +1,34 @@
 # tests/factories/events.py
+
 import factory
 
-from tests.base import BaseFactory
+from tests.factories.base import BaseFactory
 
-from events.models.outbox import (
+from events.models import (
     OutboxEvent,
     OutboxStatus,
 )
-
 
 class OutboxEventFactory(BaseFactory):
 
     class Meta:
         model = OutboxEvent
 
-    topic = "user.otp"
+    topic = factory.Sequence(
+        lambda n: f"order.created.{n}"
+    )
 
-    payload = {
-        "email": "user@example.com",
-        "code": "123456",
-    }
+    payload = factory.LazyFunction(
+        lambda: {
+            "order_id": 1,
+            "user_id": 1,
+            "amount": "100000",
+        }
+    )
 
     status = OutboxStatus.pending
-
     retry_count = 0
-
-    last_error = ""
+    last_error = None
 
     class Params:
 
@@ -35,18 +38,11 @@ class OutboxEventFactory(BaseFactory):
 
         failed = factory.Trait(
             status=OutboxStatus.failed,
-            retry_count=5,
+            retry_count=3,
+            last_error="Gateway timeout",
         )
 
-        order_paid = factory.Trait(
-            topic="order.paid",
-            payload={
-                "order_id": 1,
-                "amount": "100000",
-                "email": "user@example.com",
-            },
+        retryable = factory.Trait(
+            status=OutboxStatus.pending,
+            retry_count=1,
         )
-
-
-# OutboxEventFactory
-# OrderEventFactory
