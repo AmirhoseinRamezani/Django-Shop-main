@@ -87,6 +87,31 @@ class PaymentService:
                     "Multiple pending Payments exist for one Order."
                 )
 
+            successful_payments = list(
+                PaymentRepository
+                .successful_for_order(locked_order.pk)
+                .select_for_update()
+                .order_by(
+                    "-updated_date",
+                    "-id",
+                )
+            )
+
+            if len(successful_payments) > 1:
+                raise PaymentInvariantViolation(
+                    "Multiple successful Payments exist for one Order."
+                )
+
+            if successful_payments:
+                if pending_payments:
+                    raise PaymentInvariantViolation(
+                        "Order has both successful and pending Payments."
+                    )
+
+                raise PaymentCreationForbiddenError(
+                    "A successful Payment already exists for this Order."
+                )
+
             if pending_payments:
                 payment = pending_payments[0]
                 attempts = list(

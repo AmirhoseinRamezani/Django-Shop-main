@@ -73,10 +73,10 @@ def confirm_order_payment(
         )
 
     # ===================================
-    # 3. FIND LATEST SUCCESSFUL PAYMENT
-    # ===================================
+    # 3. FIND THE UNIQUE SUCCESSFUL PAYMENT
+    # =======================================
 
-    payment = (
+    successful_payments = list(
         PaymentRepository
         .successful_for_order(order.id)
         .select_for_update()
@@ -84,13 +84,19 @@ def confirm_order_payment(
             "-updated_date",
             "-id",
         )
-        .first()
     )
 
-    if payment is None:
+    if not successful_payments:
         raise ValidationError(
             _("No successful payment found")
         )
+
+    if len(successful_payments) > 1:
+        raise ValidationError(
+            _("Multiple successful payments found for Order")
+        )
+
+    payment = successful_payments[0]
 
     PaymentPolicy.validate_order_financial_snapshot(
         payment,

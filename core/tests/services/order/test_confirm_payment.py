@@ -441,35 +441,37 @@ class TestIdempotency:
 
 class TestMultiplePayments:
 
-    def test_latest_success_payment_used(
+    def test_multiple_success_payments_are_rejected(
         self,
         order,
         success_payment,
         payment_factory,
     ):
-        old_payment = success_payment
-
-        latest = payment_factory(
+        second_payment = payment_factory(
             order=order,
             status=PaymentStatusType.SUCCESS,
         )
 
         _make_success_attempt(
-            latest,
-            authority_id="AUTH-LATEST",
-            gateway_reference="REF-LATEST",
-            gateway_transaction_id="TXN-LATEST",
+            second_payment,
+            authority_id="AUTH-SECOND",
+            gateway_reference="REF-SECOND",
+            gateway_transaction_id="TXN-SECOND",
         )
 
-        confirm_order_payment(
-            order.id,
-        )
+        with pytest.raises(
+            ValidationError,
+            match="Multiple successful payments found",
+        ):
+            confirm_order_payment(order.id)
 
-        old_payment.refresh_from_db()
-        latest.refresh_from_db()
+        success_payment.refresh_from_db()
+        second_payment.refresh_from_db()
+        order.refresh_from_db()
 
-        assert latest.is_consumed is True
-        assert old_payment.is_consumed is False
+        assert success_payment.is_consumed is False
+        assert second_payment.is_consumed is False
+        assert order.status == OrderStatusType.pending
 
     def test_ignore_failed_payments(
         self,

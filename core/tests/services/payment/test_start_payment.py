@@ -166,6 +166,32 @@ class TestStartPayment:
         assert exc.value.retryable is True
         mock_initiate.assert_not_called()
 
+    def test_successful_payment_blocks_new_payment(self, payment_factory):
+        order = OrderFactory(payable=True)
+        payment_factory(
+            order=order,
+            status=PaymentStatusType.SUCCESS,
+        )
+
+        with pytest.raises(
+            PaymentCreationForbiddenError,
+            match="successful Payment already exists",
+        ):
+            PaymentService.start_payment(
+                order,
+                callback_url=self.CALLBACK_URL,
+            )
+
+        assert (
+            PaymentModel.objects
+            .filter(
+                order=order,
+                status=PaymentStatusType.SUCCESS,
+            )
+            .count()
+            == 1
+        )
+
     def test_expired_order_rejected(self):
         order = OrderFactory(expired=True)
 

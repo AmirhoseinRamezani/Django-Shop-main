@@ -1,0 +1,165 @@
+--- a/payment/services/services.py	2026-10-01 00:38:15.000000000 +0000
++++ b/payment/services/services.py	2026-10-01 03:55:09.699199934 +0000
+@@ -87,6 +87,31 @@
+                     "Multiple pending Payments exist for one Order."
+                 )
+ 
++            successful_payments = list(
++                PaymentRepository
++                .successful_for_order(locked_order.pk)
++                .select_for_update()
++                .order_by(
++                    "-updated_date",
++                    "-id",
++                )
++            )
++
++            if len(successful_payments) > 1:
++                raise PaymentInvariantViolation(
++                    "Multiple successful Payments exist for one Order."
++                )
++
++            if successful_payments:
++                if pending_payments:
++                    raise PaymentInvariantViolation(
++                        "Order has both successful and pending Payments."
++                    )
++
++                raise PaymentCreationForbiddenError(
++                    "A successful Payment already exists for this Order."
++                )
++
+             if pending_payments:
+                 payment = pending_payments[0]
+                 attempts = list(
+--- a/order/services/confirm_payment.py	2026-10-01 00:38:15.000000000 +0000
++++ b/order/services/confirm_payment.py	2026-10-01 03:55:09.699316668 +0000
+@@ -73,10 +73,10 @@
+         )
+ 
+     # ===================================
+-    # 3. FIND LATEST SUCCESSFUL PAYMENT
+-    # ===================================
++    # 3. FIND THE UNIQUE SUCCESSFUL PAYMENT
++    # =======================================
+ 
+-    payment = (
++    successful_payments = list(
+         PaymentRepository
+         .successful_for_order(order.id)
+         .select_for_update()
+@@ -84,14 +84,20 @@
+             "-updated_date",
+             "-id",
+         )
+-        .first()
+     )
+ 
+-    if payment is None:
++    if not successful_payments:
+         raise ValidationError(
+             _("No successful payment found")
+         )
+ 
++    if len(successful_payments) > 1:
++        raise ValidationError(
++            _("Multiple successful payments found for Order")
++        )
++
++    payment = successful_payments[0]
++
+     PaymentPolicy.validate_order_financial_snapshot(
+         payment,
+         order,
+--- a/tests/services/payment/test_start_payment.py	2026-10-01 00:38:16.000000000 +0000
++++ b/tests/services/payment/test_start_payment.py	2026-10-01 03:55:09.699365801 +0000
+@@ -166,6 +166,32 @@
+         assert exc.value.retryable is True
+         mock_initiate.assert_not_called()
+ 
++    def test_successful_payment_blocks_new_payment(self, payment_factory):
++        order = OrderFactory(payable=True)
++        payment_factory(
++            order=order,
++            status=PaymentStatusType.SUCCESS,
++        )
++
++        with pytest.raises(
++            PaymentCreationForbiddenError,
++            match="successful Payment already exists",
++        ):
++            PaymentService.start_payment(
++                order,
++                callback_url=self.CALLBACK_URL,
++            )
++
++        assert (
++            PaymentModel.objects
++            .filter(
++                order=order,
++                status=PaymentStatusType.SUCCESS,
++            )
++            .count()
++            == 1
++        )
++
+     def test_expired_order_rejected(self):
+         order = OrderFactory(expired=True)
+ 
+--- a/tests/services/order/test_confirm_payment.py	2026-10-01 00:38:16.000000000 +0000
++++ b/tests/services/order/test_confirm_payment.py	2026-10-01 03:55:09.699414733 +0000
+@@ -441,35 +441,37 @@
+ 
+ class TestMultiplePayments:
+ 
+-    def test_latest_success_payment_used(
++    def test_multiple_success_payments_are_rejected(
+         self,
+         order,
+         success_payment,
+         payment_factory,
+     ):
+-        old_payment = success_payment
+-
+-        latest = payment_factory(
++        second_payment = payment_factory(
+             order=order,
+             status=PaymentStatusType.SUCCESS,
+         )
+ 
+         _make_success_attempt(
+-            latest,
+-            authority_id="AUTH-LATEST",
+-            gateway_reference="REF-LATEST",
+-            gateway_transaction_id="TXN-LATEST",
+-        )
+-
+-        confirm_order_payment(
+-            order.id,
++            second_payment,
++            authority_id="AUTH-SECOND",
++            gateway_reference="REF-SECOND",
++            gateway_transaction_id="TXN-SECOND",
+         )
+ 
+-        old_payment.refresh_from_db()
+-        latest.refresh_from_db()
+-
+-        assert latest.is_consumed is True
+-        assert old_payment.is_consumed is False
++        with pytest.raises(
++            ValidationError,
++            match="Multiple successful payments found",
++        ):
++            confirm_order_payment(order.id)
++
++        success_payment.refresh_from_db()
++        second_payment.refresh_from_db()
++        order.refresh_from_db()
++
++        assert success_payment.is_consumed is False
++        assert second_payment.is_consumed is False
++        assert order.status == OrderStatusType.pending
+ 
+     def test_ignore_failed_payments(
+         self,
