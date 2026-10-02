@@ -117,6 +117,14 @@ class OrderStateMachine:
             order.paid_date = timezone.now()
             update_fields.append("paid_date")
 
+        if (
+            to_status == OrderStatusType.cancelled
+            and order.cancelled_date is None
+        ):
+            order.cancelled_date = timezone.now()
+            update_fields.append("cancelled_date")
+
+        
         order.save(
             update_fields=update_fields,
         )
