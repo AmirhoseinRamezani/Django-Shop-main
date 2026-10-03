@@ -3,6 +3,10 @@ from unittest.mock import patch
 import pytest
 
 from payment.models import PaymentAttempt
+from order.events.order_event import OrderEventType
+from order.services.confirm_payment import confirm_order_payment
+from django.core.exceptions import ValidationError
+from django.db import close_old_connections
 from payment.enums import PaymentAttemptStatus, PaymentGateway, PaymentStatusType
 from payment.providers.base import GatewayCallback, GatewayVerificationResult
 from payment.services.callback import verify_callback
@@ -174,3 +178,139 @@ def test_late_callback_cannot_resurrect_old_attempt_after_retry():
     assert old_attempt.status == PaymentAttemptStatus.FAILED
     assert new_attempt.status == PaymentAttemptStatus.PENDING
     assert new_attempt.authority_id == "AUTH-NEW-RETRY"
+
+def test_confirm_while_callback_is_inside_provider_http():
+    import threading
+
+    payment = PaymentFactory()
+    attempt = PaymentAttemptFactory(
+        payment=payment,
+        attempt_number=1,
+        status=PaymentAttemptStatus.PENDING,
+        authority_id="AUTH-CALLBACK-CONFIRM-RACE",
+    )
+
+    gateway_entered = threading.Event()
+    release_gateway = threading.Event()
+    errors = []
+
+    result = GatewayVerificationResult(
+        success=True,
+        gateway=PaymentGateway.ZARINPAL,
+        gateway_reference="REF-CALLBACK-CONFIRM-RACE",
+        gateway_transaction_id="TX-CALLBACK-CONFIRM-RACE",
+        response_code="100",
+        message="verified",
+        amount=payment.amount,
+        currency=payment.currency,
+    )
+
+    def verify_gateway(*args, **kwargs):
+        gateway_entered.set()
+        assert release_gateway.wait(timeout=10)
+        return result
+
+    def callback_worker():
+        close_old_connections()
+        try:
+            verify_callback(
+                callback=GatewayCallback(
+                    gateway=PaymentGateway.ZARINPAL,
+                    authority=attempt.authority_id,
+                )
+            )
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            close_old_connections()
+
+    with patch(
+        "payment.services.verify.GatewayService.verify",
+        side_effect=verify_gateway,
+    ):
+        thread = threading.Thread(target=callback_worker)
+        thread.start()
+
+        assert gateway_entered.wait(timeout=10)
+
+        with pytest.raises(
+            ValidationError,
+            match="No successful payment found",
+        ):
+            confirm_order_payment(payment.order_id)
+
+        release_gateway.set()
+        thread.join(timeout=10)
+
+    assert not thread.is_alive()
+    assert errors == []
+
+    payment.refresh_from_db()
+    attempt.refresh_from_db()
+    payment.order.refresh_from_db()
+
+    assert payment.status == PaymentStatusType.SUCCESS
+    assert payment.is_consumed is True
+    assert attempt.status == PaymentAttemptStatus.SUCCESS
+    assert attempt.payment_id == payment.pk
+    assert payment.order.status == OrderStatusType.paid
+    assert payment.order.events.filter(
+        type=OrderEventType.PAID,
+    ).count() == 1
+
+
+def test_callback_success_then_confirm_is_idempotent():
+    payment = PaymentFactory()
+    attempt = PaymentAttemptFactory(
+        payment=payment,
+        attempt_number=1,
+        status=PaymentAttemptStatus.PENDING,
+        authority_id="AUTH-CALLBACK-CONFIRM-IDEMPOTENT",
+    )
+
+    result = GatewayVerificationResult(
+        success=True,
+        gateway=PaymentGateway.ZARINPAL,
+        gateway_reference="REF-CALLBACK-CONFIRM-IDEMPOTENT",
+        gateway_transaction_id="TX-CALLBACK-CONFIRM-IDEMPOTENT",
+        response_code="100",
+        message="verified",
+        amount=payment.amount,
+        currency=payment.currency,
+    )
+
+    with patch(
+        "payment.services.verify.GatewayService.verify",
+        return_value=result,
+    ):
+        returned_payment = verify_callback(
+            callback=GatewayCallback(
+                gateway=PaymentGateway.ZARINPAL,
+                authority=attempt.authority_id,
+            )
+        )
+
+    payment.refresh_from_db()
+    attempt.refresh_from_db()
+    payment.order.refresh_from_db()
+
+    assert returned_payment.pk == payment.pk
+    assert payment.status == PaymentStatusType.SUCCESS
+    assert payment.is_consumed is True
+    assert attempt.status == PaymentAttemptStatus.SUCCESS
+    assert payment.order.status == OrderStatusType.paid
+
+    paid_events_before = payment.order.events.filter(
+        type=OrderEventType.PAID,
+    ).count()
+
+    confirmed_order = confirm_order_payment(payment.order_id)
+
+    confirmed_order.refresh_from_db()
+
+    assert confirmed_order.status == OrderStatusType.paid
+    assert payment.is_consumed is True
+    assert confirmed_order.events.filter(
+        type=OrderEventType.PAID,
+    ).count() == paid_events_before == 1
+
