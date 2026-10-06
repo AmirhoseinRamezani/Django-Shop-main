@@ -131,7 +131,7 @@ def confirm_order_payment(
     # 5. PAYMENT -> ATTEMPT
     # ===================================
 
-    attempt = (
+    successful_attempts = list(
         PaymentAttemptRepository
         .successful_for_payment(payment.id)
         .select_for_update()
@@ -139,13 +139,20 @@ def confirm_order_payment(
             "-attempt_number",
             "-id",
         )
-        .first()
     )
 
-    if attempt is None:
+    if not successful_attempts:
         raise ValidationError(
             _("No successful payment attempt found")
         )
+    
+    if len(successful_attempts) > 1:
+        raise ValidationError(
+            _("Multiple successful payment attempts found for Payment")
+        )
+
+    attempt = successful_attempts[0]
+ 
 
     if attempt.payment_id != payment.id:
         raise ValidationError(
