@@ -3,6 +3,7 @@
 from decimal import Decimal
 
 import pytest
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 
 from payment.enums import PaymentStatusType
@@ -94,6 +95,26 @@ class TestPaymentRepository:
         assert fresh.order_id == original_order_id
         assert fresh.status == PaymentStatusType.FAILED
 
+    def test_save_rejects_terminal_status_rewrite(self, payment):
+        payment.succeed()
+        PaymentRepository.save(payment, update_fields=["status"])
+
+        payment.status = PaymentStatusType.FAILED
+        with pytest.raises(ValidationError, match="Invalid Payment transition"):
+            PaymentRepository.save(payment, update_fields=["status"])
+
+        fresh = PaymentRepository.get(payment.pk)
+        assert fresh.status == PaymentStatusType.SUCCESS
+
+    def test_save_revalidates_aggregate_invariants(self, payment):
+        payment.is_consumed = True
+
+        with pytest.raises(ValidationError, match="Only successful payments"):
+            PaymentRepository.save(payment, update_fields=["is_consumed"])
+
+        fresh = PaymentRepository.get(payment.pk)
+        assert fresh.is_consumed is False
+
     def test_save_uses_compare_and_swap(self, payment):
         first = PaymentRepository.get(payment.pk)
         stale = PaymentRepository.get(payment.pk)
@@ -102,7 +123,10 @@ class TestPaymentRepository:
         PaymentRepository.save(first, update_fields=["status"])
 
         stale.fail()
-        with pytest.raises(PaymentStaleVersionError):
+        with pytest.raises(
+            PaymentStaleVersionError,
+            match="expected_version=1, persisted_version=2",
+        ):
             PaymentRepository.save(stale, update_fields=["status"])
 
         fresh = PaymentRepository.get(payment.pk)

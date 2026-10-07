@@ -1,5 +1,6 @@
 # tests/models/test_order.py
 import pytest
+from django.core.exceptions import ValidationError
 
 from django.utils import timezone
 from datetime import timedelta
@@ -79,6 +80,20 @@ class TestOrderModel:
         order.refresh_from_db()
 
         assert order.status == OrderStatusType.failed
+
+    def test_mark_paid_uses_state_machine(self, cancelled_order):
+        with pytest.raises(ValidationError):
+            cancelled_order.mark_paid()
+
+        cancelled_order.refresh_from_db()
+        assert cancelled_order.status == OrderStatusType.cancelled
+
+    def test_mark_failed_uses_state_machine(self, paid_order):
+        with pytest.raises(ValidationError):
+            paid_order.mark_failed()
+
+        paid_order.refresh_from_db()
+        assert paid_order.status == OrderStatusType.paid
 
     def test_is_paid(self, paid_order):
 

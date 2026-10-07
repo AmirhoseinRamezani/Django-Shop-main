@@ -283,18 +283,44 @@ class PaymentModel(models.Model):
         PaymentStatusType.FAILED: set(),
     }
 
-    def _transition_to(self, state: PaymentStatusType) -> None:
-        current = self.state
-        if current == state:
+    def validate_transition_from(
+        self,
+        from_status: PaymentStatusType,
+    ) -> None:
+        """Validate persistence of the current state from a stored state."""
+        current = PaymentStatusType(from_status)
+        target = self.state
+
+        if current == target:
             return
+
         allowed = self._ALLOWED_TRANSITIONS.get(current, set())
-        if state not in allowed:
+        if target not in allowed:
             raise ValidationError(
                 _(
                     "Invalid Payment transition: %(source)s -> %(target)s."
-                ) % {"source": current.label, "target": state.label}
+                ) % {
+                    "source": current.label,
+                    "target": target.label,
+                }
             )
-        self.status = state
+
+    def _transition_to(self, state: PaymentStatusType) -> None:
+        current = self.state
+        target = PaymentStatusType(state)
+        if current == target:
+            return
+        allowed = self._ALLOWED_TRANSITIONS.get(current, set())
+        if target not in allowed:
+            raise ValidationError(
+                _(
+                    "Invalid Payment transition: %(source)s -> %(target)s."
+                ) % {
+                    "source": current.label,
+                    "target": target.label,
+                }
+            )
+        self.status = target
 
     def require_pending(self) -> None:
         self._require_state(PaymentStatusType.PENDING)
