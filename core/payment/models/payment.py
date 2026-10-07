@@ -251,6 +251,29 @@ class PaymentModel(models.Model):
         if errors:
             raise ValidationError(errors)
 
+    def validate_transition_from(
+        self,
+        from_status: PaymentStatusType,
+    ) -> None:
+        """Validate persistence of the current state from a stored state."""
+        current = PaymentStatusType(from_status)
+        target = self.state
+
+        if current == target:
+            return
+
+        allowed = self._ALLOWED_TRANSITIONS.get(current, set())
+        if target not in allowed:
+            raise ValidationError(
+                _(
+                    "Invalid Payment transition: %(source)s -> %(target)s."
+                )
+                % {
+                    "source": current.label,
+                    "target": target.label,
+                }
+            )
+
     def __str__(self) -> str:
         return (
             f"Payment(id={self.pk}, order={self.order_id}, "
