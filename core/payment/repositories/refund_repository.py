@@ -7,6 +7,11 @@ from typing import Any, ClassVar
 from django.db.models import QuerySet, Sum
 
 from payment.enums import RefundStatus
+from payment.exceptions import (
+    PaymentConcurrencyError,
+    PaymentGatewayIdentityConflictError,
+    PaymentInvalidTransitionError,
+)
 from payment.models.refund import Refund
 from payment.repositories.base import BaseRepository
 
@@ -851,9 +856,88 @@ class RefundRepository(BaseRepository[Refund]):
                 )
             )
 
-        refund.save(
-            update_fields=fields,
+        identity_fields = (
+            "gateway_reference",
+            "gateway_transaction_id",
         )
+        lifecycle_fields = (
+            "status",
+            "finished_at",
+            "failure_reason",
+            "latency_ms",
+        )
+        persisted_fields = tuple(dict.fromkeys((
+            "status",
+            *identity_fields,
+            *lifecycle_fields,
+        )))
+        persisted = (
+            cls.model.objects
+            .filter(pk=refund.pk)
+            .values(*persisted_fields)
+            .first()
+        )
+        if persisted is None:
+            raise PaymentConcurrencyError(
+                "Refund disappeared during persistence.",
+                details={"refund_id": refund.pk},
+            )
+
+        current_status = persisted["status"]
+        target_status = refund.status
+        if "status" in fields and target_status != current_status:
+            allowed = refund._ALLOWED_TRANSITIONS.get(current_status, set())
+            if target_status not in allowed:
+                raise PaymentInvalidTransitionError(
+                    "Persisted Refund lifecycle transition is invalid.",
+                    source_state=str(current_status),
+                    target_state=str(target_status),
+                    details={"refund_id": refund.pk},
+                )
+
+        # Gateway identities are write-once; stale instances may not clear or
+        # replace provider evidence already persisted.
+        for field in identity_fields:
+            if field not in fields:
+                continue
+            stored_value = persisted[field] or ""
+            incoming_value = getattr(refund, field) or ""
+            if stored_value and incoming_value != stored_value:
+                raise PaymentGatewayIdentityConflictError(
+                    f"Persisted Refund {field} cannot be overwritten.",
+                    details={"refund_id": refund.pk, "identity": field},
+                )
+
+        if current_status in cls.TERMINAL_STATUSES:
+            for field in lifecycle_fields:
+                if field in fields and getattr(refund, field) != persisted[field]:
+                    raise PaymentInvalidTransitionError(
+                        "Terminal Refund lifecycle evidence is immutable.",
+                        source_state=str(current_status),
+                        target_state=str(target_status),
+                        details={"refund_id": refund.pk, "field": field},
+                    )
+
+        # Validate the in-memory domain object after checking the persisted
+        # lifecycle and identity invariants.
+        refund.clean()
+
+        guards = {
+            "pk": refund.pk,
+            "status": current_status,
+            **{field: persisted[field] for field in identity_fields},
+        }
+        if set(fields).intersection(lifecycle_fields):
+            guards.update({field: persisted[field] for field in lifecycle_fields})
+
+        rows_affected = cls.model.objects.filter(**guards).update(
+            **{field: getattr(refund, field) for field in fields}
+        )
+        if rows_affected != 1:
+            raise PaymentConcurrencyError(
+                "Refund changed concurrently; reload before retrying.",
+                details={"refund_id": refund.pk},
+            )
 
         return refund
 

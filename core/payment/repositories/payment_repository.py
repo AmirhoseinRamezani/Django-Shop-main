@@ -809,6 +809,8 @@ class PaymentRepository(
             .filter(
                 pk=payment_id,
                 version=expected_version,
+                status=PaymentStatusType.SUCCESS,
+                is_consumed=False,
             )
             .update(
                 is_consumed=True,

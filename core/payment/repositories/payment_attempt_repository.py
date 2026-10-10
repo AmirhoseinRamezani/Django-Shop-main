@@ -8,6 +8,11 @@ from django.db.models import Max, QuerySet
 from django.utils import timezone
 
 from payment.enums import PaymentAttemptStatus
+from payment.exceptions import (
+    PaymentAttemptIdentityConflictError,
+    PaymentAttemptInvalidTransitionError,
+    PaymentConcurrencyError,
+)
 from payment.models import PaymentAttempt
 from payment.repositories.base import BaseRepository
 
@@ -1185,20 +1190,102 @@ class PaymentAttemptRepository(
                 )
             )
 
-        # Validate domain invariants without running ORM-backed field/constraint
-        # validation on the update hot path.
-        #
-        # ``full_clean()`` is intentionally used by ``create()`` before INSERT,
-        # but on an existing attempt it also evaluates database-backed
-        # constraints and foreign-key validation, producing a large number of
-        # extra SELECTs for a single state transition. PostgreSQL remains the
-        # final authority for those structural constraints; this path only needs
-        # the model's deterministic in-memory invariants before UPDATE.
-        attempt.clean()
-        
-        attempt.save(
-            update_fields=fields,
+        identity_fields = (
+            "authority_id",
+            "gateway_reference",
+            "gateway_transaction_id",
         )
+        lifecycle_fields = (
+            "status",
+            "finished_at",
+            "failure_reason",
+            "latency_ms",
+        )
+        persisted_fields = tuple(dict.fromkeys((
+            "status",
+            *identity_fields,
+            *lifecycle_fields,
+        )))
+        persisted = (
+            cls.model.objects
+            .filter(pk=attempt.pk)
+            .values(*persisted_fields)
+            .first()
+        )
+        if persisted is None:
+            raise PaymentConcurrencyError(
+                "PaymentAttempt disappeared during persistence.",
+                details={"attempt_id": attempt.pk},
+            )
+
+        current_status = persisted["status"]
+        target_status = attempt.status
+        if "status" in fields and target_status != current_status:
+            allowed = attempt._ALLOWED_TRANSITIONS.get(current_status, set())
+            if target_status not in allowed:
+                raise PaymentAttemptInvalidTransitionError(
+                    "Persisted PaymentAttempt lifecycle transition is invalid.",
+                    source_state=str(current_status),
+                    target_state=str(target_status),
+                    attempt_id=attempt.pk,
+                )
+
+        # Gateway identities are write-once. A stale/empty instance must not
+        # erase persisted evidence, and a conflicting value must fail closed.
+        for field in identity_fields:
+            if field not in fields:
+                continue
+            stored_value = persisted[field] or ""
+            incoming_value = getattr(attempt, field) or ""
+            if stored_value and incoming_value != stored_value:
+                raise PaymentAttemptIdentityConflictError(
+                    f"Persisted PaymentAttempt {field} cannot be overwritten.",
+                    details={"attempt_id": attempt.pk, "identity": field},
+                )
+
+        # Once terminal, lifecycle evidence cannot be rewritten. Permit only
+        # enrichment of a previously unknown latency value.
+        if current_status in cls.TERMINAL_STATUSES:
+            for field in lifecycle_fields:
+                if field not in fields:
+                    continue
+                incoming_value = getattr(attempt, field)
+                latency_enrichment = (
+                    field == "latency_ms"
+                    and persisted[field] is None
+                    and incoming_value is not None
+                )
+                if incoming_value != persisted[field] and not latency_enrichment:
+                    raise PaymentAttemptInvalidTransitionError(
+                        "Terminal PaymentAttempt lifecycle evidence is immutable.",
+                        source_state=str(current_status),
+                        target_state=str(target_status),
+                        attempt_id=attempt.pk,
+                        details={"field": field},
+                    )
+
+        # Keep deterministic model validation, but do it after persisted-state
+        # checks so a lifecycle conflict is reported at the write boundary.
+        attempt.clean()
+
+        # Compare-and-swap protects both lifecycle data and gateway identity
+        # against writes made after the read above.
+        guards = {
+            "pk": attempt.pk,
+            "status": current_status,
+            **{field: persisted[field] for field in identity_fields},
+        }
+        if set(fields).intersection(lifecycle_fields):
+            guards.update({field: persisted[field] for field in lifecycle_fields})
+
+        rows_affected = cls.model.objects.filter(**guards).update(
+            **{field: getattr(attempt, field) for field in fields}
+        )
+        if rows_affected != 1:
+            raise PaymentConcurrencyError(
+                "PaymentAttempt changed concurrently; reload before retrying.",
+                details={"attempt_id": attempt.pk},
+            )
 
         return attempt
 

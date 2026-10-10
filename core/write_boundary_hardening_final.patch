@@ -1,0 +1,463 @@
+diff --git a/order/models.py b/order/models.py
+index c529715..9d899aa 100644
+--- a/order/models.py
++++ b/order/models.py
+@@ -538,20 +538,12 @@ class OrderModel(models.Model):
+         )
+ 
+     def mark_cancelled(self):
++        """Cancel this order through the canonical state machine."""
++        from order.services.state_machine import OrderStateMachine
+ 
+-        self.status = (
+-            OrderStatusType.cancelled
+-        )
+-
+-        self.cancelled_date = (
+-            timezone.now()
+-        )
+-
+-        self.save(
+-            update_fields=[
+-                "status",
+-                "cancelled_date",
+-            ]
++        return OrderStateMachine.transition(
++            order=self,
++            to_status=OrderStatusType.cancelled,
+         )
+     
+     def __str__(self):
+diff --git a/payment/repositories/payment_attempt_repository.py b/payment/repositories/payment_attempt_repository.py
+index 5b14734..428b046 100644
+--- a/payment/repositories/payment_attempt_repository.py
++++ b/payment/repositories/payment_attempt_repository.py
+@@ -8,6 +8,11 @@ from django.db.models import Max, QuerySet
+ from django.utils import timezone
+ 
+ from payment.enums import PaymentAttemptStatus
++from payment.exceptions import (
++    PaymentAttemptIdentityConflictError,
++    PaymentAttemptInvalidTransitionError,
++    PaymentConcurrencyError,
++)
+ from payment.models import PaymentAttempt
+ from payment.repositories.base import BaseRepository
+ 
+@@ -1185,20 +1190,102 @@ class PaymentAttemptRepository(
+                 )
+             )
+ 
+-        # Validate domain invariants without running ORM-backed field/constraint
+-        # validation on the update hot path.
+-        #
+-        # ``full_clean()`` is intentionally used by ``create()`` before INSERT,
+-        # but on an existing attempt it also evaluates database-backed
+-        # constraints and foreign-key validation, producing a large number of
+-        # extra SELECTs for a single state transition. PostgreSQL remains the
+-        # final authority for those structural constraints; this path only needs
+-        # the model's deterministic in-memory invariants before UPDATE.
++        identity_fields = (
++            "authority_id",
++            "gateway_reference",
++            "gateway_transaction_id",
++        )
++        lifecycle_fields = (
++            "status",
++            "finished_at",
++            "failure_reason",
++            "latency_ms",
++        )
++        persisted_fields = tuple(dict.fromkeys((
++            "status",
++            *identity_fields,
++            *lifecycle_fields,
++        )))
++        persisted = (
++            cls.model.objects
++            .filter(pk=attempt.pk)
++            .values(*persisted_fields)
++            .first()
++        )
++        if persisted is None:
++            raise PaymentConcurrencyError(
++                "PaymentAttempt disappeared during persistence.",
++                details={"attempt_id": attempt.pk},
++            )
++
++        current_status = persisted["status"]
++        target_status = attempt.status
++        if "status" in fields and target_status != current_status:
++            allowed = attempt._ALLOWED_TRANSITIONS.get(current_status, set())
++            if target_status not in allowed:
++                raise PaymentAttemptInvalidTransitionError(
++                    "Persisted PaymentAttempt lifecycle transition is invalid.",
++                    source_state=str(current_status),
++                    target_state=str(target_status),
++                    attempt_id=attempt.pk,
++                )
++
++        # Gateway identities are write-once. A stale/empty instance must not
++        # erase persisted evidence, and a conflicting value must fail closed.
++        for field in identity_fields:
++            if field not in fields:
++                continue
++            stored_value = persisted[field] or ""
++            incoming_value = getattr(attempt, field) or ""
++            if stored_value and incoming_value != stored_value:
++                raise PaymentAttemptIdentityConflictError(
++                    f"Persisted PaymentAttempt {field} cannot be overwritten.",
++                    details={"attempt_id": attempt.pk, "identity": field},
++                )
++
++        # Once terminal, lifecycle evidence cannot be rewritten. Permit only
++        # enrichment of a previously unknown latency value.
++        if current_status in cls.TERMINAL_STATUSES:
++            for field in lifecycle_fields:
++                if field not in fields:
++                    continue
++                incoming_value = getattr(attempt, field)
++                latency_enrichment = (
++                    field == "latency_ms"
++                    and persisted[field] is None
++                    and incoming_value is not None
++                )
++                if incoming_value != persisted[field] and not latency_enrichment:
++                    raise PaymentAttemptInvalidTransitionError(
++                        "Terminal PaymentAttempt lifecycle evidence is immutable.",
++                        source_state=str(current_status),
++                        target_state=str(target_status),
++                        attempt_id=attempt.pk,
++                        details={"field": field},
++                    )
++
++        # Keep deterministic model validation, but do it after persisted-state
++        # checks so a lifecycle conflict is reported at the write boundary.
+         attempt.clean()
+-        
+-        attempt.save(
+-            update_fields=fields,
++
++        # Compare-and-swap protects both lifecycle data and gateway identity
++        # against writes made after the read above.
++        guards = {
++            "pk": attempt.pk,
++            "status": current_status,
++            **{field: persisted[field] for field in identity_fields},
++        }
++        if set(fields).intersection(lifecycle_fields):
++            guards.update({field: persisted[field] for field in lifecycle_fields})
++
++        rows_affected = cls.model.objects.filter(**guards).update(
++            **{field: getattr(attempt, field) for field in fields}
+         )
++        if rows_affected != 1:
++            raise PaymentConcurrencyError(
++                "PaymentAttempt changed concurrently; reload before retrying.",
++                details={"attempt_id": attempt.pk},
++            )
+ 
+         return attempt
+ 
+diff --git a/payment/repositories/payment_repository.py b/payment/repositories/payment_repository.py
+index 463940f..4f34eaf 100644
+--- a/payment/repositories/payment_repository.py
++++ b/payment/repositories/payment_repository.py
+@@ -876,6 +876,8 @@ class PaymentRepository(
+             .filter(
+                 pk=payment_id,
+                 version=expected_version,
++                status=PaymentStatusType.SUCCESS,
++                is_consumed=False,
+             )
+             .update(
+                 is_consumed=True,
+diff --git a/payment/repositories/refund_repository.py b/payment/repositories/refund_repository.py
+index a3c7644..2e610dd 100644
+--- a/payment/repositories/refund_repository.py
++++ b/payment/repositories/refund_repository.py
+@@ -7,6 +7,11 @@ from typing import Any, ClassVar
+ from django.db.models import QuerySet, Sum
+ 
+ from payment.enums import RefundStatus
++from payment.exceptions import (
++    PaymentConcurrencyError,
++    PaymentGatewayIdentityConflictError,
++    PaymentInvalidTransitionError,
++)
+ from payment.models.refund import Refund
+ from payment.repositories.base import BaseRepository
+ 
+@@ -851,9 +856,88 @@ class RefundRepository(BaseRepository[Refund]):
+                 )
+             )
+ 
+-        refund.save(
+-            update_fields=fields,
++        identity_fields = (
++            "gateway_reference",
++            "gateway_transaction_id",
+         )
++        lifecycle_fields = (
++            "status",
++            "finished_at",
++            "failure_reason",
++            "latency_ms",
++        )
++        persisted_fields = tuple(dict.fromkeys((
++            "status",
++            *identity_fields,
++            *lifecycle_fields,
++        )))
++        persisted = (
++            cls.model.objects
++            .filter(pk=refund.pk)
++            .values(*persisted_fields)
++            .first()
++        )
++        if persisted is None:
++            raise PaymentConcurrencyError(
++                "Refund disappeared during persistence.",
++                details={"refund_id": refund.pk},
++            )
++
++        current_status = persisted["status"]
++        target_status = refund.status
++        if "status" in fields and target_status != current_status:
++            allowed = refund._ALLOWED_TRANSITIONS.get(current_status, set())
++            if target_status not in allowed:
++                raise PaymentInvalidTransitionError(
++                    "Persisted Refund lifecycle transition is invalid.",
++                    source_state=str(current_status),
++                    target_state=str(target_status),
++                    details={"refund_id": refund.pk},
++                )
++
++        # Gateway identities are write-once; stale instances may not clear or
++        # replace provider evidence already persisted.
++        for field in identity_fields:
++            if field not in fields:
++                continue
++            stored_value = persisted[field] or ""
++            incoming_value = getattr(refund, field) or ""
++            if stored_value and incoming_value != stored_value:
++                raise PaymentGatewayIdentityConflictError(
++                    f"Persisted Refund {field} cannot be overwritten.",
++                    details={"refund_id": refund.pk, "identity": field},
++                )
++
++        if current_status in cls.TERMINAL_STATUSES:
++            for field in lifecycle_fields:
++                if field in fields and getattr(refund, field) != persisted[field]:
++                    raise PaymentInvalidTransitionError(
++                        "Terminal Refund lifecycle evidence is immutable.",
++                        source_state=str(current_status),
++                        target_state=str(target_status),
++                        details={"refund_id": refund.pk, "field": field},
++                    )
++
++        # Validate the in-memory domain object after checking the persisted
++        # lifecycle and identity invariants.
++        refund.clean()
++
++        guards = {
++            "pk": refund.pk,
++            "status": current_status,
++            **{field: persisted[field] for field in identity_fields},
++        }
++        if set(fields).intersection(lifecycle_fields):
++            guards.update({field: persisted[field] for field in lifecycle_fields})
++
++        rows_affected = cls.model.objects.filter(**guards).update(
++            **{field: getattr(refund, field) for field in fields}
++        )
++        if rows_affected != 1:
++            raise PaymentConcurrencyError(
++                "Refund changed concurrently; reload before retrying.",
++                details={"refund_id": refund.pk},
++            )
+ 
+         return refund
+ 
+diff --git a/tests/payment/repositories/test_write_boundary_hardening.py b/tests/payment/repositories/test_write_boundary_hardening.py
+new file mode 100644
+index 0000000..3623f94
+--- /dev/null
++++ b/tests/payment/repositories/test_write_boundary_hardening.py
+@@ -0,0 +1,176 @@
++"""Write-boundary regression tests for lifecycle and identity persistence."""
++
++import pytest
++from django.core.exceptions import ValidationError
++from django.utils import timezone
++
++from order.models import OrderStatusType
++from order.services.inventory import InventoryService
++from order.services.state_machine import OrderStateMachine
++from payment.enums import PaymentAttemptStatus, PaymentStatusType, RefundStatus
++from payment.exceptions import (
++    PaymentAttemptIdentityConflictError,
++    PaymentAttemptInvalidTransitionError,
++    PaymentConcurrencyError,
++    PaymentGatewayIdentityConflictError,
++    PaymentInvalidTransitionError,
++)
++from payment.repositories.payment_attempt_repository import PaymentAttemptRepository
++from payment.repositories.payment_repository import PaymentRepository
++from payment.repositories.refund_repository import RefundRepository
++from tests.factories.order import OrderFactory
++from tests.factories.payment import PaymentAttemptFactory, PaymentFactory, RefundFactory
++
++
++pytestmark = pytest.mark.django_db(transaction=True)
++
++
++def test_attempt_terminal_state_cannot_be_rewritten(payment):
++    attempt = PaymentAttemptFactory(payment=payment, success=True)
++    attempt.status = PaymentAttemptStatus.FAILED
++    attempt.failure_reason = "rewritten terminal result"
++
++    with pytest.raises(PaymentAttemptInvalidTransitionError):
++        PaymentAttemptRepository.save_failure(attempt)
++
++    assert PaymentAttemptRepository.get(attempt.pk).status == PaymentAttemptStatus.SUCCESS
++
++
++def test_attempt_gateway_identity_cannot_be_overwritten(payment):
++    attempt = PaymentAttemptFactory(payment=payment, success=True)
++    original = attempt.gateway_reference
++    attempt.gateway_reference = "conflicting-reference"
++
++    with pytest.raises(PaymentAttemptIdentityConflictError):
++        PaymentAttemptRepository.save_gateway_identity(attempt)
++
++    assert PaymentAttemptRepository.get(attempt.pk).gateway_reference == original
++
++
++def test_attempt_cas_rejects_a_racing_lifecycle_write(payment, monkeypatch):
++    attempt = PaymentAttemptFactory(payment=payment)
++    attempt.mark_failed(reason="our attempted result")
++    original_clean = attempt.clean
++
++    def concurrent_write_then_validate():
++        PaymentAttemptRepository.model.objects.filter(pk=attempt.pk).update(
++            status=PaymentAttemptStatus.TIMEOUT,
++            finished_at=timezone.now(),
++            failure_reason="concurrent result",
++            latency_ms=10,
++        )
++        original_clean()
++
++    monkeypatch.setattr(attempt, "clean", concurrent_write_then_validate)
++    with pytest.raises(PaymentConcurrencyError):
++        PaymentAttemptRepository.save_failure(attempt)
++
++    persisted = PaymentAttemptRepository.get(attempt.pk)
++    assert persisted.status == PaymentAttemptStatus.TIMEOUT
++    assert persisted.failure_reason == "concurrent result"
++
++
++def test_refund_terminal_state_cannot_be_rewritten():
++    payment = PaymentFactory(success=True, consumed=True)
++    refund = RefundFactory(payment=payment, success=True)
++    refund.status = RefundStatus.FAILED
++    refund.failure_reason = "rewritten terminal result"
++
++    with pytest.raises(PaymentInvalidTransitionError):
++        RefundRepository.save_failure(refund)
++
++    assert RefundRepository.get(refund.pk).status == RefundStatus.SUCCESS
++
++
++def test_refund_gateway_identity_cannot_be_overwritten():
++    payment = PaymentFactory(success=True, consumed=True)
++    refund = RefundFactory(payment=payment, success=True)
++    original = refund.gateway_reference
++    refund.gateway_reference = "conflicting-refund-reference"
++
++    with pytest.raises(PaymentGatewayIdentityConflictError):
++        RefundRepository.save_success(refund)
++
++    assert RefundRepository.get(refund.pk).gateway_reference == original
++
++
++def test_refund_cas_rejects_a_racing_lifecycle_write(monkeypatch):
++    payment = PaymentFactory(success=True, consumed=True)
++    refund = RefundFactory(payment=payment)
++    refund.mark_failed(reason="our attempted result")
++    original_clean = refund.clean
++
++    def concurrent_write_then_validate():
++        RefundRepository.model.objects.filter(pk=refund.pk).update(
++            status=RefundStatus.SUCCESS,
++            finished_at=timezone.now(),
++            failure_reason="",
++            gateway_reference="CONCURRENT-REF",
++        )
++        original_clean()
++
++    monkeypatch.setattr(refund, "clean", concurrent_write_then_validate)
++    with pytest.raises(PaymentConcurrencyError):
++        RefundRepository.save_failure(refund)
++
++    persisted = RefundRepository.get(refund.pk)
++    assert persisted.status == RefundStatus.SUCCESS
++    assert persisted.gateway_reference == "CONCURRENT-REF"
++
++
++def test_mark_consumed_requires_success_unconsumed_and_current_version():
++    pending = PaymentFactory(status=PaymentStatusType.PENDING, version=3)
++    assert PaymentRepository.mark_consumed_if_current(
++        payment_id=pending.pk, expected_version=3
++    ) is False
++    pending.refresh_from_db()
++    assert pending.is_consumed is False
++
++    successful = PaymentFactory(success=True, consumed=False, version=4)
++    assert PaymentRepository.mark_consumed_if_current(
++        payment_id=successful.pk, expected_version=3
++    ) is False
++    assert PaymentRepository.mark_consumed_if_current(
++        payment_id=successful.pk, expected_version=4
++    ) is True
++    successful.refresh_from_db()
++    assert successful.is_consumed is True
++    assert successful.version == 5
++    assert PaymentRepository.mark_consumed_if_current(
++        payment_id=successful.pk, expected_version=5
++    ) is False
++
++
++def test_model_cancellation_delegates_to_state_machine(monkeypatch):
++    order = OrderFactory()
++    calls = {}
++
++    def transition(*, order, to_status, **kwargs):
++        calls["order_id"] = order.pk
++        calls["to_status"] = to_status
++        return order
++
++    monkeypatch.setattr(OrderStateMachine, "transition", transition)
++    assert order.mark_cancelled().pk == order.pk
++    assert calls == {"order_id": order.pk, "to_status": OrderStatusType.cancelled}
++
++
++def test_paid_order_cannot_be_cancelled_through_model_method():
++    order = OrderFactory(paid=True)
++
++    with pytest.raises(ValidationError):
++        order.mark_cancelled()
++
++    order.refresh_from_db()
++    assert order.status == OrderStatusType.paid
++    assert order.cancelled_date is None
++
++
++def test_pending_order_can_be_cancelled_through_model_method():
++    order = OrderFactory()
++    InventoryService.reserve(order)
++
++    cancelled = order.mark_cancelled()
++    cancelled.refresh_from_db()
++    assert cancelled.status == OrderStatusType.cancelled
++    assert cancelled.cancelled_date is not None

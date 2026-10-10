@@ -545,20 +545,12 @@ class OrderModel(models.Model):
         )
 
     def mark_cancelled(self):
+        """Cancel this order through the canonical state machine."""
+        from order.services.state_machine import OrderStateMachine
 
-        self.status = (
-            OrderStatusType.cancelled
-        )
-
-        self.cancelled_date = (
-            timezone.now()
-        )
-
-        self.save(
-            update_fields=[
-                "status",
-                "cancelled_date",
-            ]
+        return OrderStateMachine.transition(
+            order=self,
+            to_status=OrderStatusType.cancelled,
         )
     
     def __str__(self):
