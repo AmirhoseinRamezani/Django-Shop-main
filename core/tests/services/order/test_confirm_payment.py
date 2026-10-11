@@ -254,10 +254,11 @@ class TestFailures:
     ):
         with pytest.raises(
             ValidationError,
-            match="Consumed Payment is inconsistent with Order state",
+            match="Consumed Payment is inconsistent with Order state or PAID event",
         ):
             confirm_order_payment(
                 order.id,
+                payment_id=consumed_payment.id,
             )
 
     def test_successful_payment_without_successful_attempt(
@@ -441,35 +442,79 @@ class TestIdempotency:
 
 class TestMultiplePayments:
 
-    def test_latest_success_payment_used(
+    def test_ambiguous_success_payments_are_rejected(
         self,
         order,
         success_payment,
         payment_factory,
     ):
-        old_payment = success_payment
-
-        latest = payment_factory(
+        another = payment_factory(
             order=order,
             status=PaymentStatusType.SUCCESS,
         )
-
         _make_success_attempt(
-            latest,
-            authority_id="AUTH-LATEST",
-            gateway_reference="REF-LATEST",
-            gateway_transaction_id="TXN-LATEST",
+            another,
+            authority_id="AUTH-ANOTHER",
+            gateway_reference="REF-ANOTHER",
+            gateway_transaction_id="TXN-ANOTHER",
         )
 
-        confirm_order_payment(
-            order.id,
+        with pytest.raises(
+            ValidationError,
+            match="Multiple successful Payments found for Order",
+        ):
+            confirm_order_payment(order.id)
+
+        success_payment.refresh_from_db()
+        another.refresh_from_db()
+        assert success_payment.is_consumed is False
+        assert another.is_consumed is False
+
+    def test_explicit_payment_id_selects_exact_successful_payment(
+        self,
+        order,
+        success_payment,
+        payment_factory,
+    ):
+        another = payment_factory(
+            order=order,
+            status=PaymentStatusType.SUCCESS,
+        )
+        _make_success_attempt(
+            another,
+            authority_id="AUTH-ANOTHER",
+            gateway_reference="REF-ANOTHER",
+            gateway_transaction_id="TXN-ANOTHER",
         )
 
-        old_payment.refresh_from_db()
-        latest.refresh_from_db()
+        confirm_order_payment(order.id, payment_id=success_payment.id)
 
-        assert latest.is_consumed is True
-        assert old_payment.is_consumed is False
+        success_payment.refresh_from_db()
+        another.refresh_from_db()
+        assert success_payment.is_consumed is True
+        assert another.is_consumed is False
+
+    def test_payment_id_from_another_order_is_rejected(
+        self,
+        order,
+        success_payment,
+        order_factory,
+        payment_factory,
+    ):
+        other_order = order_factory()
+        other_payment = payment_factory(
+            order=other_order,
+            status=PaymentStatusType.SUCCESS,
+        )
+        _make_success_attempt(
+            other_payment,
+            authority_id="AUTH-OTHER-ORDER",
+            gateway_reference="REF-OTHER-ORDER",
+            gateway_transaction_id="TXN-OTHER-ORDER",
+        )
+
+        with pytest.raises(ValidationError, match="No successful payment found"):
+            confirm_order_payment(order.id, payment_id=other_payment.id)
 
     def test_ignore_failed_payments(
         self,

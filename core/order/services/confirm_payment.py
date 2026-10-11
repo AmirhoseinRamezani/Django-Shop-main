@@ -5,6 +5,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils.translation import gettext as _
 
+from order.events.order_event import OrderEventType
 from order.models import (
     OrderModel,
     OrderStatusType,
@@ -29,6 +30,7 @@ from payment.policies import PaymentPolicy
 @transaction.atomic
 def confirm_order_payment(
     order_id: int,
+    payment_id: int | None = None,
 ) -> OrderModel:
     """
     Finalize an Order after a successful Payment.
@@ -42,7 +44,8 @@ def confirm_order_payment(
 
     Responsibilities:
         - lock the Order
-        - find the latest successful Payment
+        - resolve the exact successful Payment when payment_id is supplied
+        - otherwise require a unique successful Payment for the Order
         - lock the Payment
         - resolve and lock its successful Attempt
         - consume the Payment
@@ -76,21 +79,35 @@ def confirm_order_payment(
     # 3. FIND LATEST SUCCESSFUL PAYMENT
     # ===================================
 
-    payment = (
+    successful_payments_query = (
         PaymentRepository
         .successful_for_order(order.id)
         .select_for_update()
-        .order_by(
-            "-updated_date",
-            "-id",
-        )
-        .first()
     )
 
-    if payment is None:
+    if payment_id is not None:
+        successful_payments_query = successful_payments_query.filter(
+            pk=payment_id,
+        )
+
+    successful_payments = list(
+        successful_payments_query.order_by(
+            "-updated_date",
+            "-id",
+        )[:2]
+    )
+
+    if not successful_payments:
         raise ValidationError(
             _("No successful payment found")
         )
+
+    if len(successful_payments) != 1:
+        raise ValidationError(
+            _("Multiple successful Payments found for Order")
+        )
+
+    payment = successful_payments[0]
 
     PaymentPolicy.validate_order_financial_snapshot(
         payment,
@@ -107,10 +124,20 @@ def confirm_order_payment(
         # is idempotently complete only when the Order is already PAID too.
         # Any other combination is a broken cross-aggregate invariant and
         # must not be silently repaired here.
-        if order.status == OrderStatusType.paid:
+        paid_event = (
+            order.events
+            .filter(type=OrderEventType.PAID)
+            .order_by("-id")
+            .first()
+        )
+        if (
+            order.status == OrderStatusType.paid
+            and paid_event is not None
+            and paid_event.payload.get("payment_id") == payment.pk
+        ):
             return order
         raise ValidationError(
-            _("Consumed Payment is inconsistent with Order state")
+            _("Consumed Payment is inconsistent with Order state or PAID event")
         )
 
     if order.status == OrderStatusType.paid:

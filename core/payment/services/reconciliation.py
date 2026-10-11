@@ -124,7 +124,10 @@ class PaymentReconciliationService:
         # Reuse the canonical Order -> Payment consumption workflow. This keeps
         # reconciliation from introducing a second implementation of order-side
         # financial effects.
-        confirm_order_payment(order_id=snapshot.order_id)
+        confirm_order_payment(
+            order_id=snapshot.order_id,
+            payment_id=snapshot.payment_id,
+        )
         return PaymentRepository.get(payment_id)
 
     @classmethod

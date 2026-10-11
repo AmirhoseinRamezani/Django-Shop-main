@@ -1040,7 +1040,12 @@ def _consume_successful_payment(
         # ------------------------------------
 
         if payment.is_consumed:
-            return payment
+            # Validate that this exact Payment is the one bound to the PAID Order.
+            confirm_order_payment(
+                order_id=order.pk,
+                payment_id=payment.pk,
+            )
+            return PaymentRepository.get(payment_id)
 
         # ------------------------------------
         # Order application workflow owns order-side effects.
@@ -1050,6 +1055,7 @@ def _consume_successful_payment(
 
         confirm_order_payment(
             order_id=order.pk,
+            payment_id=payment.pk,
         )
 
         # ------------------------------------
