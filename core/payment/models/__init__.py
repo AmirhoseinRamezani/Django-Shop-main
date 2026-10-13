@@ -18,10 +18,17 @@ from .payment import PaymentModel
 from .payment_attempt import PaymentAttempt
 from .refund import Refund
 from .gateway_log import GatewayLog
-
+from .payment_resolution import (
+    PaymentResolution,
+    PaymentResolutionReason,
+    PaymentResolutionStatus,
+)
 __all__ = [
     "PaymentModel",
     "PaymentAttempt",
     "Refund",
     "GatewayLog",
+    "PaymentResolution",
+    "PaymentResolutionReason",
+    "PaymentResolutionStatus"
 ]

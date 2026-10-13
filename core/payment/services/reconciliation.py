@@ -15,7 +15,7 @@ from payment.repositories.payment_attempt_repository import (
     PaymentAttemptRepository,
 )
 from payment.repositories.payment_repository import PaymentRepository
-from order.services.confirm_payment import confirm_order_payment
+from payment.services.verify import synchronize_successful_payment
 from payment.services.gateway_service import GatewayService
 
 
@@ -124,10 +124,7 @@ class PaymentReconciliationService:
         # Reuse the canonical Order -> Payment consumption workflow. This keeps
         # reconciliation from introducing a second implementation of order-side
         # financial effects.
-        confirm_order_payment(
-            order_id=snapshot.order_id,
-            payment_id=snapshot.payment_id,
-        )
+        synchronize_successful_payment(payment_id=snapshot.payment_id)
         return PaymentRepository.get(payment_id)
 
     @classmethod

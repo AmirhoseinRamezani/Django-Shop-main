@@ -6,6 +6,7 @@ from typing import Any
 
 from cart.cart import CartSession
 from payment.services.verify import verify_payment
+from payment.models import PaymentResolution, PaymentResolutionStatus
 
 
 def handle_successful_payment(
@@ -36,6 +37,16 @@ def handle_successful_payment(
     payment = verify_payment(**verify_kwargs)
 
     order = payment.order
+    
+    has_open_resolution = PaymentResolution.objects.filter(
+        payment_id=payment.pk,
+        status=PaymentResolutionStatus.OPEN,
+    ).exists() and not payment.is_consumed
+    if has_open_resolution:
+        session["payment_resolution_order_id"] = order.pk
+    else:
+        session.pop("payment_resolution_order_id", None)
+
 
     CartSession(session).clear()
     session.pop("coupon_id", None)

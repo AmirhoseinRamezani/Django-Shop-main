@@ -26,6 +26,8 @@ from payment.repositories.payment_repository import (
 )
 from payment.policies import PaymentPolicy
 
+class OrderFinalizationConflict(ValidationError):
+    """A recognized Order lifecycle conflict, distinct from financial errors."""
 
 @transaction.atomic
 def confirm_order_payment(
@@ -70,10 +72,6 @@ def confirm_order_payment(
     # 2. ORDER VALIDATION
     # ===================================
 
-    if order.is_expired():
-        raise ValidationError(
-            _("Order expired")
-        )
 
     # ===================================
     # 3. FIND LATEST SUCCESSFUL PAYMENT
@@ -140,14 +138,6 @@ def confirm_order_payment(
             _("Consumed Payment is inconsistent with Order state or PAID event")
         )
 
-    if order.status == OrderStatusType.paid:
-        # PAID without a consumed Payment cannot be produced by the canonical
-        # workflow. Refuse to create a second paid transition rather than
-        # attempting to guess which financial state should be repaired.
-        raise ValidationError(
-            _("Paid Order has an unconsumed successful Payment")
-        )
-
     # ===================================
     # 5. PAYMENT -> ATTEMPT
     # ===================================
@@ -180,6 +170,21 @@ def confirm_order_payment(
         raise ValidationError(
             _("Payment attempt is not successful")
         )
+
+    # Only after validating the immutable financial snapshot and successful
+    # Attempt evidence may recognized Order lifecycle conflicts be surfaced.
+    # Amount/currency mismatches, missing attempts, multiple successful
+    # Payments, and other financial evidence failures remain ordinary
+    # ValidationError instances and must never be converted into Resolution.
+    if order.status == OrderStatusType.cancelled:
+        raise OrderFinalizationConflict(_("Order is cancelled"))
+    if order.status == OrderStatusType.failed:
+        raise OrderFinalizationConflict(_("Order is failed"))
+    if order.is_paid:
+        raise OrderFinalizationConflict(_("Order is already paid"))
+    if order.is_expired():
+        raise OrderFinalizationConflict(_("Order expired"))
+
 
     # ===================================
     # 6. CONSUME PAYMENT

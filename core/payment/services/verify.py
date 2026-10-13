@@ -1,5 +1,4 @@
 # core/payment/services/verify.py
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -10,22 +9,29 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from order.models import OrderModel
-from order.services.confirm_payment import confirm_order_payment
-
+from order.events.order_event import OrderEventType
+from order.services.confirm_payment import (
+    OrderFinalizationConflict,
+    confirm_order_payment,
+)
 from payment.enums import PaymentAttemptStatus, PaymentStatusType
 from payment.exceptions import (
     PaymentGatewayError,
     PaymentGatewayRejectedError,
     PaymentInvariantViolation,
 )
-from payment.models import PaymentAttempt, PaymentModel
+from payment.models import (
+    PaymentAttempt,
+    PaymentModel,
+    PaymentResolutionReason,
+)
 from payment.policies import PaymentPolicy
 from payment.repositories.payment_attempt_repository import (
     PaymentAttemptRepository,
 )
 from payment.repositories.payment_repository import PaymentRepository
 from payment.services.gateway_service import GatewayService
-
+from payment.services.payment_resolution import PaymentResolutionService
 
 # ================================
 # IMMUTABLE VERIFICATION SNAPSHOTS
@@ -970,112 +976,82 @@ def _consume_successful_payment(
     *,
     payment_id: int,
 ) -> PaymentModel:
-    """
-    Synchronize a successful Payment with its Order.
+    
+    """Run canonical order finalization and track recognized terminal conflicts."""
+    try:
+        with transaction.atomic():
+            payment_ref = PaymentRepository.get(payment_id)
+            order = OrderModel.objects.select_for_update().get(pk=payment_ref.order_id)
+            payment = PaymentRepository.get_for_update(payment_id)
 
-    Canonical cross-aggregate lock order:
-        Order
-            ->
-        Payment
+            if payment.order_id != order.pk:
+                raise PaymentInvariantViolation(
+                    "Payment order identity changed during synchronization."
+                )
+            if payment.is_failed:
+                raise PaymentInvariantViolation("A failed Payment cannot be consumed.")
+            if not payment.is_successful:
+                raise PaymentInvariantViolation("Only successful Payments can be consumed.")
 
-    The operation is idempotent.
-    If Payment is already consumed, no business effect is repeated.
-    """
-
-    with transaction.atomic():
-        # ------------------------------------
-        # Read Payment only to discover its Order.
-        # No Payment lock is held yet.
-        # ------------------------------------
-
-        payment = PaymentRepository.get(
-            payment_id,
-        )
-
-        # ------------------------------------
-        # Canonical cross-aggregate lock.
-        # ------------------------------------
-
-        order = (
-            OrderModel.objects
-            .select_for_update()
-            .get(
-                pk=payment.order_id,
-            )
-        )
-
-        # ------------------------------------
-        # Acquire Payment after Order.
-        # ------------------------------------
-
-        payment = PaymentRepository.get_for_update(
-            payment_id,
-        )
-
-        # ------------------------------------
-        # Defensive relationship consistency check.
-        # ------------------------------------
-
-        if payment.order_id != order.pk:
-            raise PaymentInvariantViolation(
-                "Payment order identity changed during synchronization."
-            )
-
-        # ------------------------------------
-        # Payment state validation.
-        # ------------------------------------
-
-        if payment.is_failed:
-            raise PaymentInvariantViolation(
-                "A failed Payment cannot be consumed."
-            )
-
-        if not payment.is_successful:
-            raise PaymentInvariantViolation(
-                "Only successful Payments can be consumed."
-            )
-
-        # ------------------------------------
-        # Idempotent terminal consumption.
-        # ------------------------------------
-
-        if payment.is_consumed:
-            # Validate that this exact Payment is the one bound to the PAID Order.
-            confirm_order_payment(
-                order_id=order.pk,
+            # A matching PAID event is the canonical consumption evidence. The
+            # Order may legitimately have advanced or later been cancelled; do not
+            # replay finalization effects or manufacture a new Resolution.
+            if payment.is_consumed:
+                paid_event = order.events.filter(type=OrderEventType.PAID).order_by("-id").first()
+                if (
+                    paid_event is not None
+                    and paid_event.payload.get("payment_id") == payment.pk
+                ):
+                    PaymentResolutionService.resolve_after_verified_finalization(
+                        payment_id=payment.pk,
+                        order_id=order.pk,
+                    )
+                    return payment
+            # The canonical service owns every Order/Coupon side effect.
+            confirm_order_payment(order_id=order.pk, payment_id=payment.pk)
+            payment.refresh_from_db()
+            if not payment.is_successful or not payment.is_consumed:
+                raise PaymentInvariantViolation(
+                    "Successful Payment was not consumed by order synchronization."
+                )
+            PaymentResolutionService.resolve_after_verified_finalization(
                 payment_id=payment.pk,
+                order_id=order.pk,
             )
-            return PaymentRepository.get(payment_id)
+            return payment
+    except OrderFinalizationConflict:
+        # Only an explicit, typed Order lifecycle conflict is eligible for
+        # Resolution. PaymentPolicy validation failures (including amount or
+        # currency snapshot mismatches), missing attempts, multiple successful
+        # payments, and unexpected exceptions must propagate unchanged.
+        resolution = _register_terminal_order_resolution(payment_id=payment_id)
+        if resolution is None:
+            raise
+        return PaymentRepository.get(payment_id)
 
-        # ------------------------------------
-        # Order application workflow owns order-side effects.
-        #
-        # It must itself remain idempotent.
-        # ------------------------------------
 
-        confirm_order_payment(
-            order_id=order.pk,
+def _register_terminal_order_resolution(*, payment_id: int):
+    """Classify and record a terminal Order condition under its row lock."""
+    payment = PaymentRepository.get(payment_id)
+    if not payment.is_successful or payment.is_consumed:
+        return None
+    from payment.models import PaymentAttempt
+    attempt = (
+        PaymentAttempt.objects.filter(
             payment_id=payment.pk,
+            status=PaymentAttemptStatus.SUCCESS,
         )
-
-        # ------------------------------------
-        # Reload canonical Payment state.
-        # ------------------------------------
-
-        payment.refresh_from_db()
-
-        if not payment.is_successful:
-            raise PaymentInvariantViolation(
-                "Payment lost SUCCESS state during order synchronization."
-            )
-
-        if not payment.is_consumed:
-            raise PaymentInvariantViolation(
-                "Successful Payment was not consumed by "
-                "the order synchronization workflow."
-            )
-
-        return payment
+        .order_by("-attempt_number", "-id")
+        .first()
+    )
+    return PaymentResolutionService.register(
+        payment_id=payment.pk,
+        attempt_id=attempt.pk if attempt else None,
+        reason=None,
+    )
+def synchronize_successful_payment(*, payment_id: int) -> PaymentModel:
+    """Public recovery entry point for an already verified financial SUCCESS."""
+    return _consume_successful_payment(payment_id=payment_id)
 
 # ================================
 # NORMALIZATION
