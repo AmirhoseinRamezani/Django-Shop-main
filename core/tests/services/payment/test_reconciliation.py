@@ -5,14 +5,17 @@ import pytest
 
 from tests.base import BaseTestCase
 from tests.factories.payment import PaymentAttemptFactory
-
+from tests.factories.order import OrderFactory
+from order.models import OrderStatusType
+ 
 from payment.enums import PaymentAttemptStatus, PaymentGateway, PaymentStatusType
 from payment.exceptions import PaymentGatewayError, PaymentInvariantViolation
 from payment.providers.base import GatewayInquiryResult
 from order.services.confirm_payment import confirm_order_payment
 from payment.repositories.payment_attempt_repository import PaymentAttemptRepository
 from payment.services.reconciliation import PaymentReconciliationService
-
+from payment.models import PaymentResolution, PaymentResolutionReason, PaymentResolutionStatus
+ 
 pytestmark = [
     pytest.mark.django_db,
     pytest.mark.service,
@@ -205,3 +208,93 @@ class TestPaymentReconciliationService(BaseTestCase):
         assert payment.status == PaymentStatusType.PENDING
         assert first.status == PaymentAttemptStatus.FAILED
         assert second.status == PaymentAttemptStatus.PENDING
+
+    def test_successful_inquiry_for_cancelled_order_records_resolution_without_replaying_gateway(
+        self,
+        payment_factory,
+    ):
+        order = OrderFactory(cancelled=True)
+        payment = payment_factory(order=order)
+        attempt = PaymentAttemptFactory(
+            payment=payment,
+            attempt_number=1,
+            status=PaymentAttemptStatus.PENDING,
+            authority_id="AUTH-CANCELLED-RECON",
+        )
+
+        with patch(
+            "payment.services.reconciliation.GatewayService.inquire",
+            return_value=GatewayInquiryResult(
+                success=True,
+                gateway=PaymentGateway.ZARINPAL,
+                gateway_reference="REF-CANCELLED-RECON",
+                gateway_transaction_id="TX-CANCELLED-RECON",
+                response_code="100",
+                message="confirmed by inquiry",
+                amount=payment.amount,
+                currency=payment.currency,
+            ),
+        ) as mock_inquire:
+            result = PaymentReconciliationService.reconcile_payment(
+                payment_id=payment.pk,
+                attempt_id=attempt.pk,
+            )
+
+        mock_inquire.assert_called_once()
+        payment.refresh_from_db()
+        order.refresh_from_db()
+        resolution = PaymentResolution.objects.get(payment=payment)
+        assert result.status == PaymentStatusType.SUCCESS
+        assert payment.status == PaymentStatusType.SUCCESS
+        assert payment.is_consumed is False
+        assert order.status == OrderStatusType.cancelled
+        assert resolution.status == PaymentResolutionStatus.OPEN
+        assert resolution.reason == PaymentResolutionReason.ORDER_CANCELLED
+
+
+    def test_reconciliation_does_not_convert_financial_snapshot_validation_to_resolution(
+        self,
+        payment_factory,
+        monkeypatch,
+    ):
+        from django.core.exceptions import ValidationError
+
+        order = OrderFactory(cancelled=True)
+        payment = payment_factory(order=order)
+        attempt = PaymentAttemptFactory(
+            payment=payment,
+            attempt_number=1,
+            status=PaymentAttemptStatus.PENDING,
+            authority_id="AUTH-FINANCIAL-MISMATCH",
+        )
+
+        def financial_mismatch(*args, **kwargs):
+            raise ValidationError("Payment amount does not match Order snapshot")
+
+        monkeypatch.setattr(
+            "order.services.confirm_payment.PaymentPolicy.validate_order_financial_snapshot",
+            financial_mismatch,
+        )
+        with patch(
+            "payment.services.reconciliation.GatewayService.inquire",
+            return_value=GatewayInquiryResult(
+                success=True,
+                gateway=PaymentGateway.ZARINPAL,
+                gateway_reference="REF-FINANCIAL-MISMATCH",
+                gateway_transaction_id="TX-FINANCIAL-MISMATCH",
+                response_code="100",
+                message="confirmed by inquiry",
+                amount=payment.amount,
+                currency=payment.currency,
+            ),
+        ):
+            with pytest.raises(ValidationError, match="amount does not match"):
+                PaymentReconciliationService.reconcile_payment(
+                    payment_id=payment.pk,
+                    attempt_id=attempt.pk,
+                )
+
+        payment.refresh_from_db()
+        assert payment.status == PaymentStatusType.SUCCESS
+        assert payment.is_consumed is False
+        assert not PaymentResolution.objects.filter(payment=payment).exists()
