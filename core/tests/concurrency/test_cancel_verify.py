@@ -1,3 +1,4 @@
+# tests/concurrency/test_cancel_verify.py
 from __future__ import annotations
 
 import threading
@@ -10,6 +11,11 @@ from django.db import close_old_connections
 from order.models import OrderStatusType
 from order.services.state_machine import OrderStateMachine
 from payment.enums import PaymentAttemptStatus, PaymentGateway, PaymentStatusType
+from payment.models import (
+    PaymentResolution,
+    PaymentResolutionReason,
+    PaymentResolutionStatus,
+)
 from payment.providers.base import GatewayVerificationResult
 from payment.services.verify import verify_payment
 from tests.factories.payment import PaymentAttemptFactory, PaymentFactory
@@ -58,6 +64,7 @@ def test_cancel_or_expire_wins_while_gateway_verification_is_in_flight(
     gateway_entered = threading.Event()
     release_gateway = threading.Event()
     worker_errors: list[BaseException] = []
+    worker_results = []
     reference = f"REF-CANCEL-VERIFY-{cancel_reason}"
 
     def gateway_verify(*args, **kwargs):
@@ -69,11 +76,12 @@ def test_cancel_or_expire_wins_while_gateway_verification_is_in_flight(
     def verification_worker():
         close_old_connections()
         try:
-            verify_payment(
+            result = verify_payment(
                 payment_id=payment.pk,
                 attempt_id=attempt.pk,
                 ref_id=reference,
             )
+            worker_results.append(result)
         except BaseException as exc:
             worker_errors.append(exc)
         finally:
@@ -99,8 +107,12 @@ def test_cancel_or_expire_wins_while_gateway_verification_is_in_flight(
             worker.join(timeout=15)
 
     assert not worker.is_alive(), "verification worker did not finish"
-    assert len(worker_errors) == 1
-    assert isinstance(worker_errors[0], ValidationError)
+    # A recognized terminal-order conflict is now tracked as a durable
+    # PaymentResolution. It is not returned as an exception to the callback
+    # caller, while the successful Payment remains unconsumed.
+    assert worker_errors == []
+    assert len(worker_results) == 1
+    assert worker_results[0].pk == payment.pk
 
     payment.refresh_from_db()
     attempt.refresh_from_db()
@@ -111,6 +123,16 @@ def test_cancel_or_expire_wins_while_gateway_verification_is_in_flight(
     assert attempt.status == PaymentAttemptStatus.SUCCESS
     assert attempt.gateway_reference == reference
     assert order.status == OrderStatusType.cancelled
+
+    resolution = PaymentResolution.objects.get(payment=payment)
+    expected_reason = (
+        PaymentResolutionReason.ORDER_EXPIRED
+        if cancel_reason == "timeout"
+        else PaymentResolutionReason.ORDER_CANCELLED
+    )
+    assert resolution.reason == expected_reason
+    assert resolution.status == PaymentResolutionStatus.OPEN
+    assert resolution.attempt_id == attempt.pk
 
 
 def test_successful_verification_makes_later_cancellation_fail_closed():
@@ -159,10 +181,10 @@ def test_successful_verification_makes_later_cancellation_fail_closed():
 
 def test_replay_after_cancelled_order_does_not_consume_successful_payment():
     """
-    A duplicate callback after cancellation must not hide the discrepancy.
+    A duplicate callback after cancellation is idempotent and auditable.
 
-    The gateway's SUCCESS remains durable, while Order finalization fails
-    closed and leaves the Payment unconsumed for reconciliation.
+    The gateway's SUCCESS remains durable, the terminal Order is not
+    resurrected, and an open Resolution records the unresolved discrepancy.
     """
     payment = PaymentFactory()
     attempt = PaymentAttemptFactory(
@@ -184,12 +206,13 @@ def test_replay_after_cancelled_order_does_not_consume_successful_payment():
         "payment.services.verify.GatewayService.verify",
         return_value=_successful_result(payment, reference=reference),
     ):
-        with pytest.raises(ValidationError):
-            verify_payment(
-                payment_id=payment.pk,
-                attempt_id=attempt.pk,
-                ref_id=reference,
-            )
+        first_result = verify_payment(
+            payment_id=payment.pk,
+            attempt_id=attempt.pk,
+            ref_id=reference,
+        )
+
+    assert first_result.pk == payment.pk
 
     payment.refresh_from_db()
     attempt.refresh_from_db()
@@ -200,20 +223,30 @@ def test_replay_after_cancelled_order_does_not_consume_successful_payment():
     assert attempt.status == PaymentAttemptStatus.SUCCESS
     assert order.status == OrderStatusType.cancelled
 
-    # The replay must validate the same Payment/Order binding and must not
-    # silently return success merely because the Payment is already SUCCESS.
-    with pytest.raises(ValidationError):
-        verify_payment(
-            payment_id=payment.pk,
-            attempt_id=attempt.pk,
-            ref_id=reference,
-        )
+    resolution = PaymentResolution.objects.get(payment=payment)
+    assert resolution.status == PaymentResolutionStatus.OPEN
+    assert resolution.reason == PaymentResolutionReason.ORDER_CANCELLED
+    resolution_id = resolution.pk
+
+    # A replay may return the already-verified Payment, but must preserve the
+    # same durable Resolution and must not consume the Payment or repeat Order
+    # side effects. This is idempotent recovery, not silent finalization.
+    replay_result = verify_payment(
+        payment_id=payment.pk,
+        attempt_id=attempt.pk,
+        ref_id=reference,
+    )
+    assert replay_result.pk == payment.pk
 
     payment.refresh_from_db()
     order.refresh_from_db()
+    resolution.refresh_from_db()
     assert payment.status == PaymentStatusType.SUCCESS
     assert payment.is_consumed is False
     assert order.status == OrderStatusType.cancelled
+    assert resolution.pk == resolution_id
+    assert resolution.status == PaymentResolutionStatus.OPEN
+    assert PaymentResolution.objects.filter(payment=payment).count() == 1
 
 
 def test_consumed_successful_payment_with_pending_order_fails_closed():
