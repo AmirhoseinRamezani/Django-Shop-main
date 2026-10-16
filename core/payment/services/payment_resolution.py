@@ -154,7 +154,15 @@ class PaymentResolutionService:
                 )
             if resolution.status == PaymentResolutionStatus.RESOLVED:
                 return resolution
-            if not actor or not getattr(actor, "is_authenticated", False):
+
+            if (
+                not actor
+                or not getattr(actor, "is_authenticated", False)
+                or not (
+                    getattr(actor, "is_staff", False)
+                    or getattr(actor, "is_superuser", False)
+                )
+            ):
                 raise ValidationError(
                     "An authenticated operator is required to resolve a record."
                 )

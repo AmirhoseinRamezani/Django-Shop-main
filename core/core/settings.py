@@ -13,6 +13,8 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from pathlib import Path
 from decouple import config
+from django.core.exceptions import ImproperlyConfigured
+
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -107,8 +109,20 @@ REST_FRAMEWORK = {
     ],
 }
 
-JWT_ACCESS_SECRET = config("JWT_ACCESS_SECRET", default=SECRET_KEY)
-JWT_REFRESH_SECRET = config("JWT_REFRESH_SECRET", default=SECRET_KEY)
+_MIN_JWT_SECRET_BYTES = 32
+
+
+def _load_jwt_secret(setting_name: str) -> str:
+    secret = str(config(setting_name, default=SECRET_KEY))
+    if len(secret.encode("utf-8")) < _MIN_JWT_SECRET_BYTES:
+        raise ImproperlyConfigured(
+            f"{setting_name} must contain at least {_MIN_JWT_SECRET_BYTES} bytes "
+            "for HS256 signing."
+        )
+    return secret
+
+JWT_ACCESS_SECRET = _load_jwt_secret("JWT_ACCESS_SECRET")
+JWT_REFRESH_SECRET = _load_jwt_secret("JWT_REFRESH_SECRET")
 
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
