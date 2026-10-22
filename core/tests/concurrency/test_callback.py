@@ -69,7 +69,7 @@ def test_late_callback_cannot_resurrect_old_attempt_after_retry():
     """A callback already in-flight must not finalize an attempt superseded by retry."""
     import threading
 
-    from django.db import close_old_connections, transaction
+    from django.db import close_old_connections, connections, transaction
 
     from payment.exceptions import PaymentInvariantViolation
     from payment.providers.base import GatewayPaymentResult
@@ -119,7 +119,7 @@ def test_late_callback_cannot_resurrect_old_attempt_after_retry():
         except BaseException as exc:
             callback_errors.append(exc)
         finally:
-            close_old_connections()
+            connections.close_all()
 
     thread = threading.Thread(target=callback_worker)
 

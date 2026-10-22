@@ -89,3 +89,42 @@ def test_recovery_rerun_is_idempotent_and_never_calls_gateway():
     assert PaymentResolution.objects.filter(payment=payment).count() == 1
     verify.assert_not_called()
     inquire.assert_not_called()
+
+
+def test_recovery_finishes_payment_after_success_persisted_before_order_finalization(monkeypatch):
+    """A process failure after gateway success must remain recoverable without re-verification."""
+    from payment.services.verify import synchronize_successful_payment
+
+    payment = PaymentFactory(status=PaymentStatusType.SUCCESS, is_consumed=False)
+    PaymentAttemptFactory(payment=payment, success=True)
+    original_confirm = __import__(
+        "payment.services.verify", fromlist=["confirm_order_payment"]
+    ).confirm_order_payment
+
+    def crash_after_success(*, order_id, payment_id):
+        raise RuntimeError("simulated process failure before finalization")
+
+    monkeypatch.setattr(
+        "payment.services.verify.confirm_order_payment",
+        crash_after_success,
+    )
+
+    with pytest.raises(RuntimeError, match="simulated process failure"):
+        synchronize_successful_payment(payment_id=payment.pk)
+
+    payment.refresh_from_db()
+    assert payment.status == PaymentStatusType.SUCCESS
+    assert payment.is_consumed is False
+
+    monkeypatch.setattr(
+        "payment.services.verify.confirm_order_payment",
+        original_confirm,
+    )
+
+    recovered = synchronize_successful_payment(payment_id=payment.pk)
+
+    payment.refresh_from_db()
+    payment.order.refresh_from_db()
+    assert recovered.pk == payment.pk
+    assert payment.is_consumed is True
+    assert payment.order.is_paid

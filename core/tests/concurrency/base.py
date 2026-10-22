@@ -44,7 +44,7 @@ class ConcurrentRunner:
         target: Callable[[], object],
         barrier: threading.Barrier,
     ) -> None:
-        from django.db import close_old_connections
+        from django.db import close_old_connections, connections
 
         try:
             close_old_connections()
@@ -54,4 +54,4 @@ class ConcurrentRunner:
             with self._errors_lock:
                 self.errors.append(exc)
         finally:
-            close_old_connections()
+            connections.close_all()

@@ -1,7 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from django.db import close_old_connections
+from django.db import close_old_connections, connections
 
 from payment.enums import PaymentAttemptStatus, PaymentGateway
 from payment.exceptions import PaymentIdempotencyConflictError, PaymentGatewayError
@@ -44,7 +44,7 @@ def test_concurrent_retries_create_at_most_one_new_attempt(payment, mocker):
                 callback_url="https://shop.test/payment/verify/",
             )
         finally:
-            close_old_connections()
+            connections.close_all()
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(lambda _: worker(), range(2)))
@@ -91,7 +91,7 @@ def test_concurrent_same_retry_key_creates_one_attempt(payment, mocker):
         except Exception as exc:
             return exc
         finally:
-            close_old_connections()
+            connections.close_all()
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(lambda _: worker(), range(2)))
@@ -143,7 +143,7 @@ def test_concurrent_different_retry_keys_create_at_most_one_attempt(
         except Exception as exc:
             return exc
         finally:
-            close_old_connections()
+            connections.close_all()
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(

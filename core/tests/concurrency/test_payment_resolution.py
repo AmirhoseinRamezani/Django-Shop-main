@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
 import pytest
-from django.db import close_old_connections, connection
+from django.db import close_old_connections, connections, connection
 
 from payment.enums import PaymentStatusType
 from payment.models import PaymentResolution, PaymentResolutionReason
@@ -32,7 +32,7 @@ def test_concurrent_resolution_registration_converges_on_one_row():
             )
             return resolution.pk, resolution.reason
         finally:
-            close_old_connections()
+            connections.close_all()
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = [

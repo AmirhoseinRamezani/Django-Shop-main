@@ -88,7 +88,7 @@ def test_explicit_resolution_requires_authenticated_actor_and_note():
     with pytest.raises(ValidationError):
         PaymentResolutionService.resolve(resolution_id=resolution.pk, note="reviewed")
 
-    actor = UserFactory()
+    actor = UserFactory(admin=True)
     resolved = PaymentResolutionService.resolve(
         resolution_id=resolution.pk,
         actor=actor,
@@ -100,9 +100,54 @@ def test_explicit_resolution_requires_authenticated_actor_and_note():
     assert resolved.resolution_note == "Reviewed; follow-up handled by support."
 
 
+def test_explicit_resolution_rejects_authenticated_customer_actor():
+    _, payment, _ = _successful_unconsumed_payment()
+    resolution = PaymentResolutionService.register(
+        payment_id=payment.pk,
+        reason=PaymentResolutionReason.ORDER_CANCELLED,
+    )
+    customer = UserFactory()
+
+    with pytest.raises(ValidationError, match="authenticated operator"):
+        PaymentResolutionService.resolve(
+            resolution_id=resolution.pk,
+            actor=customer,
+            note="Customer must not close an operational investigation.",
+        )
+
+    resolution.refresh_from_db()
+    assert resolution.status == PaymentResolutionStatus.OPEN
+    assert resolution.resolved_by_id is None
+
+
+def test_resolved_resolution_is_idempotent_for_operator():
+    _, payment, _ = _successful_unconsumed_payment()
+    actor = UserFactory(admin=True)
+    resolution = PaymentResolutionService.register(
+        payment_id=payment.pk,
+        reason=PaymentResolutionReason.ORDER_CANCELLED,
+    )
+    resolved = PaymentResolutionService.resolve(
+        resolution_id=resolution.pk,
+        actor=actor,
+        note="Reviewed and closed.",
+    )
+    replay = PaymentResolutionService.resolve(
+        resolution_id=resolution.pk,
+        actor=UserFactory(admin=True),
+        note="Different replay note must not mutate a resolved record.",
+    )
+
+    assert replay.pk == resolved.pk
+    replay.refresh_from_db()
+    assert replay.resolved_by_id == actor.pk
+    assert replay.resolution_note == "Reviewed and closed."
+
+
 def test_resolved_resolution_cannot_be_reopened_by_duplicate_registration():
     _, payment, _ = _successful_unconsumed_payment()
-    actor = UserFactory()
+    actor = UserFactory(admin=True)
+
     resolution = PaymentResolutionService.register(
         payment_id=payment.pk,
         reason=PaymentResolutionReason.ORDER_CANCELLED,
@@ -117,9 +162,12 @@ def test_resolved_resolution_cannot_be_reopened_by_duplicate_registration():
         payment_id=payment.pk,
         reason=PaymentResolutionReason.ORDER_EXPIRED,
     )
+
+    assert duplicate.pk == resolution.pk
     assert duplicate.status == PaymentResolutionStatus.RESOLVED
     assert duplicate.reason == PaymentResolutionReason.ORDER_CANCELLED
-
+    assert duplicate.resolved_by_id == actor.pk
+    assert duplicate.resolution_note == "Reviewed and closed."
 
 def test_successful_payment_for_cancelled_order_is_tracked_without_mutation():
     from order.models import OrderStatusType

@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import close_old_connections
+from django.db import close_old_connections, connections
 
 from order.models import OrderStatusType
 from order.services.state_machine import OrderStateMachine
@@ -85,7 +85,7 @@ def test_cancel_or_expire_wins_while_gateway_verification_is_in_flight(
         except BaseException as exc:
             worker_errors.append(exc)
         finally:
-            close_old_connections()
+            connections.close_all()
 
     worker = threading.Thread(target=verification_worker)
     with patch(
