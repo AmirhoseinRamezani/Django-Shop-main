@@ -1,3 +1,4 @@
+# tests\integration\order\test_payment_resolution_result_view.py
 from django.test import RequestFactory
 import pytest
 
@@ -51,13 +52,15 @@ def test_result_view_shows_open_resolution_and_repeated_request_is_stable():
 def test_result_view_clears_session_hint_after_resolution_is_closed():
     user = UserFactory(type=UserType.CUSTOMER)
     order, _, resolution = _open_resolution_for(user)
+
+    operator = UserFactory(admin=True)
     PaymentResolutionService.resolve(
         resolution_id=resolution.pk,
-        actor=user,
+        actor=operator,
         note="Reviewed provider evidence; no further customer action required.",
     )
-    session = {"payment_resolution_order_id": order.pk}
 
+    session = {"payment_resolution_order_id": order.pk}
     response = _response(user, session)
 
     assert response.context_data["payment_resolution_open"] is False
