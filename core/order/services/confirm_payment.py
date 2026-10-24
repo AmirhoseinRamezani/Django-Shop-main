@@ -139,52 +139,48 @@ def confirm_order_payment(
         )
 
     # ===================================
-    # 5. PAYMENT -> ATTEMPT
+    # 5. PAYMENT -> EXACT PAYMENT ATTEMPT
     # ===================================
 
-    attempt = (
+    successful_attempts = list(
         PaymentAttemptRepository
         .successful_for_payment(payment.id)
         .select_for_update()
         .order_by(
             "-attempt_number",
             "-id",
-        )
-        .first()
+        )[:2]
     )
 
-    if attempt is None:
+    if not successful_attempts:
         raise ValidationError(
             _("No successful payment attempt found")
         )
+
+    if len(successful_attempts) != 1:
+        raise ValidationError(
+            _("Multiple successful payment attempts found for Payment")
+        )
+
+    attempt = successful_attempts[0]
 
     if attempt.payment_id != payment.id:
         raise ValidationError(
             _("Payment attempt does not belong to payment")
         )
 
-    if (
-        attempt.status
-        != PaymentAttemptStatus.SUCCESS
-    ):
+    if attempt.status != PaymentAttemptStatus.SUCCESS:
         raise ValidationError(
             _("Payment attempt is not successful")
         )
 
-    # Only after validating the immutable financial snapshot and successful
-    # Attempt evidence may recognized Order lifecycle conflicts be surfaced.
-    # Amount/currency mismatches, missing attempts, multiple successful
-    # Payments, and other financial evidence failures remain ordinary
-    # ValidationError instances and must never be converted into Resolution.
-    if order.status == OrderStatusType.cancelled:
-        raise OrderFinalizationConflict(_("Order is cancelled"))
-    if order.status == OrderStatusType.failed:
-        raise OrderFinalizationConflict(_("Order is failed"))
-    if order.is_paid:
-        raise OrderFinalizationConflict(_("Order is already paid"))
-    if order.is_expired():
-        raise OrderFinalizationConflict(_("Order expired"))
-
+    if not (
+        attempt.gateway_reference
+        or attempt.gateway_transaction_id
+    ):
+        raise ValidationError(
+            _("Successful payment attempt has no gateway evidence")
+        )
 
     # ===================================
     # 6. CONSUME PAYMENT
