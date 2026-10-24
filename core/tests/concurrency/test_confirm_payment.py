@@ -1,4 +1,5 @@
 # tests/concurrency/test_confirm_payment.py
+from __future__ import annotations
 import threading
 
 import pytest
@@ -17,32 +18,48 @@ class TestConcurrentConfirmPayment:
         order,
         successful_payment,
     ):
-        results = []
-        errors = []
+        results: list[bool] = []
+        errors: list[Exception] = []
+        barrier = threading.Barrier(2)
 
-        def worker():
+        def worker() -> None:
             try:
+                barrier.wait(timeout=10)
                 confirm_order_payment(order.id)
                 results.append(True)
-
             except Exception as exc:
                 errors.append(exc)
 
-        t1 = threading.Thread(target=worker)
-        t2 = threading.Thread(target=worker)
+        threads = [
+            threading.Thread(
+                target=worker,
+                name=f"confirm-payment-{index}",
+            )
+            for index in range(2)
+        ]
 
-        t1.start()
-        t2.start()
+        for thread in threads:
+            thread.start()
 
-        t1.join()
-        t2.join()
+        for thread in threads:
+            thread.join(timeout=15)
+
+        assert all(not thread.is_alive() for thread in threads), (
+            "Concurrent confirmation worker did not terminate."
+        )
+
+        assert errors == []
+        assert len(results) == 2
 
         order.refresh_from_db()
         successful_payment.refresh_from_db()
 
-        assert len(results) == 2
-        assert errors == []
-
-        assert successful_payment.is_consumed
         assert order.status == OrderStatusType.paid
-        assert order.events.filter(type=OrderEventType.PAID).count() == 1
+        assert order.paid_date is not None
+        assert successful_payment.is_consumed is True
+        assert (
+            order.events
+            .filter(type=OrderEventType.PAID)
+            .count()
+            == 1
+        )
