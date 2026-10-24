@@ -508,28 +508,22 @@ class OrderModel(models.Model):
         ).exists()
 
     def mark_failed(self):
-        """
-        Centralized failure handling
-        """
-        self.status = OrderStatusType.failed
-        self.save(update_fields=["status"])
-        
-    def mark_paid(self):
+        """Transition the order to FAILED through the canonical state machine."""
+        from order.services.state_machine import OrderStateMachine
 
-        self.status = (
-            OrderStatusType.paid
+        return OrderStateMachine.transition(
+            order=self,
+            to_status=OrderStatusType.failed,
         )
 
-        if self.paid_date is None:
-            self.paid_date = (
-                timezone.now()
-            )
+    def mark_paid(self):
+        """Transition the order to PAID through the canonical state machine."""
+        from order.services.state_machine import OrderStateMachine
 
-        self.save(
-            update_fields=[
-                "status",
-                "paid_date",
-            ]
+        return OrderStateMachine.transition(
+            order=self,
+            to_status=OrderStatusType.paid,
+            actor=self.user,
         )
 
     def mark_completed(self):

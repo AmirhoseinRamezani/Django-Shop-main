@@ -1,6 +1,7 @@
 # tests/models/test_order.py
 import pytest
 
+from django.core.exceptions import ValidationError
 from django.utils import timezone
 from datetime import timedelta
 
@@ -87,3 +88,28 @@ class TestOrderModel:
     def test_is_completed(self, cancelled_order):
 
         assert cancelled_order.is_completed is True
+    
+    def test_mark_failed_uses_canonical_state_machine(self, order):
+        order.mark_failed()
+
+        order.refresh_from_db()
+
+        assert order.status == OrderStatusType.failed
+
+    def test_mark_paid_uses_canonical_state_machine(self, order):
+        order.mark_paid()
+
+        order.refresh_from_db()
+
+        assert order.status == OrderStatusType.paid
+        assert order.paid_date is not None
+
+    def test_mark_paid_rejects_illegal_transition(self, failed_order):
+        with pytest.raises(ValidationError):
+            failed_order.mark_paid()
+
+    def test_mark_failed_rejects_illegal_transition(self, paid_order):
+        with pytest.raises(ValidationError):
+            paid_order.mark_failed()
+   
+    
