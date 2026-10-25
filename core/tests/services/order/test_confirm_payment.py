@@ -21,9 +21,9 @@ from tests.factories.payment import PaymentAttemptFactory
 pytestmark = pytest.mark.django_db
 
 
-# ==================================================================
+# ==========================================================
 # HELPERS
-# ==================================================================
+# ==========================================================
 
 def _make_success_attempt(
     payment,
@@ -53,9 +53,9 @@ def _make_success_attempt(
     )
 
 
-# ==================================================================
+# ==========================================================
 # SUCCESS
-# ==================================================================
+# ==========================================================
 
 class TestConfirmOrderPayment:
 
@@ -193,21 +193,79 @@ class TestConfirmOrderPayment:
         assert kwargs["actor"] == order.user
 
 
-# ==================================================================
+# ==========================================================
 # FAILURE SCENARIOS
-# ==================================================================
+# ==========================================================
 
 class TestFailures:
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+
+    def test_expired_order_is_rejected_before_payment_lookup(
+        self,
+        expired_order,
+        mocker,
+    ):
+        expired_order.refresh_from_db()
+        assert expired_order.is_expired() is True
+
+        payment_lookup = mocker.patch(
+            "order.services.confirm_payment.PaymentRepository.successful_for_order"
+        )
+
+        with pytest.raises(ValidationError, match="Order expired"):
+            confirm_order_payment(expired_order.id)
+
+        payment_lookup.assert_not_called()
+
+    def test_expired_order_does_not_consume_successful_payment(
+        self,
+        expired_order,
+        success_payment,
+    ):
+        assert success_payment.order_id == expired_order.id
+
+        with pytest.raises(ValidationError, match="Order expired"):
+            confirm_order_payment(
+                expired_order.id,
+                payment_id=success_payment.id,
+            )
+
+        success_payment.refresh_from_db()
+        expired_order.refresh_from_db()
+
+        assert success_payment.is_consumed is False
+        assert expired_order.status == OrderStatusType.pending
 
     def test_expired_order(
         self,
         expired_order,
         success_payment,
     ):
+        from django.utils import timezone
+
+        expired_order.refresh_from_db()
+        success_payment.refresh_from_db()
+
+        assert expired_order.expire_at <= timezone.now(), (
+            f"Fixture did not expire the order: "
+            f"expire_at={expired_order.expire_at!r}"
+        )
+        assert expired_order.is_expired() is True
+        assert expired_order.status == OrderStatusType.pending
+        assert success_payment.order_id == expired_order.id
+        assert success_payment.is_consumed is False
+
         with pytest.raises(ValidationError, match="Order expired"):
             confirm_order_payment(
                 expired_order.id,
+                payment_id=success_payment.id,
             )
+
+        success_payment.refresh_from_db()
+        assert success_payment.is_consumed is False
 
     def test_no_success_payment(
         self,
@@ -286,9 +344,9 @@ class TestFailures:
         assert payment.is_consumed is False
 
 
-# ==================================================================
+# ==========================================================
 # COUPON
-# ==================================================================
+# ==========================================================
 
 class TestCoupon:
 
@@ -341,9 +399,9 @@ class TestCoupon:
         assert consume.call_count == 1
 
 
-# ==================================================================
+# ==========================================================
 # ATOMICITY
-# ==================================================================
+# ==========================================================
 
 class TestAtomic:
 
@@ -392,9 +450,9 @@ class TestAtomic:
         assert order_with_coupon.status == OrderStatusType.pending
 
 
-# ==================================================================
+# ==========================================================
 # IDEMPOTENCY
-# ==================================================================
+# ==========================================================
 
 class TestIdempotency:
 
@@ -436,9 +494,9 @@ class TestIdempotency:
         assert order.status == OrderStatusType.paid
 
 
-# ==================================================================
+# ==========================================================
 # MULTIPLE PAYMENTS
-# ==================================================================
+# ==========================================================
 
 class TestMultiplePayments:
 
@@ -581,9 +639,9 @@ class TestMultiplePayments:
         assert success.is_consumed is True
 
 
-# ==================================================================
+# ==========================================================
 # TRANSITION PAYLOAD
-# ==================================================================
+# ==========================================================
 
 class TestTransitionPayload:
 
@@ -690,9 +748,9 @@ class TestTransitionPayload:
         )
 
 
-# ==================================================================
+# ==========================================================
 # SERVICE CALLS
-# ==================================================================
+# ==========================================================
 
 class TestServiceCalls:
 
@@ -745,9 +803,9 @@ class TestServiceCalls:
         assert transition.call_count == 1
 
 
-# ==================================================================
+# ==========================================================
 # FAILURE ORDERING
-# ==================================================================
+# ==========================================================
 
 class TestFailureOrdering:
 
@@ -808,3 +866,95 @@ class TestFailureOrdering:
         success_payment.refresh_from_db()
 
         assert success_payment.is_consumed is False
+        
+# ==========================================================
+# For Payment and PaymentAttempt boundaries
+# ==========================================================
+class TestPaymentAttemptIntegrity:
+
+    def test_payment_without_successful_attempt_is_not_consumed(
+        self,
+        order,
+        payment_factory,
+    ):
+        payment = payment_factory(
+            order=order,
+            status=PaymentStatusType.SUCCESS,
+        )
+        payment.attempts.all().delete()
+
+        with pytest.raises(
+            ValidationError,
+            match="No successful payment attempt found",
+        ):
+            confirm_order_payment(
+                order.id,
+                payment_id=payment.id,
+            )
+
+        payment.refresh_from_db()
+        assert payment.is_consumed is False
+
+    def test_failed_attempt_does_not_authorize_payment_consumption(
+        self,
+        order,
+        payment_factory,
+    ):
+        payment = payment_factory(
+            order=order,
+            status=PaymentStatusType.SUCCESS,
+        )
+
+        payment.attempts.all().delete()
+
+        PaymentAttemptFactory(
+            payment=payment,
+            attempt_number=1,
+            status=PaymentAttemptStatus.FAILED,
+            authority_id="AUTH-FAILED",
+            gateway_reference="REF-FAILED",
+            gateway_transaction_id="TXN-FAILED",
+        )
+
+        with pytest.raises(
+            ValidationError,
+            match="No successful payment attempt found",
+        ):
+            confirm_order_payment(
+                order.id,
+                payment_id=payment.id,
+            )
+
+        payment.refresh_from_db()
+        assert payment.is_consumed is False
+
+    def test_payment_from_another_order_cannot_be_consumed(
+        self,
+        order,
+        order_factory,
+        payment_factory,
+    ):
+        foreign_order = order_factory()
+        foreign_payment = payment_factory(
+            order=foreign_order,
+            status=PaymentStatusType.SUCCESS,
+        )
+
+        _make_success_attempt(
+            foreign_payment,
+            authority_id="AUTH-FOREIGN",
+            gateway_reference="REF-FOREIGN",
+            gateway_transaction_id="TXN-FOREIGN",
+        )
+
+        with pytest.raises(
+            ValidationError,
+            match="No successful payment found",
+        ):
+            confirm_order_payment(
+                order.id,
+                payment_id=foreign_payment.id,
+            )
+
+        foreign_payment.refresh_from_db()
+        assert foreign_payment.is_consumed is False
