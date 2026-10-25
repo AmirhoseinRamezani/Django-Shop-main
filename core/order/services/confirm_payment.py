@@ -1,4 +1,3 @@
-# core/order/services/confirm_payment.py
 from __future__ import annotations
 
 from django.core.exceptions import ValidationError
@@ -50,21 +49,22 @@ def confirm_order_payment(
     # 2. ORDER LIFECYCLE VALIDATION
     # ==========================================================
 
-    if order.status != OrderStatusType.paid:
-        if order.status == OrderStatusType.cancelled:
-            raise OrderFinalizationConflict(
-                _("Order is cancelled")
-            )
+    # Expiration is an Order-local precondition and must remain the
+    # earliest rejection. In particular, an expired Order must not
+    # perform any Payment lookup or mutation.
+    if (
+        order.status != OrderStatusType.paid
+        and order.is_expired()
+    ):
+        raise OrderFinalizationConflict(
+            _("Order expired")
+        )
 
-        if order.status == OrderStatusType.failed:
-            raise OrderFinalizationConflict(
-                _("Order is failed")
-            )
-
-        if order.is_expired():
-            raise OrderFinalizationConflict(
-                _("Order expired")
-            )
+    # Terminal lifecycle conflicts for cancelled/failed Orders and a
+    # competing unconsumed Payment on an already-paid Order are checked
+    # only after the Payment financial evidence has been established.
+    # This prevents verify/reconciliation from converting missing attempt
+    # or financial-snapshot failures into terminal Order resolutions.
 
     # ==========================================================
     # 3. RESOLVE SUCCESSFUL PAYMENT
@@ -179,7 +179,30 @@ def confirm_order_payment(
         )
 
     # ==========================================================
-    # 7. CONSUME PAYMENT
+    # 7. TERMINAL ORDER CONFLICTS
+    # ==========================================================
+
+    if order.status == OrderStatusType.cancelled:
+        raise OrderFinalizationConflict(
+            _("Order is cancelled")
+        )
+
+    if order.status == OrderStatusType.failed:
+        raise OrderFinalizationConflict(
+            _("Order is failed")
+        )
+
+    if order.status == OrderStatusType.paid:
+        # An already-consumed Payment with its matching PAID event was
+        # handled by the idempotency branch above. Therefore reaching this
+        # point means this is a distinct successful Payment attempting to
+        # finalize an already-paid Order.
+        raise OrderFinalizationConflict(
+            _("Order already paid")
+        )
+
+    # ==========================================================
+    # 8. CONSUME PAYMENT
     # ==========================================================
 
     payment.consume()
@@ -190,7 +213,7 @@ def confirm_order_payment(
     )
 
     # ==========================================================
-    # 8. TRANSITION ORDER -> PAID
+    # 9. TRANSITION ORDER -> PAID
     # ==========================================================
 
     order = OrderStateMachine.transition(
@@ -207,7 +230,7 @@ def confirm_order_payment(
     )
 
     # ==========================================================
-    # 9. CONSUME COUPON
+    # 10. CONSUME COUPON
     # ==========================================================
 
     if order.coupon_id:
