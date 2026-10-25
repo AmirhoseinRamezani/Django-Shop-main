@@ -69,20 +69,20 @@ def confirm_order_payment(
     )
 
     # ===================================
-    # 2. ORDER LIFECYCLE VALIDATION
+    # 2. ORDER VALIDATION
     # ===================================
 
-    if order.status == OrderStatusType.cancelled:
-        raise OrderFinalizationConflict(_("Order is cancelled"))
+    # Preserve idempotency for orders already finalized as PAID.
+    # Other lifecycle conflicts should be rejected before payment lookup.
+    if order.status != OrderStatusType.paid:
+        if order.status == OrderStatusType.cancelled:
+            raise OrderFinalizationConflict(_("Order is cancelled"))
 
-    if order.status == OrderStatusType.failed:
-        raise OrderFinalizationConflict(_("Order is failed"))
+        if order.status == OrderStatusType.failed:
+            raise OrderFinalizationConflict(_("Order is failed"))
 
-    if order.is_paid:
-        raise OrderFinalizationConflict(_("Order is already paid"))
-
-    if order.is_expired():
-        raise OrderFinalizationConflict(_("Order expired"))
+        if order.is_expired():
+            raise OrderFinalizationConflict(_("Order expired"))
 
 
     # ===================================
