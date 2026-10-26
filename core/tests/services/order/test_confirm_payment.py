@@ -12,6 +12,7 @@ from payment.enums import (
     PaymentAttemptStatus,
     PaymentStatusType,
 )
+from payment.models import PaymentAttempt
 from payment.repositories.payment_attempt_repository import (
     PaymentAttemptRepository,
 )
@@ -32,19 +33,26 @@ def _make_success_attempt(
     authority_id: str = "AUTH-TEST",
     gateway_reference: str = "REF-TEST",
     gateway_transaction_id: str = "TXN-TEST",
+    clear_existing: bool = True,
 ):
     """
-    Create exactly one successful attempt for a Payment.
+    Create a successful PaymentAttempt for a Payment.
 
-    PaymentFactory remains a pure aggregate-root factory.
-    Successful PaymentAttempt creation is explicit here.
+    By default, the Payment is normalized to exactly one successful
+    attempt. Tests that explicitly exercise multiple successful
+    attempts can disable cleanup.
     """
 
-    payment.attempts.all().delete()
+    if clear_existing:
+        payment.attempts.all().delete()
+
+    attempt_number = PaymentAttemptRepository.next_attempt_number(
+        payment,
+    )
 
     return PaymentAttemptFactory(
         payment=payment,
-        attempt_number=1,
+        attempt_number=attempt_number,
         status=PaymentAttemptStatus.SUCCESS,
         authority_id=authority_id,
         gateway_reference=gateway_reference,
@@ -567,7 +575,7 @@ class TestMultiplePayments:
 
         assert success_payment.is_consumed is False
         assert another.is_consumed is False
-    
+
     def test_explicit_payment_id_uses_exact_payment_lock(
         self,
         order,
@@ -588,6 +596,7 @@ class TestMultiplePayments:
 
         successful_for_order.assert_not_called()
         success_payment.refresh_from_db()
+
         assert success_payment.is_consumed is True
 
     def test_explicit_payment_id_selects_exact_successful_payment(
@@ -709,6 +718,169 @@ class TestMultiplePayments:
         success.refresh_from_db()
 
         assert success.is_consumed is True
+
+    def test_confirmation_requires_exactly_one_successful_attempt_for_payment(
+        self,
+        order,
+        payment_factory,
+    ):
+        payment = payment_factory(
+            order=order,
+            status=PaymentStatusType.SUCCESS,
+        )
+
+        _make_success_attempt(
+            payment,
+            authority_id="AUTH-FIRST",
+            gateway_reference="REF-FIRST",
+            gateway_transaction_id="TXN-FIRST",
+        )
+
+        _make_success_attempt(
+            payment,
+            authority_id="AUTH-SECOND",
+            gateway_reference="REF-SECOND",
+            gateway_transaction_id="TXN-SECOND",
+            clear_existing=False,
+        )
+
+        with pytest.raises(
+            ValidationError,
+            match="Multiple successful payment attempts",
+        ):
+            confirm_order_payment(
+                order.id,
+                payment_id=payment.id,
+            )
+
+        payment.refresh_from_db()
+
+        attempts = list(
+            PaymentAttemptRepository.successful_for_payment(
+                payment.pk,
+            ).order_by(
+                "attempt_number",
+                "id",
+            )
+        )
+
+        assert payment.is_consumed is False
+        assert len(attempts) == 2
+        assert {
+            attempt.gateway_reference
+            for attempt in attempts
+        } == {
+            "REF-FIRST",
+            "REF-SECOND",
+        }
+
+    def test_confirmation_does_not_use_attempt_from_another_payment(
+        self,
+        order,
+        payment_factory,
+    ):
+        payment = payment_factory(
+            order=order,
+            status=PaymentStatusType.SUCCESS,
+        )
+
+        unrelated_payment = payment_factory(
+            order=order,
+            status=PaymentStatusType.SUCCESS,
+        )
+
+        _make_success_attempt(
+            unrelated_payment,
+            authority_id="AUTH-UNRELATED",
+            gateway_reference="REF-UNRELATED",
+            gateway_transaction_id="TXN-UNRELATED",
+        )
+
+        with pytest.raises(
+            ValidationError,
+        ):
+            confirm_order_payment(
+                order.id,
+                payment_id=payment.id,
+            )
+
+        payment.refresh_from_db()
+        unrelated_payment.refresh_from_db()
+
+        assert payment.is_consumed is False
+        assert unrelated_payment.is_consumed is False
+
+    def test_failed_attempt_does_not_authorize_successful_payment(
+        self,
+        order,
+        payment_factory,
+    ):
+        payment = payment_factory(
+            order=order,
+            status=PaymentStatusType.SUCCESS,
+        )
+
+        payment.attempts.all().delete()
+
+        failed_attempt = PaymentAttemptFactory(
+            payment=payment,
+            attempt_number=1,
+            status=PaymentAttemptStatus.FAILED,
+            authority_id="AUTH-FAILED",
+            gateway_reference="REF-FAILED",
+            gateway_transaction_id="TXN-FAILED",
+        )
+
+        with pytest.raises(
+            ValidationError,
+            match="No successful payment attempt found",
+        ):
+            confirm_order_payment(
+                order.id,
+                payment_id=payment.id,
+            )
+
+        payment.refresh_from_db()
+        failed_attempt.refresh_from_db()
+
+        assert payment.is_consumed is False
+        assert failed_attempt.status == PaymentAttemptStatus.FAILED
+
+    def test_successful_attempt_for_other_payment_cannot_authorize_target(
+        self,
+        order,
+        payment_factory,
+    ):
+        target = payment_factory(
+            order=order,
+            status=PaymentStatusType.SUCCESS,
+        )
+
+        other = payment_factory(
+            order=order,
+            status=PaymentStatusType.SUCCESS,
+        )
+
+        _make_success_attempt(
+            other,
+            authority_id="AUTH-OTHER",
+            gateway_reference="REF-OTHER",
+            gateway_transaction_id="TXN-OTHER",
+        )
+
+        with pytest.raises(
+            ValidationError,
+        ):
+            confirm_order_payment(
+                order.id,
+                payment_id=target.id,
+            )
+
+        target.refresh_from_db()
+        other.refresh_from_db()
+
+        assert target.is_consumed is False
+        assert other.is_consumed is False
 
 
 # ==========================================================
