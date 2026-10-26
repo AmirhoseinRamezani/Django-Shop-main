@@ -1,4 +1,4 @@
-# core/tests/services/order/test_confirm_payment_facade.py
+# tests/services/order/test_confirm_payment_facade.py
 from __future__ import annotations
 
 import pytest
@@ -29,10 +29,9 @@ def make_success_attempt(payment, suffix: str):
 
 class TestConfirmOrderPaymentFacade:
 
-    def test_forwards_exact_successful_payment_id(
+    def test_delegates_payment_resolution_to_canonical_service(
         self,
         order,
-        success_payment,
         mocker,
     ):
         confirm = mocker.patch(
@@ -43,10 +42,7 @@ class TestConfirmOrderPaymentFacade:
         result = confirm_order_payment_by_order_id(order.id)
 
         assert result == order
-        confirm.assert_called_once_with(
-            order_id=order.id,
-            payment_id=success_payment.id,
-        )
+        confirm.assert_called_once_with(order_id=order.id)
 
     def test_does_not_select_arbitrary_payment_when_multiple_succeed(
         self,
@@ -66,6 +62,9 @@ class TestConfirmOrderPaymentFacade:
 
         confirm = mocker.patch(
             "order.services.confirm_payment_facade.confirm_order_payment",
+            side_effect=ValueError(
+                "Multiple successful Payments found for Order"
+            ),
         )
 
         with pytest.raises(
@@ -74,7 +73,7 @@ class TestConfirmOrderPaymentFacade:
         ):
             confirm_order_payment_by_order_id(order.id)
 
-        confirm.assert_not_called()
+        confirm.assert_called_once_with(order_id=order.id)
 
         success_payment.refresh_from_db()
         another_payment.refresh_from_db()
@@ -82,13 +81,16 @@ class TestConfirmOrderPaymentFacade:
         assert success_payment.is_consumed is False
         assert another_payment.is_consumed is False
 
-    def test_rejects_order_without_successful_payment(
+    def test_translates_canonical_validation_error_to_value_error(
         self,
         order,
         mocker,
     ):
         confirm = mocker.patch(
             "order.services.confirm_payment_facade.confirm_order_payment",
+            side_effect=ValidationError(
+                "No successful payment found"
+            ),
         )
 
         with pytest.raises(
@@ -97,4 +99,4 @@ class TestConfirmOrderPaymentFacade:
         ):
             confirm_order_payment_by_order_id(order.id)
 
-        confirm.assert_not_called()
+        confirm.assert_called_once_with(order_id=order.id)
