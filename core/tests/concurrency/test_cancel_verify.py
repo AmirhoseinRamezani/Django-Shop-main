@@ -11,6 +11,7 @@ from django.db import close_old_connections, connections
 from order.models import OrderStatusType
 from order.services.state_machine import OrderStateMachine
 from payment.enums import PaymentAttemptStatus, PaymentGateway, PaymentStatusType
+from payment.exceptions import PaymentInvariantViolation
 from payment.models import (
     PaymentResolution,
     PaymentResolutionReason,
@@ -265,8 +266,8 @@ def test_consumed_successful_payment_with_pending_order_fails_closed():
     )
 
     with pytest.raises(
-        ValidationError,
-        match="Consumed Payment is inconsistent with Order state or PAID event",
+        PaymentInvariantViolation,
+        match="Consumed Payment lacks matching canonical PAID event evidence",
     ):
         verify_payment(
             payment_id=payment.pk,
