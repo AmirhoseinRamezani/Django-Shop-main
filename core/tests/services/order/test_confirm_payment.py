@@ -5,6 +5,7 @@ import pytest
 
 from django.core.exceptions import ValidationError
 
+from order.events.order_event import OrderEvent, OrderEventType
 from order.models import OrderStatusType
 from order.services.confirm_payment import confirm_order_payment
 
@@ -510,6 +511,61 @@ class TestIdempotency:
         assert first.pk == second.pk
         assert second.status == OrderStatusType.paid
 
+    def test_consumed_payment_requires_matching_paid_event_attempt(
+        self,
+        order,
+        success_payment,
+        mocker,
+    ):
+        attempt = PaymentAttemptRepository.latest_for_payment(
+            success_payment.pk,
+        )
+
+        OrderEvent.objects.create(
+            order=order,
+            type=OrderEventType.PAID,
+            payload={
+                "payment_id": success_payment.pk,
+                "attempt_id": attempt.pk + 1,
+            },
+        )
+
+        success_payment.is_consumed = True
+        success_payment.save(update_fields=("is_consumed",))
+
+        transition = mocker.patch(
+            "order.services.confirm_payment.OrderStateMachine.transition",
+        )
+
+        with pytest.raises(
+            ValidationError,
+            match="Consumed Payment is inconsistent with Order state or PAID event",
+        ):
+            confirm_order_payment(
+                order.id,
+                payment_id=success_payment.id,
+            )
+
+        transition.assert_not_called()
+
+    def test_consumed_payment_requires_successful_attempt(
+        self,
+        order,
+        success_payment,
+    ):
+        success_payment.attempts.all().delete()
+        success_payment.is_consumed = True
+        success_payment.save(update_fields=("is_consumed",))
+
+        with pytest.raises(
+            ValidationError,
+            match="No successful payment attempt found",
+        ):
+            confirm_order_payment(
+                order.id,
+                payment_id=success_payment.id,
+            )
+    
     def test_payment_only_consumed_once(
         self,
         order,

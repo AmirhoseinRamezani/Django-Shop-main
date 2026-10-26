@@ -129,35 +129,12 @@ def confirm_order_payment(
     )
 
     # ==========================================================
-    # 5. IDEMPOTENT PAYMENT CONSUMPTION
+    # 5. RESOLVE EXACT SUCCESSFUL PAYMENT ATTEMPT
     # ==========================================================
-
-    if payment.is_consumed:
-        paid_event = (
-            order.events
-            .filter(type=OrderEventType.PAID)
-            .order_by("-id")
-            .first()
-        )
-
-        if (
-            order.status == OrderStatusType.paid
-            and paid_event is not None
-            and paid_event.payload.get("payment_id") == payment.pk
-        ):
-            return order
-
-        raise ValidationError(
-            _(
-                "Consumed Payment is inconsistent with "
-                "Order state or PAID event"
-            )
-        )
-
-    # ==========================================================
-    # 6. RESOLVE EXACT SUCCESSFUL PAYMENT ATTEMPT
-    # ==========================================================
-
+    # A consumed Payment may only be treated as idempotently finalized when
+    # its current financial evidence still resolves to exactly one successful
+    # PaymentAttempt. The idempotency branch must not bypass this identity
+    # boundary.
     successful_attempts = list(
         PaymentAttemptRepository
         .successful_for_payment(payment.pk)
@@ -198,6 +175,38 @@ def confirm_order_payment(
             _("Successful payment attempt has no gateway evidence")
         )
 
+    # ==========================================================
+    # 6. IDEMPOTENT PAYMENT CONSUMPTION
+    # ==========================================================
+
+    if payment.is_consumed:
+        paid_event = (
+            order.events
+            .filter(type=OrderEventType.PAID)
+            .order_by("-id")
+            .first()
+        )
+
+        event_attempt_id = (
+            paid_event.payload.get("attempt_id")
+            if paid_event is not None
+            else None
+        )
+
+        if (
+            order.status == OrderStatusType.paid
+            and paid_event is not None
+            and paid_event.payload.get("payment_id") == payment.pk
+            and event_attempt_id == attempt.pk
+        ):
+            return order
+
+        raise ValidationError(
+            _(
+                "Consumed Payment is inconsistent with "
+                "Order state or PAID event"
+            )
+         )
     # ==========================================================
     # 7. TERMINAL ORDER CONFLICTS
     # ==========================================================
