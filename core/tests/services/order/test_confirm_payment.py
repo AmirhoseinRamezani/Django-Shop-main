@@ -567,6 +567,28 @@ class TestMultiplePayments:
 
         assert success_payment.is_consumed is False
         assert another.is_consumed is False
+    
+    def test_explicit_payment_id_uses_exact_payment_lock(
+        self,
+        order,
+        success_payment,
+        mocker,
+    ):
+        successful_for_order = mocker.patch(
+            "order.services.confirm_payment.PaymentRepository.successful_for_order",
+            side_effect=AssertionError(
+                "explicit payment confirmation must not discover a payment by order"
+            ),
+        )
+
+        confirm_order_payment(
+            order.id,
+            payment_id=success_payment.id,
+        )
+
+        successful_for_order.assert_not_called()
+        success_payment.refresh_from_db()
+        assert success_payment.is_consumed is True
 
     def test_explicit_payment_id_selects_exact_successful_payment(
         self,

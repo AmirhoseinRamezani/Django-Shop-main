@@ -67,42 +67,62 @@ def confirm_order_payment(
     # or financial-snapshot failures into terminal Order resolutions.
 
     # ==========================================================
-    # 3. RESOLVE SUCCESSFUL PAYMENT
+    # 3. RESOLVE EXACT PAYMENT
     # ==========================================================
 
-    successful_payments = list(
-        PaymentRepository
-        .successful_for_order(order.pk)
-        .select_for_update()
-        .order_by(
-            "-updated_date",
-            "-id",
-        )[:2]
-    )
-
     if payment_id is not None:
-        successful_payments = [
-            payment
-            for payment in successful_payments
-            if payment.pk == payment_id
-        ]
+    
+        # An explicit payment id is authoritative for this finalization.
+        # Never discover a different successful Payment and then compare ids.
+        # The canonical Payment aggregate lock is acquired immediately.
+        try:
+            payment = PaymentRepository.get_for_update(payment_id)
+        except PaymentRepository.model.DoesNotExist:
+            raise ValidationError(
+                _("No successful payment found")
+            )
 
-    if not successful_payments:
-        raise ValidationError(
-            _("No successful payment found")
+        if payment.order_id != order.pk:
+            raise ValidationError(
+                _("No successful payment found")
+            )
+
+        if not payment.is_successful:
+            raise ValidationError(
+                _("No successful payment found")
+            )
+    else:
+        # Order-only confirmation is valid only when the Order has exactly
+        # one successful Payment. There is intentionally no fallback to
+        # latest/first successful Payment selection.
+        successful_payments = list(
+            PaymentRepository
+            .successful_for_order(order.pk)
+            .select_for_update()
+            .order_by(
+                "-updated_date",
+                "-id",
+            )[:2]
         )
 
-    if len(successful_payments) != 1:
-        raise ValidationError(
-            _("Multiple successful Payments found for Order")
-        )
+        if not successful_payments:
+            raise ValidationError(
+                _("No successful payment found")
+            )
 
-    payment = successful_payments[0]
+        if len(successful_payments) != 1:
+            raise ValidationError(
+                _("Multiple successful Payments found for Order")
+            )
 
+        payment = successful_payments[0]
     # ==========================================================
     # 4. PAYMENT ↔ ORDER FINANCIAL IDENTITY
     # ==========================================================
-
+    if payment.order_id != order.pk:
+        raise ValidationError(
+            _("Payment does not belong to Order")
+        )
     PaymentPolicy.validate_order_financial_snapshot(
         payment,
         order,
@@ -237,32 +257,3 @@ def confirm_order_payment(
         CouponService.consume(order.coupon)
 
     return order
-
-# # =======================================
-# # LEGACY COMPATIBILITY ADAPTER
-# # =======================================
-
-# def _confirm_order_payment(
-#     order_id: int,
-# ) -> OrderModel:
-#     """
-#     Backward-compatible adapter.
-
-#     The canonical implementation remains
-#     confirm_order_payment().
-#     """
-
-#     payment_exists = (
-#         PaymentRepository
-#         .successful_for_order(order_id)
-#         .exists()
-#     )
-
-#     if not payment_exists:
-#         raise ValidationError(
-#             _("No successful payment found")
-#         )
-
-#     return confirm_order_payment(
-#         order_id,
-#     )
