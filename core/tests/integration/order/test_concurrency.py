@@ -1,6 +1,8 @@
 # tests/integration/order/test_concurrency.py
+from __future__ import annotations
 import threading
 
+import pytest
 from django.test import TransactionTestCase
 
 from order.models import OrderStatusType
@@ -40,24 +42,44 @@ class ConfirmPaymentConcurrencyTests(TransactionTestCase):
             .payment
         )
 
-    def worker(self, errors):
+    def worker(
+        self,
+        *,
+        barrier: threading.Barrier,
+        errors: list[BaseException],
+    ):
+        barrier.wait()
 
         try:
-            confirm_order_payment(self.order.id)
-
-        except Exception as exc:
+            confirm_order_payment(
+                self.order.id,
+                payment_id=self.payment.id,
+            )
+            
+        except BaseException as exc:
             errors.append(exc)
 
     def test_only_one_confirmation(self):
 
-        errors = []
+        """
+        Two workers must race on the same exact Payment.
+
+        The barrier synchronizes entry into the confirmation workflow.
+        PostgreSQL row locking remains responsible for serialization.
+        """
+
+        errors: list[BaseException] = []
+        barrier = threading.Barrier(2)
 
         threads = [
             threading.Thread(
                 target=self.worker,
-                args=(errors,),
-                )
-                for _ in range(2)
+                kwargs={
+                    "barrier": barrier,
+                    "errors": errors,
+                },
+            )
+            for _ in range(2)
         ]
         
         for thread in threads:
@@ -66,16 +88,16 @@ class ConfirmPaymentConcurrencyTests(TransactionTestCase):
         for thread in threads:
             thread.join()
         
+        if errors:
+            pytest.fail(
+                "Concurrent confirmation raised unexpected exceptions: "
+                f"{errors!r}"
+            )
+        
         self.payment.refresh_from_db()
         self.order.refresh_from_db()
         
-        self.assertEqual(
-            errors,
-            [],
-        )
-        self.assertTrue(
-            self.payment.is_consumed,
-            )
+        self.assertTrue(self.payment.is_consumed)
         self.assertEqual(
             self.order.status,
             OrderStatusType.paid,
@@ -107,24 +129,38 @@ class CouponConsumeConcurrencyTests(TransactionTestCase):
             .order
         )
 
-        PaymentBuilder()\
-            .for_order(self.order)\
-            .success()\
-            .successful_attempt()\
+        (
+            PaymentBuilder()
+            .for_order(self.order)
+            .success()
+            .successful_attempt()
             .build()
+        )
 
-    def worker(self):
+    def worker(
+        self,
+        *,
+        barrier: threading.Barrier,
+        errors: list[BaseException],
+    ):
+        barrier.wait()
 
         try:
             confirm_order_payment(self.order.id)
-        except Exception:
-            pass
+        except BaseException as exc:
+            errors.append(exc)
 
     def test_coupon_used_once(self):
-
+        errors: list[BaseException] = []
+        barrier = threading.Barrier(2)
+        
         threads = [
             threading.Thread(
                 target=self.worker,
+                kwargs={
+                    "barrier": barrier,
+                    "errors": errors,
+                },
             )
             for _ in range(2)
         ]
@@ -134,6 +170,12 @@ class CouponConsumeConcurrencyTests(TransactionTestCase):
             
         for thread in threads:
             thread.join()
+            
+        if errors:
+            pytest.fail(
+                "Concurrent coupon finalization raised exceptions: "
+                f"{errors!r}"
+            )
         
         self.coupon.refresh_from_db()
         
@@ -162,23 +204,39 @@ class OrderStatusConcurrencyTests(TransactionTestCase):
             .order
         )
 
-        PaymentBuilder()\
-            .for_order(self.order)\
-            .success()\
-            .successful_attempt()\
+        (
+            PaymentBuilder()
+            .for_order(self.order)
+            .success()
+            .successful_attempt()
             .build()
+        )
 
-    def worker(self):
+    def worker(
+        self,
+        *,
+        barrier: threading.Barrier,
+        errors: list[BaseException],
+    ):
+        barrier.wait()
 
         try:
             confirm_order_payment(self.order.id)
-        except Exception:
-            pass
+        except BaseException as exc:
+            errors.append(exc)
 
     def test_order_paid_once(self):
-
+        errors: list[BaseException] = []
+        barrier = threading.Barrier(5)
+        
         threads = [
-            threading.Thread(target=self.worker)
+            threading.Thread(
+                target=self.worker,
+                kwargs={
+                    "barrier": barrier,
+                    "errors": errors,
+                },
+            )
             for _ in range(5)
         ]
 
@@ -187,6 +245,12 @@ class OrderStatusConcurrencyTests(TransactionTestCase):
 
         for thread in threads:
             thread.join()
+            
+        if errors:
+            pytest.fail(
+                "Concurrent order finalization raised exceptions: "
+                f"{errors!r}"
+            )
 
         self.order.refresh_from_db()
 
@@ -279,13 +343,7 @@ class StockConcurrencyTests(TransactionTestCase):
             thread.join()
         
         self.product.refresh_from_db()
-        self.assertEqual( 
-            self.product.stock,
-            0,
-        )
-        self.assertEqual(
-            len(errors),
-            1,
-        )
+        self.assertEqual(self.product.stock, 0)
+        self.assertEqual(len(errors), 1)
 
         
