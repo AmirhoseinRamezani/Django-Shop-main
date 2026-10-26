@@ -202,8 +202,33 @@ class PaymentResolutionService:
                 or not payment.is_consumed
             ):
                 return None
-            paid_event = order.events.filter(type=OrderEventType.PAID).order_by("-id").first()
-            if paid_event is None or paid_event.payload.get("payment_id") != payment.pk:
+            successful_attempts = list(
+                PaymentAttempt.objects
+                .select_for_update()
+                .filter(
+                    payment_id=payment.pk,
+                    status=PaymentAttemptStatus.SUCCESS,
+                )
+                .order_by(
+                    "-attempt_number",
+                    "-id",
+                )[:2]
+            )
+            if len(successful_attempts) != 1:
+                return None
+
+            attempt = successful_attempts[0]
+            if attempt.payment_id != payment.pk:
+                return None
+
+            paid_event = order.events.filter(
+                type=OrderEventType.PAID,
+            ).order_by("-id").first()
+            if paid_event is None:
+                return None
+            if paid_event.payload.get("payment_id") != payment.pk:
+                return None
+            if paid_event.payload.get("attempt_id") != attempt.pk:
                 return None
             resolution = (
                 PaymentResolution.objects.select_for_update()

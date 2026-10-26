@@ -282,12 +282,16 @@ def test_duplicate_after_canonical_consumption_does_not_create_resolution_if_ord
 
     order = OrderFactory(paid=True)
     payment = PaymentFactory(order=order, status=PaymentStatusType.SUCCESS, is_consumed=True)
-    PaymentAttemptFactory(payment=payment, success=True)
+    attempt = PaymentAttemptFactory(payment=payment, success=True)
     OrderEvent.objects.create(
         order=order,
         type=OrderEventType.PAID,
-        payload={"payment_id": payment.pk},
+        payload={
+            "payment_id": payment.pk,
+            "attempt_id": attempt.pk,
+        },
     )
+    
     # Simulate a legitimate later lifecycle transition without replaying payment.
     OrderStateMachine.transition(order=order, to_status=OrderStatusType.processing)
     OrderStateMachine.transition(order=order, to_status=OrderStatusType.cancelled)
@@ -295,6 +299,40 @@ def test_duplicate_after_canonical_consumption_does_not_create_resolution_if_ord
     result = synchronize_successful_payment(payment_id=payment.pk)
 
     assert result.pk == payment.pk
+    assert not PaymentResolution.objects.filter(payment=payment).exists()
+
+
+def test_consumed_payment_with_mismatched_attempt_evidence_is_rejected():
+    from order.events.order_event import OrderEvent, OrderEventType
+    from payment.exceptions import PaymentInvariantViolation
+    from payment.services.verify import synchronize_successful_payment
+
+    order = OrderFactory(paid=True)
+    payment = PaymentFactory(
+        order=order,
+        status=PaymentStatusType.SUCCESS,
+        is_consumed=True,
+    )
+    attempt = PaymentAttemptFactory(payment=payment, success=True)
+    mismatched_attempt_id = attempt.pk + 1
+    OrderEvent.objects.create(
+        order=order,
+        type=OrderEventType.PAID,
+        payload={
+            "payment_id": payment.pk,
+            "attempt_id": mismatched_attempt_id,
+        },
+    )
+
+    with pytest.raises(
+        PaymentInvariantViolation,
+        match="matching canonical PAID event evidence",
+    ):
+        synchronize_successful_payment(payment_id=payment.pk)
+
+    assert mismatched_attempt_id != attempt.pk
+
+
     assert not PaymentResolution.objects.filter(payment=payment).exists()
 
 

@@ -993,20 +993,51 @@ def _consume_successful_payment(
             if not payment.is_successful:
                 raise PaymentInvariantViolation("Only successful Payments can be consumed.")
 
-            # A matching PAID event is the canonical consumption evidence. The
-            # Order may legitimately have advanced or later been cancelled; do not
-            # replay finalization effects or manufacture a new Resolution.
+            # A consumed Payment is idempotent only when its complete
+            # canonical finalization evidence is still intact. Payment id alone
+            # is insufficient because a PaymentAttempt is the gateway execution
+            # identity for the successful Payment.
+
             if payment.is_consumed:
-                paid_event = order.events.filter(type=OrderEventType.PAID).order_by("-id").first()
-                if (
-                    paid_event is not None
-                    and paid_event.payload.get("payment_id") == payment.pk
-                ):
-                    PaymentResolutionService.resolve_after_verified_finalization(
-                        payment_id=payment.pk,
-                        order_id=order.pk,
+                successful_attempts = list(
+                    PaymentAttemptRepository
+                    .successful_for_payment(payment.pk)
+                    .select_for_update()
+                    .order_by(
+                        "-attempt_number",
+                        "-id",
+                    )[:2]
+                )
+                if len(successful_attempts) != 1:
+                    raise PaymentInvariantViolation(
+                        "Consumed Payment does not have exactly one "
+                        "successful PaymentAttempt."
                     )
-                    return payment
+
+                attempt = successful_attempts[0]
+                paid_event = (
+                    order.events
+                    .filter(type=OrderEventType.PAID)
+                    .order_by("-id")
+                    .first()
+                )
+
+                if (
+                    paid_event is None
+                    or paid_event.payload.get("payment_id") != payment.pk
+                    or paid_event.payload.get("attempt_id") != attempt.pk
+                ):
+                    raise PaymentInvariantViolation(
+                        "Consumed Payment lacks matching canonical "
+                        "PAID event evidence."
+                    )
+
+                PaymentResolutionService.resolve_after_verified_finalization(
+                    payment_id=payment.pk,
+                    order_id=order.pk,
+                )
+                return payment
+
             # The canonical service owns every Order/Coupon side effect.
             confirm_order_payment(order_id=order.pk, payment_id=payment.pk)
             payment.refresh_from_db()
