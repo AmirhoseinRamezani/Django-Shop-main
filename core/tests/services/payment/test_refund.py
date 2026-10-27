@@ -537,6 +537,68 @@ class TestRefundService:
         inquiry_gateway.assert_called_once()
         refund_gateway.assert_not_called()
 
+    @pytest.mark.parametrize(
+        ("overrides", "message"),
+        [
+            (
+                {"gateway": PaymentGateway.STRIPE},
+                "Refund inquiry gateway does not match",
+            ),
+            (
+                {"amount": Decimal("299999")},
+                "Refund inquiry amount does not match",
+            ),
+            (
+                {"currency": "USD"},
+                "Refund inquiry currency does not match",
+            ),
+        ],
+    )
+    def test_refund_reconciliation_rejects_mismatched_provider_evidence(
+        self,
+        admin_user,
+        overrides,
+        message,
+    ):
+        payment = refundable_payment()
+        pending = RefundFactory(
+            payment=payment,
+            amount=Decimal("300000"),
+            idempotency_key="refund-recovery-mismatch-1",
+            status=RefundStatus.PENDING,
+        )
+        values = {
+            "success": True,
+            "status": RefundStatus.SUCCESS,
+            "gateway": PaymentGateway.ZARINPAL,
+            "gateway_reference": "RECOVERED-MISMATCH-REF",
+            "gateway_transaction_id": "RECOVERED-MISMATCH-TX",
+            "response_code": "100",
+            "message": "Refund completed",
+            "amount": pending.amount,
+            "currency": payment.currency,
+        }
+        values.update(overrides)
+        inquiry = GatewayRefundInquiryResult(**values)
+
+        with patch(
+            "payment.services.refund.GatewayService.inquire_refund",
+            return_value=inquiry,
+        ) as gateway:
+            with pytest.raises(PaymentInvariantViolation, match=message):
+                RefundService.reconcile_pending_refund(
+                    refund_id=pending.pk,
+                )
+
+        pending.refresh_from_db()
+        payment.refresh_from_db()
+
+        assert pending.status == RefundStatus.PENDING
+        assert pending.finished_at is None
+        assert pending.gateway_reference == ""
+        assert pending.gateway_transaction_id == ""
+        assert payment.is_refunded is False
+        gateway.assert_called_once()
 
 
     def test_pending_refund_recovery_stays_pending_without_provider_inquiry_support(self, admin_user):

@@ -417,6 +417,15 @@ class RefundService:
                     "Gateway returned an invalid refund inquiry result."
                 ),
             )
+        
+        # Inquiry is external evidence, not authority by itself. Validate
+        # its provider and optional financial identity against the exact
+        # Payment/Refund snapshot before any terminal transition is applied.
+        cls._validate_refund_inquiry_result(
+            result=result,
+            payment=payment,
+            refund=refund,
+        )
 
         if result.status == RefundStatus.PENDING:
             return cls._record_pending_gateway_evidence(
@@ -877,7 +886,39 @@ class RefundService:
     # ============================
     # GATEWAY RESULT NORMALIZATION
     # ============================
+    @classmethod
+    def _validate_refund_inquiry_result(
+        cls,
+        *,
+        result: GatewayRefundInquiryResult,
+        payment,
+        refund: Refund,
+    ) -> None:
+        """Reject refund inquiry evidence for a different provider or amount."""
+        if result.gateway != payment.gateway:
+            raise PaymentInvariantViolation(
+                "Refund inquiry gateway does not match the Payment gateway."
+            )
 
+        if result.amount is not None:
+            try:
+                amount = Decimal(str(result.amount))
+            except (TypeError, ValueError, ArithmeticError) as exc:
+                raise PaymentInvariantViolation(
+                    "Refund inquiry returned an invalid amount."
+                ) from exc
+
+            if not amount.is_finite() or amount != refund.amount:
+                raise PaymentInvariantViolation(
+                    "Refund inquiry amount does not match the Refund."
+                )
+
+        if result.currency:
+            currency = cls._normalize_optional(result.currency)
+            if currency != refund.currency:
+                raise PaymentInvariantViolation(
+                    "Refund inquiry currency does not match the Refund."
+                )
 
     @staticmethod
     def _gateway_inquiry_response_code(
