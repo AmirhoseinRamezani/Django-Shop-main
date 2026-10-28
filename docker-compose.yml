@@ -26,6 +26,7 @@ services:
       - "8000:8000"
     environment:
       - DEBUG=True
+      - PGDB_NAME=django_shop_dev
     env_file:
       - ./envs/dev/django/.env
     depends_on:

@@ -582,3 +582,38 @@ PaymentModel
           │                   │
           ▼                   ▼
      Gateway API        Payment state
+    
+    
+    POST /checkout/
+      │
+      ▼
+OrderCheckOutView.form_valid()
+      │
+      ├── Resolve current user's cart
+      ├── Read coupon_id from session
+      │
+      ▼
+OrderService.create_online_order()
+      │
+      ├── Validate cart and coupon
+      ├── Calculate product prices
+      ├── Create Order
+      ├── Create OrderItems
+      ├── Reserve inventory
+      └── Commit transaction
+      │
+      ▼
+PaymentService.start_payment()
+      │
+      ├── Lock Order
+      ├── Reuse existing pending Payment, if present
+      │      └── Reuse authorized pending Attempt
+      │
+      └── Otherwise create Payment + Attempt
+             │
+             ▼
+        Gateway initiation
+             │
+             ├── Accepted
+             ├── Definitive rejection
+             └── Unknown / transport failure
