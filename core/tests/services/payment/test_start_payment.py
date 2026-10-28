@@ -198,3 +198,32 @@ class TestStartPayment:
                 order,
                 callback_url=self.CALLBACK_URL,
             )
+
+    def test_missing_callback_url_does_not_create_payment_or_attempt(self):
+        order = OrderFactory(payable=True)
+
+        with pytest.raises(PaymentGatewayError) as exc:
+            PaymentService.start_payment(order, callback_url="")
+
+        assert exc.value.retryable is False
+        assert not PaymentModel.objects.filter(order_id=order.pk).exists()
+        assert not PaymentAttempt.objects.filter(
+            payment__order_id=order.pk,
+        ).exists()
+
+    def test_missing_callback_url_does_not_create_attempt_for_existing_payment(
+        self, payment_factory
+    ):
+        order = OrderFactory(payable=True)
+        payment = payment_factory(
+            order=order,
+            status=PaymentStatusType.PENDING,
+        )
+
+        with pytest.raises(PaymentGatewayError) as exc:
+            PaymentService.start_payment(order, callback_url="")
+
+        assert exc.value.retryable is False
+        assert not PaymentAttempt.objects.filter(
+            payment_id=payment.pk,
+        ).exists()

@@ -63,7 +63,9 @@ class PaymentService:
 
         if order is None or order.pk is None:
             raise PaymentCreationForbiddenError("Order is required.")
-
+        
+        resolved_callback_url: str | None = None
+        
         # ==============================================================
         # PHASE A — CREATE / RESOLVE LOCAL PAYMENT EXECUTION
         # ==============================================================
@@ -118,6 +120,10 @@ class PaymentService:
                     # Compatibility recovery for a pending Payment created by
                     # an older local path. The Payment aggregate remains the
                     # same; only its missing execution Attempt is created.
+                    # Validate configuration before creating a new Attempt.
+                    resolved_callback_url = (
+                        PaymentService._resolve_callback_url(callback_url)
+                    )
                     attempt = PaymentAttemptRepository.create(
                         payment=payment,
                         attempt_number=PaymentAttemptRepository.next_attempt_number(
@@ -133,6 +139,10 @@ class PaymentService:
             else:
                 selected_gateway = GatewayService.current_gateway()
 
+                # Validate configuration before creating Payment/Attempt.
+                resolved_callback_url = (
+                    PaymentService._resolve_callback_url(callback_url)
+                )
                 amount = Decimal(str(locked_order.final_price))
                 payment = PaymentRepository.create(
                     order=locked_order,
@@ -174,7 +184,10 @@ class PaymentService:
                 gateway=payment_gateway,
             )
 
-        resolved_callback_url = PaymentService._resolve_callback_url(callback_url)
+        if resolved_callback_url is None:
+            raise PaymentInvariantViolation(
+                "Callback URL was not resolved before payment initiation."
+            )
 
         try:
             result = GatewayService.initiate_payment(
