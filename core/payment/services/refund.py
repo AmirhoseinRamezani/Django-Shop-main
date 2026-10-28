@@ -374,6 +374,12 @@ class RefundService:
                 payment,
                 locked_order,
             )
+            attempt = (
+                PaymentAttemptRepository
+                .latest_successful_for_payment_for_update(
+                    payment.pk,
+                )
+            )
             refund = RefundRepository.get_for_update(
                 refund_id,
             )
@@ -385,13 +391,6 @@ class RefundService:
 
             if refund.is_terminal:
                 return refund
-
-            attempt = (
-                PaymentAttemptRepository
-                .latest_successful_for_payment_for_update(
-                    payment.pk,
-                )
-            )
 
         try:
             result = GatewayService.inquire_refund(
