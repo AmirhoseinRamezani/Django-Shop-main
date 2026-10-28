@@ -134,13 +134,17 @@ class TestCreateOnlineOrder(BaseTestCase):
         product_factory,
         address,
     ):
-        product = product_factory()
+        product = product_factory(
+            price=100000,
+            discount_percent=20,
+        )
 
         cart = cart_factory(user=user)
 
         cart_item_factory(
             cart=cart,
             product=product,
+            quantity=2,
         )
 
         order = OrderService.create_online_order(
@@ -150,14 +154,22 @@ class TestCreateOnlineOrder(BaseTestCase):
             coupon=coupon,
         )
 
+        # Product discount is applied first: 2 × 80,000 = 160,000.
+        # The 10% coupon is then applied to that subtotal: payable = 144,000.
+        assert order.total_price == Decimal("160000")
+        assert order.subtotal_price == Decimal("160000")
+        assert order.discount_amount == Decimal("16000")
+        assert order.shipping_price == Decimal("0")
+        assert order.tax_amount == Decimal("0")
+        assert order.payable_price == Decimal("144000")
+        assert order.final_price == Decimal("144000")
+        assert order.order_items.get().price == Decimal("80000")
+        assert order.order_items.get().quantity == 2
+
         assert order.coupon == coupon
 
         assert order.coupon_code == coupon.code
-
-        assert (
-            order.coupon_discount_percent
-            == coupon.discount_percent
-        )
+        assert order.coupon_discount_percent == coupon.discount_percent
 
     def test_empty_cart(
         self,

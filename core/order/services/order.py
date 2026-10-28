@@ -64,10 +64,31 @@ class OrderService:
             .in_bulk()
         )
         # total_price = Decimal("0")
-        total_price = OrderPricingService.calculate(
+        subtotal_price = OrderPricingService.calculate(
             cart_items,
             products,
         )
+        discount_amount = (
+            subtotal_price - OrderPricingService.discounted_subtotal(
+                subtotal_price,
+                coupon.discount_percent if coupon else 0,
+            )
+        )
+        shipping_price = Decimal("0")  # Preserve the current V1 no-shipping-charge behavior.
+        tax_amount = OrderPricingService.calculate_tax(
+            subtotal_price=subtotal_price,
+            discount_amount=discount_amount,
+            shipping_price=shipping_price,
+        )
+        payable_price = (
+            subtotal_price - discount_amount + shipping_price + tax_amount
+        )
+        if payable_price < 0:
+            raise ValidationError(_("Order payable amount cannot be negative"))
+
+        # Legacy total_price remains the pre-coupon item subtotal.
+        total_price = subtotal_price
+
         
         for item in cart_items:
             product = products[item.product_id]
@@ -97,11 +118,11 @@ class OrderService:
             sale_type=SaleType.ONLINE,
             status=OrderStatusType.pending,
             total_price=total_price,
-            subtotal_price=total_price,
-            discount_amount=Decimal("0"),
-            shipping_price=Decimal("0"),
-            tax_amount=Decimal("0"),
-            payable_price=total_price,
+            subtotal_price=subtotal_price,
+            discount_amount=discount_amount,
+            shipping_price=shipping_price,
+            tax_amount=tax_amount,
+            payable_price=payable_price,
             expire_at=expire_at,
 
             # user snapshot

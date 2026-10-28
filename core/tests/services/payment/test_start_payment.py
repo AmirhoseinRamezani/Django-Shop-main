@@ -1,4 +1,5 @@
 # tests/services/payment/test_start_payment.py
+from decimal import Decimal
 from unittest.mock import patch
 import pytest
 
@@ -33,6 +34,34 @@ class TestStartPayment:
     @patch("payment.services.gateway_service.GatewayService.current_gateway", return_value=PaymentGateway.ZARINPAL)
     @patch("payment.services.gateway_service.GatewayService.payment_url", return_value="https://gateway.test/pay/AUTH-123")
     @patch("payment.services.gateway_service.GatewayService.initiate_payment")
+    def test_coupon_adjusted_payable_amount_is_sent_unchanged_to_gateway(
+        self, mock_initiate, mock_payment_url, mock_current_gateway
+    ):
+        mock_initiate.return_value = self._initiation_result()
+        order = OrderFactory(
+            payable=True,
+            total_price=Decimal("160000"),
+            subtotal_price=Decimal("160000"),
+            discount_amount=Decimal("16000"),
+            shipping_price=Decimal("0"),
+            tax_amount=Decimal("0"),
+            payable_price=Decimal("144000"),
+        )
+
+        PaymentService.start_payment(
+            order,
+            callback_url=self.CALLBACK_URL,
+        )
+
+        payment = PaymentModel.objects.get(order=order)
+        assert payment.amount == Decimal("144000")
+        assert mock_initiate.call_args.kwargs["amount"] == Decimal("144000")
+        assert mock_initiate.call_args.kwargs["currency"] == "IRR"
+
+    @patch("payment.services.gateway_service.GatewayService.current_gateway", return_value=PaymentGateway.ZARINPAL)
+    @patch("payment.services.gateway_service.GatewayService.payment_url", return_value="https://gateway.test/pay/AUTH-123")
+    @patch("payment.services.gateway_service.GatewayService.initiate_payment")
+
     def test_creates_payment_and_attempt_before_gateway(
         self, mock_initiate, mock_payment_url, mock_current_gateway
     ):

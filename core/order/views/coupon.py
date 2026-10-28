@@ -1,21 +1,21 @@
-from django.views import View
-from django.http import JsonResponse
+# core/order/views/coupon.py
 from decimal import Decimal
-from django.views.generic import TemplateView
 from django.contrib.auth.mixins import LoginRequiredMixin
-from order.permissions import HasCustomerAccessPermission
-from django.contrib.sessions.backends.base import SessionBase
 from django.core.exceptions import ValidationError
-from order.models import CouponModel
-from order.services.coupon import CouponService
+from django.http import JsonResponse
+from django.utils.translation import gettext_lazy as _
+from django.views import View
+
 from cart.cart import CartSession
 from cart.models import CartModel
+from order.models import CouponModel
+from order.permissions import HasCustomerAccessPermission
+from order.services.coupon import CouponService
+from order.services.pricing import OrderPricingService
 
-from django.utils.translation import gettext_lazy as _
 class ApplyCouponView(View):
-    """
-    Validate coupon and store it in session (NO consumption here)
-    """
+    """Validate a coupon and store it in the session without consuming it."""
+
 
     def post(self, request, *args, **kwargs):
         code = request.POST.get("code")
@@ -23,43 +23,39 @@ class ApplyCouponView(View):
         if not code:
             return JsonResponse(
                 {"message": _("Discount code not entered")},
-                status=400
+                status=400,
             )
 
         try:
             coupon = CouponService.get_valid_coupon(code)
-        except ValidationError as e:
-            return JsonResponse(
-                {"message": e.message},
-                status=400
-            )
+        except ValidationError as exc:
+            return JsonResponse({"message": exc.message}, status=400)
 
-        # Store coupon id in session
         request.session["coupon_id"] = coupon.id
         request.session.modified = True
 
-        # Recalculate cart prices
         cart = CartSession(request.session)
-        total_price = cart.get_total_payment_amount()
-
-        discounted_price = int(
-            total_price * (100 - coupon.discount_percent) / 100
+        subtotal_price = cart.get_total_payment_amount()
+        discounted_price = OrderPricingService.discounted_subtotal(
+            subtotal_price,
+            coupon.discount_percent,
         )
-
-        # Example tax (keep consistent with your logic)
-        total_tax = int(discounted_price * 0.09)
+        discount_amount = Decimal(str(subtotal_price)) - discounted_price
+        tax_amount = OrderPricingService.calculate_tax(
+            subtotal_price=subtotal_price,
+            discount_amount=discount_amount,
+            shipping_price=Decimal("0"),
+        )
 
         return JsonResponse({
             "message": _("Discount code applied"),
-            "total_price": discounted_price,
-            "total_tax": total_tax
+            "total_price": int(discounted_price),
+            "total_tax": int(tax_amount),
         })
 
 class ValidateCouponView(LoginRequiredMixin, HasCustomerAccessPermission, View):
-    """
-    Only for checking and displaying coupon result (AJAX)
-    Does not make any changes to the database
-    """
+    """Validate and preview a coupon without mutating database state."""
+
     def post(self, request, *args, **kwargs):
         code = request.POST.get("code")
 
@@ -68,19 +64,31 @@ class ValidateCouponView(LoginRequiredMixin, HasCustomerAccessPermission, View):
         except CouponModel.DoesNotExist:
             return JsonResponse({"message": "Coupon not found"}, status=404)
 
-        # Centralized validation from model
         if not coupon.is_valid():
             return JsonResponse({"message": "Coupon is not valid"}, status=403)
 
         cart = CartModel.objects.get(user=request.user)
-        total_price = cart.calculate_total_price()
+        cart_items = list(cart.cart_items.select_related("product"))
+        products = {item.product_id: item.product for item in cart_items}
 
-        discounted_price = round(
-            total_price - (total_price * coupon.discount_percent / 100)
+        try:
+            subtotal_price = OrderPricingService.calculate(cart_items, products)
+        except ValidationError as exc:
+            return JsonResponse({"message": exc.message}, status=400)
+
+        discounted_price = OrderPricingService.discounted_subtotal(
+            subtotal_price,
+            coupon.discount_percent,
         )
+        discount_amount = subtotal_price - discounted_price
+        tax_amount = OrderPricingService.calculate_tax(
+            subtotal_price=subtotal_price,
+            discount_amount=discount_amount,
+            shipping_price=Decimal("0"),
+         )
 
         return JsonResponse({
             "message": "کد تخفیف معتبر است",
-            "total_price": discounted_price,
-            "total_tax": round(discounted_price * Decimal("0.09")),
+            "total_price": int(discounted_price),
+            "total_tax": int(tax_amount),
         })
