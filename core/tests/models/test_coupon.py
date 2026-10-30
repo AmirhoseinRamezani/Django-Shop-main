@@ -60,3 +60,25 @@ class TestCouponModel:
         coupon.refresh_from_db()
 
         assert coupon.used_count == 0
+
+    def test_reserved_capacity_makes_coupon_unavailable(self, coupon):
+        coupon.max_limit_usage = 1
+        coupon.reserved_count = 1
+        coupon.save(update_fields=("max_limit_usage", "reserved_count"))
+
+        coupon.refresh_from_db()
+        assert coupon.is_valid() is False
+
+    def test_mark_used_cannot_consume_reserved_capacity(self, coupon):
+        from django.core.exceptions import ValidationError
+
+        coupon.max_limit_usage = 1
+        coupon.reserved_count = 1
+        coupon.save(update_fields=("max_limit_usage", "reserved_count"))
+
+        with pytest.raises(ValidationError):
+            coupon.mark_used()
+
+        coupon.refresh_from_db()
+        assert coupon.used_count == 0
+        assert coupon.reserved_count == 1

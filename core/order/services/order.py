@@ -14,6 +14,7 @@ from order.events.order_event import OrderEventType
 from order.services.events import record_order_event
 
 from order.services.inventory import InventoryService
+from order.services.coupon import CouponService
 
 from order.models import (
     OrderModel,
@@ -41,8 +42,8 @@ class OrderService:
         if not cart.cart_items.exists():
             raise ValidationError(_("Your shopping cart is empty"))
 
-        if coupon and not coupon.is_valid():
-            raise ValidationError(_("Discount code is not valid"))
+        # Coupon availability and terms are authoritatively revalidated when
+        # the reservation is committed below under the Coupon row lock.
 
         
         cart_items = list(
@@ -184,6 +185,9 @@ class OrderService:
         OrderItemModel.objects.bulk_create(order_items)
 
         InventoryService.reserve(order)
+        # Coupon capacity is committed only after the Order and inventory
+        # reservation exist, but inside the same checkout transaction.
+        CouponService.reserve_for_order(order)
 
         return order
     

@@ -9,6 +9,7 @@ from order.events.order_event import OrderEventType
 from order.models import OrderStatusType
 from order.services.events import record_order_event
 from order.services.inventory import InventoryService
+from order.services.coupon import CouponService
 
 
 class OrderStateMachine:
@@ -138,6 +139,9 @@ class OrderStateMachine:
             payload=payload or {},
         )
 
+        if to_status == OrderStatusType.cancelled and order.coupon_id:
+            CouponService.schedule_reconciliation(order.pk)
+
         return order
 
     @staticmethod
@@ -157,7 +161,11 @@ class OrderStateMachine:
                 OrderStatusType.failed,
                 OrderStatusType.processing,
             }
-        ):
+            and not CouponService.has_unresolved_payment_outcome(order)
+         ):
+            # An unknown provider outcome retains inventory as well as coupon
+            # capacity. A later reconciliation may release it only after the
+            # payment path is definitively ineligible.
             InventoryService.restore(order)
 
     @staticmethod

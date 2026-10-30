@@ -1,3 +1,4 @@
+# order/services/confirm_payment.py
 from __future__ import annotations
 
 from django.core.exceptions import ValidationError
@@ -199,6 +200,8 @@ def confirm_order_payment(
             and paid_event.payload.get("payment_id") == payment.pk
             and event_attempt_id == attempt.pk
         ):
+            if order.coupon_id:
+                CouponService.schedule_reconciliation(order.pk)
             return order
 
         raise ValidationError(
@@ -259,10 +262,13 @@ def confirm_order_payment(
     )
 
     # ==========================================================
-    # 10. CONSUME COUPON
+    # 10. SCHEDULE COUPON RECONCILIATION
     # ==========================================================
 
+    # The PAID event and consumed Payment are the durable success evidence.
+    # Coupon accounting runs only after this transaction commits, so a coupon
+    # persistence failure cannot roll back verified financial finalization.
     if order.coupon_id:
-        CouponService.consume(order.coupon)
+        CouponService.schedule_reconciliation(order.pk)
 
     return order

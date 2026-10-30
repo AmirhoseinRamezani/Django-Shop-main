@@ -5,6 +5,10 @@ from django.core.management import call_command
 
 from tests.base import BaseTestCase
 from order.services.inventory import InventoryService
+from order.models import CouponReservation, CouponReservationStatus, OrderStatusType
+from order.services.coupon import CouponService
+from tests.factories.payment import PaymentFactory
+from tests.factories.shop import CouponFactory
 
 
 pytestmark = [
@@ -108,3 +112,29 @@ class TestExpirePendingOrders(BaseTestCase):
         assert expired1.is_completed
         assert expired2.is_completed
         assert payable.is_payable
+
+    def test_expiry_retains_inventory_and_coupon_when_payment_is_pending(
+        self,
+        order_factory,
+        order_item_factory,
+        product_factory,
+    ):
+        coupon = CouponFactory(max_limit_usage=1)
+        product = product_factory(stock=5)
+        order = order_factory(expired=True, coupon=coupon, coupon_code=coupon.code, coupon_discount_percent=coupon.discount_percent)
+        item = order_item_factory(order=order, product=product, quantity=2)
+        InventoryService.reserve(order)
+        CouponService.reserve_for_order(order)
+        PaymentFactory(order=order)  # Pending provider outcome is unresolved.
+
+        call_command("expire_pending_orders")
+
+        order.refresh_from_db()
+        coupon.refresh_from_db()
+        product.refresh_from_db()
+        reservation = CouponReservation.objects.get(order=order)
+
+        assert order.status == OrderStatusType.pending
+        assert product.stock == 3
+        assert coupon.reserved_count == 1
+        assert reservation.status == CouponReservationStatus.RESERVED

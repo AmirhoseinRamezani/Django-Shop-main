@@ -12,6 +12,7 @@ from order.policies import OrderPolicy
 from shop.models import ProductModel
 from order.events.order_event import OrderEventType
 from order.services.events import record_order_event
+from order.services.coupon import CouponService
 
 class Command(BaseCommand):
     help = "Expire unpaid pending orders and restore stock"
@@ -41,16 +42,11 @@ class Command(BaseCommand):
                 # 🔒 قانون مرکزی
                 if not OrderPolicy.can_expire(order):
                     continue
-
-                # 1️⃣ rollback inventory
-                # for item in order.order_items.select_related("product"):
-                #     ProductModel.objects.filter(
-                #         id=item.product_id
-                #     ).update(
-                #         stock=F("stock") + item.quantity
-                #     )
-
-                # 2️⃣ expire order
+                
+                # Do not release inventory/coupon capacity while any gateway
+                # outcome remains pending, timed out, or under resolution.
+                if CouponService.has_unresolved_payment_outcome(order):
+                    continue
                 
                 OrderStateMachine.transition(
                     order=order,

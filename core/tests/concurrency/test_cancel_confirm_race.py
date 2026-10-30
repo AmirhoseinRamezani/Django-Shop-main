@@ -1,3 +1,4 @@
+# tests/concurrency/test_cancel_confirm_race.py
 from __future__ import annotations
 
 import queue
@@ -22,7 +23,9 @@ from payment.enums import PaymentAttemptStatus, PaymentStatusType
 from payment.policies import PaymentPolicy
 from tests.factories.order import OrderFactory, OrderItemFactory
 from tests.factories.payment import PaymentAttemptFactory, PaymentFactory
-from tests.factories.shop import ProductFactory
+from tests.factories.shop import CouponFactory, ProductFactory
+from order.models import CouponReservation, CouponReservationStatus
+from order.services.coupon import CouponService
 
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -34,7 +37,13 @@ def test_cancellation_and_confirmation_serialize_on_order_lock(
     monkeypatch,
 ):
     """Either lifecycle transition may win, but their side effects cannot mix."""
-    order = OrderFactory()
+    coupon = CouponFactory(max_limit_usage=1)
+    order = OrderFactory(
+        coupon=coupon,
+        coupon_code=coupon.code,
+        coupon_discount_percent=coupon.discount_percent,
+    )
+    CouponService.reserve_for_order(order)
     product = ProductFactory(stock=5)
     item = OrderItemFactory(
         order=order,
@@ -62,18 +71,18 @@ def test_cancellation_and_confirmation_serialize_on_order_lock(
             raise AssertionError("test did not release the winning transaction")
 
     if winner == "cancel":
-        original_restore = InventoryService.restore
+        original_unresolved_check = CouponService.has_unresolved_payment_outcome
 
-        def paused_restore(locked_order):
+        def paused_unresolved_check(locked_order):
             # StateMachine.transition already locked the Order row before
-            # entering its cancellation side effects.
+            # deciding whether unresolved provider evidence permits release.
             pause_winner()
-            return original_restore(locked_order)
+            return original_unresolved_check(locked_order)
 
         monkeypatch.setattr(
-            InventoryService,
-            "restore",
-            staticmethod(paused_restore),
+            CouponService,
+            "has_unresolved_payment_outcome",
+            staticmethod(paused_unresolved_check),
         )
     else:
         original_validate = PaymentPolicy.validate_order_financial_snapshot
@@ -158,6 +167,8 @@ def test_cancellation_and_confirmation_serialize_on_order_lock(
     attempt.refresh_from_db()
     product.refresh_from_db()
     reservation = InventoryReservation.objects.get(order_item=item)
+    coupon_reservation = CouponReservation.objects.get(order=order)
+    coupon.refresh_from_db()
 
     if winner == "confirm":
         assert not isinstance(results["confirm"], BaseException)
@@ -170,6 +181,9 @@ def test_cancellation_and_confirmation_serialize_on_order_lock(
         assert attempt.status == PaymentAttemptStatus.SUCCESS
         assert reservation.status == InventoryReservationStatus.RESERVED
         assert product.stock == stock_after_reservation
+        assert coupon_reservation.status == CouponReservationStatus.CONSUMED
+        assert coupon.used_count == 1
+        assert coupon.reserved_count == 0
     else:
         assert isinstance(results["confirm"], OrderFinalizationConflict)
         assert not isinstance(results["cancel"], BaseException)
@@ -179,5 +193,10 @@ def test_cancellation_and_confirmation_serialize_on_order_lock(
         assert payment.status == PaymentStatusType.SUCCESS
         assert payment.is_consumed is False
         assert attempt.status == PaymentAttemptStatus.SUCCESS
-        assert reservation.status == InventoryReservationStatus.RELEASED
-        assert product.stock == 5
+        # Provider success is already persisted but has not been canonically
+        # consumed. Cancellation must retain inventory and coupon capacity.
+        assert reservation.status == InventoryReservationStatus.RESERVED
+        assert product.stock == stock_after_reservation
+        assert coupon_reservation.status == CouponReservationStatus.RESERVED
+        assert coupon.used_count == 0
+        assert coupon.reserved_count == 1

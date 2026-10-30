@@ -98,6 +98,7 @@ class TestCheckoutFlow:
     def test_checkout_with_coupon(
         self,
         mocker,
+        django_capture_on_commit_callbacks,
         user,
         address,
         coupon,
@@ -124,11 +125,15 @@ class TestCheckoutFlow:
         attempt = payment.attempts.get()
         _mock_verification(mocker, payment, reference="REF-COUPON")
 
-        verify_payment(
-            payment_id=payment.pk,
-            attempt_id=attempt.pk,
-            ref_id="REF-COUPON",
-        )
+        # Coupon reconciliation is deliberately scheduled with on_commit.
+        # Execute the callback explicitly because this test uses pytest-django's
+        # default transactional wrapper rather than a real transaction commit.
+        with django_capture_on_commit_callbacks(execute=True):
+            verify_payment(
+                payment_id=payment.pk,
+                attempt_id=attempt.pk,
+                ref_id="REF-COUPON",
+            )
 
         refresh(order, payment, coupon)
 

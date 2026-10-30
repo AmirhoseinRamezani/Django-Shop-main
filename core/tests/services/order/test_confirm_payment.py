@@ -138,22 +138,22 @@ class TestConfirmOrderPayment:
         assert order.is_paid
         assert order.paid_date is not None
 
-    def test_coupon_consumed(
+    def test_coupon_reconciliation_scheduled(
         self,
         order_with_coupon,
         success_payment,
         mocker,
     ):
-        consume = mocker.patch(
-            "order.services.confirm_payment.CouponService.consume",
+        schedule = mocker.patch(
+            "order.services.confirm_payment.CouponService.schedule_reconciliation",
         )
 
         confirm_order_payment(
             order_with_coupon.id,
         )
 
-        consume.assert_called_once_with(
-            order_with_coupon.coupon,
+        schedule.assert_called_once_with(
+            order_with_coupon.pk,
         )
 
     def test_transition_called(
@@ -393,15 +393,15 @@ class TestCoupon:
         success_payment,
         mocker,
     ):
-        consume = mocker.patch(
-            "order.services.confirm_payment.CouponService.consume",
+        schedule = mocker.patch(
+            "order.services.confirm_payment.CouponService.schedule_reconciliation",
         )
 
         confirm_order_payment(
             order.id,
         )
 
-        consume.assert_not_called()
+        schedule.assert_not_called()
 
     def test_with_coupon(
         self,
@@ -409,31 +409,31 @@ class TestCoupon:
         success_payment,
         mocker,
     ):
-        consume = mocker.patch(
-            "order.services.confirm_payment.CouponService.consume",
-        )
+        schedule = mocker.patch(
+            "order.services.confirm_payment.CouponService.schedule_reconciliation",
+         )
 
         confirm_order_payment(
             order_with_coupon.id,
         )
 
-        consume.assert_called_once()
+        schedule.assert_called_once()
 
-    def test_coupon_called_once(
+    def test_coupon_reconciliation_scheduled_once(
         self,
         order_with_coupon,
         success_payment,
         mocker,
     ):
-        consume = mocker.patch(
-            "order.services.confirm_payment.CouponService.consume",
+        schedule = mocker.patch(
+            "order.services.confirm_payment.CouponService.schedule_reconciliation",
         )
 
         confirm_order_payment(
             order_with_coupon.id,
         )
 
-        assert consume.call_count == 1
+        assert schedule.call_count == 1
 
 
 # ==========================================================
@@ -463,29 +463,26 @@ class TestAtomic:
 
         assert success_payment.is_consumed is False
 
-    def test_coupon_failure_rolls_back(
+    def test_coupon_reconciliation_is_scheduled_after_financial_finalization(
         self,
         order_with_coupon,
         success_payment,
         mocker,
     ):
-        mocker.patch(
-            "order.services.confirm_payment.CouponService.consume",
-            side_effect=RuntimeError(),
+        schedule = mocker.patch(
+            "order.services.confirm_payment.CouponService.schedule_reconciliation",
         )
 
-        with pytest.raises(RuntimeError):
-            confirm_order_payment(
-                order_with_coupon.id,
-            )
+        result = confirm_order_payment(order_with_coupon.id)
 
         success_payment.refresh_from_db()
 
-        assert success_payment.is_consumed is False
-
         order_with_coupon.refresh_from_db()
 
-        assert order_with_coupon.status == OrderStatusType.pending
+        assert result.status == OrderStatusType.paid
+        assert success_payment.is_consumed is True
+        assert order_with_coupon.status == OrderStatusType.paid
+        schedule.assert_called_once_with(order_with_coupon.id)
 
 
 # ==========================================================
@@ -1061,37 +1058,37 @@ class TestTransitionPayload:
 
 class TestServiceCalls:
 
-    def test_coupon_not_called_without_coupon(
+    def test_coupon_reconciliation_not_scheduled_without_coupon(
         self,
         order,
         success_payment,
         mocker,
     ):
-        consume = mocker.patch(
-            "order.services.confirm_payment.CouponService.consume",
+        schedule = mocker.patch(
+            "order.services.confirm_payment.CouponService.schedule_reconciliation",
         )
 
         confirm_order_payment(
             order.id,
         )
 
-        consume.assert_not_called()
+        schedule.assert_not_called()
 
-    def test_coupon_called_once(
+    def test_coupon_reconciliation_scheduled_once(
         self,
         order_with_coupon,
         success_payment,
         mocker,
     ):
-        consume = mocker.patch(
-            "order.services.confirm_payment.CouponService.consume",
+        schedule = mocker.patch(
+            "order.services.confirm_payment.CouponService.schedule_reconciliation",
         )
 
         confirm_order_payment(
             order_with_coupon.id,
         )
 
-        assert consume.call_count == 1
+        assert schedule.call_count == 1
 
     def test_transition_called_once(
         self,
@@ -1134,7 +1131,7 @@ class TestFailureOrdering:
 
         transition.assert_not_called()
 
-    def test_coupon_not_called_if_transition_fails(
+    def test_coupon_reconciliation_not_scheduled_if_transition_fails(
         self,
         order_with_coupon,
         success_payment,
@@ -1145,8 +1142,8 @@ class TestFailureOrdering:
             side_effect=RuntimeError(),
         )
 
-        consume = mocker.patch(
-            "order.services.confirm_payment.CouponService.consume",
+        schedule = mocker.patch(
+            "order.services.confirm_payment.CouponService.schedule_reconciliation",
         )
 
         with pytest.raises(RuntimeError):
@@ -1154,7 +1151,7 @@ class TestFailureOrdering:
                 order_with_coupon.id,
             )
 
-        consume.assert_not_called()
+        schedule.assert_not_called()
 
     def test_payment_not_consumed_after_transition_failure(
         self,

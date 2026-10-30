@@ -1,3 +1,4 @@
+# order/admin.py
 from secrets import token_urlsafe
 
 from django.contrib import admin, messages
@@ -10,6 +11,8 @@ from django.utils.html import format_html
 
 from .models import (
     CouponModel,
+    CouponReservation,
+    CouponReservationReconciliation,
     OrderItemModel,
     OrderModel,
     UserAddressModel,
@@ -48,6 +51,9 @@ class OrderAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request):
         return False
+    
+    def has_view_permission(self, request, obj=None):
+        return request.user.is_staff
 
     def has_change_permission(self, request, obj=None):
         return False
@@ -161,15 +167,57 @@ class CouponAdmin(admin.ModelAdmin):
         "code",
         "discount_percent",
         "used_count",
+        "reserved_count",
         "max_limit_usage",
         "is_active",
         "expiration_date",
     )
     list_filter = ("is_active",)
     search_fields = ("code",)
+    readonly_fields = ("used_count", "reserved_count")
 
 
 @admin.register(UserAddressModel)
 class UserAddressAdmin(admin.ModelAdmin):
     list_display = ("user", "city", "state", "zip_code")
     search_fields = ("user__username", "city")
+
+
+@admin.register(CouponReservation)
+class CouponReservationAdmin(admin.ModelAdmin):
+    list_display = ("id", "order", "coupon", "status", "created_at", "consumed_at", "released_at")
+    list_filter = ("status",)
+    search_fields = ("order__id", "coupon__code")
+    readonly_fields = tuple(field.name for field in CouponReservation._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_view_permission(self, request, obj=None):
+        return request.user.is_staff
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(CouponReservationReconciliation)
+class CouponReservationReconciliationAdmin(admin.ModelAdmin):
+    list_display = ("id", "order", "coupon", "expected_operation", "status", "retry_count", "updated_at")
+    list_filter = ("expected_operation", "status")
+    search_fields = ("order__id", "coupon__code", "failure_reason")
+    readonly_fields = tuple(field.name for field in CouponReservationReconciliation._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_view_permission(self, request, obj=None):
+        return request.user.is_staff
+
+    def has_delete_permission(self, request, obj=None):
+        return False

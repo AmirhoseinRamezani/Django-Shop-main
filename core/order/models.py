@@ -58,6 +58,7 @@ class CouponModel(models.Model):
     # Usage control
     max_limit_usage = models.PositiveIntegerField(default=1)
     used_count = models.PositiveIntegerField(default=0)
+    reserved_count = models.PositiveIntegerField(default=0)
 
     # Optional expiration
     expiration_date = models.DateTimeField(null=True, blank=True)
@@ -94,6 +95,16 @@ class CouponModel(models.Model):
                 ),
                 name="coupon_used_count_lte_max_usage",
             ),
+            models.CheckConstraint(
+                condition=Q(reserved_count__gte=0),
+                name="coupon_reserved_count_non_negative",
+            ),
+            models.CheckConstraint(
+                condition=Q(
+                    used_count__lte=F("max_limit_usage") - F("reserved_count"),
+                ),
+                name="coupon_usage_plus_reserved_lte_max",
+            ),
         ]
         
     def is_valid(self):
@@ -104,7 +115,7 @@ class CouponModel(models.Model):
         if not self.is_active:
             return False
 
-        if self.used_count >= self.max_limit_usage:
+        if self.used_count + self.reserved_count >= self.max_limit_usage:
             return False
 
         if self.expiration_date and self.expiration_date < timezone.now():
@@ -113,14 +124,6 @@ class CouponModel(models.Model):
         return True
 
     def mark_used(self):
-        # if order.coupon:
-        # CouponModel.objects.filter(
-        #     pk=order.coupon_id
-        # ).update(
-        #     used_count=F("used_count") + 1
-        # )
-        # self.used_count =F("used_count") + 1
-        # self.save(update_fields=["used_count"])
         """
         Atomically consume one coupon usage.
 
@@ -132,9 +135,7 @@ class CouponModel(models.Model):
             .filter(
                 pk=self.pk,
                 is_active=True,
-                used_count__lt=F(
-                    "max_limit_usage"
-                ),
+                used_count__lt=F("max_limit_usage") - F("reserved_count"),
             )
             .filter(
                 Q(expiration_date__isnull=True)
@@ -160,16 +161,6 @@ class CouponModel(models.Model):
                 "expiration_date",
             ]
         )
-
-    # def rollback(self):
-    #     """
-    #     Rollback coupon usage if payment fails
-    #     (Normally not needed if VerifyView is correct,
-    #     but kept for safety)
-    #     """
-    #     if self.used_count > 0:
-    #         self.used_count -= 1
-    #         self.save(update_fields=["used_count"])
 
     def __str__(self):
         return self.code
@@ -371,21 +362,6 @@ class OrderModel(models.Model):
                 condition=Q(discount_amount__lte=F("subtotal_price")),
                 name="discount_less_than_subtotal",
             ),
-
-            # models.CheckConstraint(
-            #     condition=(
-            #         F("payable_price")
-            #         ==
-            #         (
-            #             F("subtotal_price")
-            #             - F("discount_amount")
-            #             + F("shipping_price")
-            #             + F("tax_amount")
-            #         )
-            #     ),
-            #     name="order_payable_price_consistent",
-            # ),
-
             models.CheckConstraint(
                 condition=(
                     (
@@ -443,26 +419,12 @@ class OrderModel(models.Model):
             self.status == OrderStatusType.pending
             and not self.is_expired()
         )
-    
-    # def can_retry_payment(self) -> bool:
-    #     """
-    #     Payment retry rules:
-    #     - success → NEVER retry
-    #     - pending / failed → retry allowed
-    #     """
-    #     return (
-    #         not self.is_expired()
-    #         and self.status in {
-    #             OrderStatusType.pending,
-    #             OrderStatusType.failed,
-    #         }
-    #     )
+
     def can_refund(self) -> bool:
         return self.status in {
             OrderStatusType.paid,
             OrderStatusType.returned,
         }
-
 
     @property
     def final_price(self):
@@ -470,27 +432,9 @@ class OrderModel(models.Model):
         Final payable price after applying coupon.
         This is the ONLY official pricing method.
         """
-        # total = self.total_price
-        # if self.coupon_discount_percent:
-        #     total = round(
-        #         total *(100 - self.coupon_discount_percent)/ 100
-        #     )
-        # return total
-        return self.payable_price
-        
-    # def get_price(self):
-    #     """
-    #     Final payable price after applying coupon.
-    #     This is the ONLY official pricing method.
-    #     """
-    #     total = self.total_price
-    #     if self.coupon_discount_percent:
-    #         return round(
-    #             total * (100 - self.coupon_discount_percent) / 100
-    #         )
 
-    #     return total
-    
+        return self.payable_price
+
     
     # ---- Payments ----
     def last_payment(self):
@@ -549,15 +493,6 @@ class OrderModel(models.Model):
     
     def __str__(self):
         return f"Order #{self.id}"
-
-    # def can_start_payment(self):
-    #     return (
-    #         not self.is_expired()
-    #         and self.status in {
-    #             OrderStatusType.pending,
-    #             OrderStatusType.failed,
-    #         }
-    #     )
     
     @property
     def is_paid(self):
@@ -589,9 +524,7 @@ class OrderItemModel(models.Model):
         "shop.ProductModel",
         on_delete=models.PROTECT
     )
-    # quantity = models.PositiveIntegerField(default=1)
-    # price = models.DecimalField(max_digits=12, decimal_places=0)
-    
+
     quantity = models.PositiveIntegerField(
         default=1,
         validators=[
@@ -675,3 +608,117 @@ class InventoryReservation(models.Model):
             ]
         )
         return True
+
+
+class CouponReservationStatus(models.TextChoices):
+    RESERVED = "RESERVED", _("Reserved")
+    CONSUMED = "CONSUMED", _("Consumed")
+    RELEASED = "RELEASED", _("Released")
+
+
+class CouponReservation(models.Model):
+    """Durable ownership of one coupon-capacity slot by one Order."""
+
+    order = models.OneToOneField(
+        OrderModel,
+        on_delete=models.PROTECT,
+        related_name="coupon_reservation",
+    )
+    coupon = models.ForeignKey(
+        CouponModel,
+        on_delete=models.PROTECT,
+        related_name="reservations",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=CouponReservationStatus.choices,
+        default=CouponReservationStatus.RESERVED,
+        db_index=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    consumed_at = models.DateTimeField(null=True, blank=True)
+    released_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(status=CouponReservationStatus.RESERVED, consumed_at__isnull=True, released_at__isnull=True)
+                    | Q(status=CouponReservationStatus.CONSUMED, consumed_at__isnull=False, released_at__isnull=True)
+                    | Q(status=CouponReservationStatus.RELEASED, consumed_at__isnull=True, released_at__isnull=False)
+                ),
+                name="coupon_reservation_state_consistent",
+            ),
+        ]
+        indexes = [models.Index(fields=("coupon", "status"), name="coupon_res_status_idx")]
+
+
+class CouponReconciliationOperation(models.TextChoices):
+    NONE = "NONE", _("No pending operation")
+    CONSUME = "CONSUME", _("Consume reservation")
+    RELEASE = "RELEASE", _("Release reservation")
+    REVIEW = "REVIEW", _("Manual review required")
+
+
+class CouponReconciliationStatus(models.TextChoices):
+    PENDING = "PENDING", _("Pending")
+    RETRY = "RETRY", _("Retry required")
+    RESOLVED = "RESOLVED", _("Resolved")
+
+
+class CouponReservationReconciliation(models.Model):
+    """Durable recovery record created with each coupon reservation."""
+
+    order = models.OneToOneField(
+        OrderModel,
+        on_delete=models.PROTECT,
+        related_name="coupon_reconciliation",
+    )
+    coupon = models.ForeignKey(
+        CouponModel,
+        on_delete=models.PROTECT,
+        related_name="reconciliations",
+    )
+    reservation = models.OneToOneField(
+        CouponReservation,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="reconciliation",
+    )
+    payment = models.ForeignKey(
+        "payment.PaymentModel",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="coupon_reconciliations",
+    )
+    attempt = models.ForeignKey(
+        "payment.PaymentAttempt",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="coupon_reconciliations",
+    )
+    expected_operation = models.CharField(
+        max_length=12,
+        choices=CouponReconciliationOperation.choices,
+        default=CouponReconciliationOperation.NONE,
+    )
+    status = models.CharField(
+        max_length=12,
+        choices=CouponReconciliationStatus.choices,
+        default=CouponReconciliationStatus.RESOLVED,
+        db_index=True,
+    )
+    failure_reason = models.TextField(blank=True)
+    retry_count = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("status", "updated_at"), name="coupon_recon_status_idx"),
+        ]

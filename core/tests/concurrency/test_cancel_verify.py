@@ -2,13 +2,24 @@
 from __future__ import annotations
 
 import threading
+from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
+from django.core.management import call_command
+from django.utils import timezone
 from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connections
 
-from order.models import OrderStatusType
+from order.models import (
+    CouponReservation,
+    CouponReservationReconciliation,
+    CouponReservationStatus,
+    CouponReconciliationOperation,
+    CouponReconciliationStatus,
+    OrderStatusType,
+)
+from order.services.coupon import CouponService
 from order.services.state_machine import OrderStateMachine
 from payment.enums import PaymentAttemptStatus, PaymentGateway, PaymentStatusType
 from payment.exceptions import PaymentInvariantViolation
@@ -19,7 +30,9 @@ from payment.models import (
 )
 from payment.providers.base import GatewayVerificationResult
 from payment.services.verify import verify_payment
+from tests.factories.order import OrderFactory
 from tests.factories.payment import PaymentAttemptFactory, PaymentFactory
+from tests.factories.shop import CouponFactory
 
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -49,12 +62,18 @@ def test_cancel_or_expire_wins_while_gateway_verification_is_in_flight(
     cancel_reason,
 ):
     """
-    The Order may be cancelled/expired while provider I/O is in flight.
-
-    A later positive gateway response is still recorded as financial SUCCESS,
-    but it must not resurrect the terminal Order or consume the Payment.
+    Explicit cancellation may win, while expiry must defer if provider I/O is
+    unresolved. A later positive result is durable but must not resurrect a
+    terminal Order or consume the Payment without canonical finalization.
     """
-    payment = PaymentFactory()
+    coupon = CouponFactory(max_limit_usage=1)
+    order = OrderFactory(
+        coupon=coupon,
+        coupon_code=coupon.code,
+        coupon_discount_percent=coupon.discount_percent,
+    )
+    CouponService.reserve_for_order(order)
+    payment = PaymentFactory(order=order)
     attempt = PaymentAttemptFactory(
         payment=payment,
         attempt_number=1,
@@ -98,11 +117,16 @@ def test_cancel_or_expire_wins_while_gateway_verification_is_in_flight(
             "verification did not reach the gateway barrier"
         )
         try:
-            OrderStateMachine.transition(
-                order=order,
-                to_status=OrderStatusType.cancelled,
-                payload={"reason": cancel_reason},
-            )
+            if cancel_reason == "timeout":
+                order.expire_at = timezone.now() - timedelta(seconds=1)
+                order.save(update_fields=("expire_at",))
+                call_command("expire_pending_orders")
+            else:
+                OrderStateMachine.transition(
+                    order=order,
+                    to_status=OrderStatusType.cancelled,
+                    payload={"reason": cancel_reason},
+                )
         finally:
             release_gateway.set()
             worker.join(timeout=15)
@@ -123,22 +147,44 @@ def test_cancel_or_expire_wins_while_gateway_verification_is_in_flight(
     assert payment.is_consumed is False
     assert attempt.status == PaymentAttemptStatus.SUCCESS
     assert attempt.gateway_reference == reference
-    assert order.status == OrderStatusType.cancelled
+    expected_order_status = (
+        OrderStatusType.pending
+        if cancel_reason == "timeout"
+        else OrderStatusType.cancelled
+    )
+    assert order.status == expected_order_status
+    coupon.refresh_from_db()
+    coupon_reservation = CouponReservation.objects.get(order=order)
+    assert coupon.reserved_count == 1
+    assert coupon.used_count == 0
+    assert coupon_reservation.status == CouponReservationStatus.RESERVED
 
     resolution = PaymentResolution.objects.get(payment=payment)
     expected_reason = (
-        PaymentResolutionReason.ORDER_EXPIRED
+        PaymentResolutionReason.ORDER_DEADLINE_PASSED
         if cancel_reason == "timeout"
         else PaymentResolutionReason.ORDER_CANCELLED
     )
     assert resolution.reason == expected_reason
     assert resolution.status == PaymentResolutionStatus.OPEN
     assert resolution.attempt_id == attempt.pk
+    coupon_reconciliation = CouponReservationReconciliation.objects.get(order=order)
+    assert coupon_reconciliation.status == CouponReconciliationStatus.RETRY
+    assert coupon_reconciliation.expected_operation == CouponReconciliationOperation.REVIEW
+    assert coupon_reconciliation.payment_id == payment.pk
+    assert coupon_reconciliation.attempt_id == attempt.pk
 
 
 def test_successful_verification_makes_later_cancellation_fail_closed():
     """If payment finalization wins, a later cancellation cannot undo it."""
-    payment = PaymentFactory()
+    coupon = CouponFactory(max_limit_usage=1)
+    order = OrderFactory(
+        coupon=coupon,
+        coupon_code=coupon.code,
+        coupon_discount_percent=coupon.discount_percent,
+    )
+    CouponService.reserve_for_order(order)
+    payment = PaymentFactory(order=order)
     attempt = PaymentAttemptFactory(
         payment=payment,
         attempt_number=1,
@@ -166,6 +212,11 @@ def test_successful_verification_makes_later_cancellation_fail_closed():
     assert payment.is_consumed is True
     assert attempt.status == PaymentAttemptStatus.SUCCESS
     assert order.status == OrderStatusType.paid
+    coupon.refresh_from_db()
+    coupon_reservation = CouponReservation.objects.get(order=order)
+    assert coupon.used_count == 1
+    assert coupon.reserved_count == 0
+    assert coupon_reservation.status == CouponReservationStatus.CONSUMED
 
     with pytest.raises(ValidationError, match="Illegal transition"):
         OrderStateMachine.transition(
@@ -187,7 +238,14 @@ def test_replay_after_cancelled_order_does_not_consume_successful_payment():
     The gateway's SUCCESS remains durable, the terminal Order is not
     resurrected, and an open Resolution records the unresolved discrepancy.
     """
-    payment = PaymentFactory()
+    coupon = CouponFactory(max_limit_usage=1)
+    order = OrderFactory(
+        coupon=coupon,
+        coupon_code=coupon.code,
+        coupon_discount_percent=coupon.discount_percent,
+    )
+    CouponService.reserve_for_order(order)
+    payment = PaymentFactory(order=order)
     attempt = PaymentAttemptFactory(
         payment=payment,
         attempt_number=1,
@@ -223,6 +281,11 @@ def test_replay_after_cancelled_order_does_not_consume_successful_payment():
     assert payment.is_consumed is False
     assert attempt.status == PaymentAttemptStatus.SUCCESS
     assert order.status == OrderStatusType.cancelled
+    coupon.refresh_from_db()
+    coupon_reservation = CouponReservation.objects.get(order=order)
+    assert coupon.reserved_count == 1
+    assert coupon.used_count == 0
+    assert coupon_reservation.status == CouponReservationStatus.RESERVED
 
     resolution = PaymentResolution.objects.get(payment=payment)
     assert resolution.status == PaymentResolutionStatus.OPEN
@@ -245,6 +308,10 @@ def test_replay_after_cancelled_order_does_not_consume_successful_payment():
     assert payment.status == PaymentStatusType.SUCCESS
     assert payment.is_consumed is False
     assert order.status == OrderStatusType.cancelled
+    coupon.refresh_from_db()
+    coupon_reservation.refresh_from_db()
+    assert coupon.reserved_count == 1
+    assert coupon_reservation.status == CouponReservationStatus.RESERVED
     assert resolution.pk == resolution_id
     assert resolution.status == PaymentResolutionStatus.OPEN
     assert PaymentResolution.objects.filter(payment=payment).count() == 1

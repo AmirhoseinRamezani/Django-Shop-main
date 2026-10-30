@@ -82,12 +82,20 @@ class PaymentResolutionService:
                 # Savepoint allows a uniqueness race to be recovered without
                 # leaving the surrounding transaction marked for rollback.
                 with transaction.atomic():
-                    return PaymentResolution.objects.create(
+                    resolution = PaymentResolution.objects.create(
                         payment=payment,
                         attempt=attempt,
                         reason=reason,
                         order_status_at_detection=str(order.status),
                     )
+                    if order.coupon_id:
+                        # The PaymentResolution is durable evidence that the
+                        # provider result cannot be finalized into this Order.
+                        # Keep coupon capacity reserved and attach Payment/Attempt
+                        # recovery identity without changing financial state.
+                        from order.services.coupon import CouponService
+                        CouponService.schedule_reconciliation(order.pk)
+                    return resolution
             except IntegrityError as exc:
                 cause = exc.__cause__
                 constraint_name = getattr(
