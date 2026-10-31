@@ -3,6 +3,9 @@ import pytest
 
 from django.core.management import call_command
 
+from datetime import timedelta
+from django.utils import timezone
+
 from tests.base import BaseTestCase
 from order.services.inventory import InventoryService
 from order.models import CouponReservation, CouponReservationStatus, OrderStatusType
@@ -121,12 +124,16 @@ class TestExpirePendingOrders(BaseTestCase):
     ):
         coupon = CouponFactory(max_limit_usage=1)
         product = product_factory(stock=5)
-        order = order_factory(expired=True, coupon=coupon, coupon_code=coupon.code, coupon_discount_percent=coupon.discount_percent)
+        order = order_factory(payable=True, coupon=coupon, coupon_code=coupon.code, coupon_discount_percent=coupon.discount_percent)
         item = order_item_factory(order=order, product=product, quantity=2)
         InventoryService.reserve(order)
         CouponService.reserve_for_order(order)
         PaymentFactory(order=order)  # Pending provider outcome is unresolved.
 
+        # Reserve while payable, then simulate expiration during pending payment.
+        order.expire_at = timezone.now() - timedelta(minutes=10)
+        order.save(update_fields=("expire_at",))
+        
         call_command("expire_pending_orders")
 
         order.refresh_from_db()

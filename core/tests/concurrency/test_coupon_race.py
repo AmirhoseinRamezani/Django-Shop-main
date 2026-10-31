@@ -179,6 +179,76 @@ def test_different_orders_never_share_reservation_identity():
     assert coupon.reserved_count == 2
 
 
+
+@pytest.mark.parametrize(
+    "order_kwargs",
+    [
+        {"cancelled": True},
+        {"failed": True},
+        {"paid": True},
+        {"expired": True},
+    ],
+)
+def test_new_coupon_reservation_requires_active_pending_order(order_kwargs):
+    coupon = CouponFactory(max_limit_usage=1)
+    order = OrderFactory(
+        coupon=coupon,
+        coupon_code=coupon.code,
+        coupon_discount_percent=coupon.discount_percent,
+        **order_kwargs,
+    )
+
+    with pytest.raises(ValidationError, match="active pending order"):
+        CouponService.reserve_for_order(order)
+
+    coupon.refresh_from_db()
+    assert coupon.used_count == 0
+    assert coupon.reserved_count == 0
+    assert not CouponReservation.objects.filter(order=order).exists()
+    assert not CouponReservationReconciliation.objects.filter(order=order).exists()
+
+
+def test_existing_reservation_requires_its_durable_reconciliation_record():
+    coupon = CouponFactory(max_limit_usage=1)
+    order = OrderFactory(
+        coupon=coupon,
+        coupon_code=coupon.code,
+        coupon_discount_percent=coupon.discount_percent,
+    )
+    reservation = CouponService.reserve_for_order(order)
+    CouponReservationReconciliation.objects.filter(order=order).delete()
+
+    with pytest.raises(ValidationError, match="recovery record is missing"):
+        CouponService.reserve_for_order(order)
+
+    coupon.refresh_from_db()
+    assert coupon.reserved_count == 1
+    assert reservation.status == CouponReservationStatus.RESERVED
+
+
+def test_reconciliation_rejects_cross_coupon_reservation_identity():
+    coupon = CouponFactory(max_limit_usage=1)
+    other_coupon = CouponFactory(max_limit_usage=1)
+    order = OrderFactory(
+        coupon=coupon,
+        coupon_code=coupon.code,
+        coupon_discount_percent=coupon.discount_percent,
+    )
+    reservation = CouponService.reserve_for_order(order)
+    reconciliation = CouponReservationReconciliation.objects.get(order=order)
+    reconciliation.coupon = other_coupon
+    reconciliation.save(update_fields=("coupon",))
+
+    assert CouponService.reconcile_order(order.pk) is False
+
+    coupon.refresh_from_db()
+    other_coupon.refresh_from_db()
+    reservation.refresh_from_db()
+    assert coupon.reserved_count == 1
+    assert other_coupon.reserved_count == 0
+    assert reservation.status == CouponReservationStatus.RESERVED
+
+
 def test_repeated_confirmation_consumes_coupon_once():
     coupon = CouponFactory(max_limit_usage=1)
     order = OrderFactory(

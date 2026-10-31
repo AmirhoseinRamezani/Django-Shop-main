@@ -51,7 +51,17 @@ class CouponService:
                 raise ValidationError(_("Order already has a different coupon reservation."))
             if existing.status != CouponReservationStatus.RESERVED:
                 raise ValidationError(_("Coupon reservation is already terminal."))
+            recovery_exists = CouponReservationReconciliation.objects.filter(
+                order_id=locked_order.pk,
+                coupon_id=existing.coupon_id,
+                reservation_id=existing.pk,
+            ).exists()
+            if not recovery_exists:
+                raise ValidationError(_("Coupon reservation recovery record is missing."))
             return existing
+
+        if locked_order.status != OrderStatusType.pending or locked_order.is_expired():
+            raise ValidationError(_("Coupon capacity can only be reserved for an active pending order."))
 
         coupon = CouponModel.objects.select_for_update().get(pk=locked_order.coupon_id)
         now = timezone.now()
@@ -252,6 +262,18 @@ class CouponService:
         if record_ref is None:
             logger.error("Missing coupon reconciliation record for order_id=%s", order_id)
             return False
+        if record_ref.coupon_id != order.coupon_id or record_ref.reservation_id is None:
+            raise ValidationError(_("Coupon reconciliation identity does not match its Order."))
+
+        reservation_identity = CouponReservation.objects.filter(
+            pk=record_ref.reservation_id,
+        ).values("order_id", "coupon_id").first()
+        if (
+            reservation_identity is None
+            or reservation_identity["order_id"] != order.pk
+            or reservation_identity["coupon_id"] != record_ref.coupon_id
+        ):
+            raise ValidationError(_("Coupon reservation identity is inconsistent."))
 
         operation = None
         payment = None
@@ -408,10 +430,17 @@ class CouponService:
         record = CouponReservationReconciliation.objects.select_for_update().get(
             pk=record_ref.pk,
         )
-        
-        if reservation is None:
+
+        if (
+            reservation is None
+            or reservation.order_id != order.pk
+            or reservation.coupon_id != coupon.pk
+            or record.order_id != order.pk
+            or record.coupon_id != coupon.pk
+            or record.reservation_id != reservation.pk
+        ):
             raise ValidationError(
-                _("Coupon reconciliation has no durable reservation.")
+                _("Coupon reconciliation identity is inconsistent.")
             )
 
         # A terminal reservation is the idempotency boundary. Never adjust
