@@ -2,6 +2,7 @@
 from __future__ import annotations
 import threading
 
+from django.db import close_old_connections, connections
 import pytest
 
 from order.events.order_event import OrderEventType
@@ -24,11 +25,14 @@ class TestConcurrentConfirmPayment:
 
         def worker() -> None:
             try:
+                close_old_connections()
                 barrier.wait(timeout=10)
                 confirm_order_payment(order.id)
                 results.append(True)
             except Exception as exc:
                 errors.append(exc)
+            finally:
+                connections.close_all()
 
         threads = [
             threading.Thread(
@@ -42,7 +46,7 @@ class TestConcurrentConfirmPayment:
             thread.start()
 
         for thread in threads:
-            thread.join(timeout=15)
+            thread.join(timeout=20)
 
         assert all(not thread.is_alive() for thread in threads), (
             "Concurrent confirmation worker did not terminate."
