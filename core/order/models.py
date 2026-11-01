@@ -461,14 +461,10 @@ class OrderModel(models.Model):
         )
 
     def mark_paid(self):
-        """Transition the order to PAID through the canonical state machine."""
-        from order.services.state_machine import OrderStateMachine
+        """Finalize this Order only from canonical successful Payment evidence."""
+        from order.services.confirm_payment import confirm_order_payment
 
-        return OrderStateMachine.transition(
-            order=self,
-            to_status=OrderStatusType.paid,
-            actor=self.user,
-        )
+        return confirm_order_payment(order_id=self.pk)
 
     def mark_completed(self):
 

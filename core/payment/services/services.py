@@ -78,6 +78,24 @@ class PaymentService:
 
             PaymentPolicy.can_create_payment(locked_order)
 
+            successful_payments = list(
+                PaymentRepository.successful_for_order(
+                    locked_order.pk,
+                )
+                .select_for_update()
+                .order_by("id")[:2]
+            )
+            if successful_payments:
+                raise PaymentCreationForbiddenError(
+                    "A successful Payment already exists for this Order; "
+                    "finalization or reconciliation must resolve it before "
+                    "another Payment can be created.",
+                    details={
+                        "order_id": locked_order.pk,
+                        "payment_ids": [payment.pk for payment in successful_payments],
+                    },
+                )
+
             pending_payments = list(
                 PaymentRepository.pending_for_order_for_update(
                     locked_order.pk,

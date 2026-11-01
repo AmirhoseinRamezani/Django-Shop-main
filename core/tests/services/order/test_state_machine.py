@@ -214,45 +214,19 @@ class TestOrderStateMachine:
     # pending -> paid
     # ---------------------------------------------------------
 
-    def test_pending_to_paid(
+    def test_pending_to_paid_is_forbidden_outside_payment_finalizer(
         self,
-        paid_order,
-        mocker,
+        pending_order,
     ):
-        paid_order.status = OrderStatusType.pending
-        paid_order.save(update_fields=["status"])
+        with pytest.raises(ValidationError, match="confirm_order_payment"):
+            OrderStateMachine.transition(
+                order=pending_order,
+                to_status=OrderStatusType.paid,
+            )
 
-        record = mocker.patch(
-            "order.services.state_machine.record_order_event"
-        )
-
-        handle = mocker.patch(
-            "order.services.state_machine.OrderStateMachine._handle_side_effects"
-        )
-
-        order = OrderStateMachine.transition(
-            order=paid_order,
-            to_status=OrderStatusType.paid,
-            actor=paid_order.user,
-            payload={"ref": "123"},
-        )
-
-        order.refresh_from_db()
-
-        assert order.status == OrderStatusType.paid
-
-        handle.assert_called_once_with(
-            order,
-            OrderStatusType.pending,
-            OrderStatusType.paid,
-        )
-
-        record.assert_called_once_with(
-            order=order,
-            type=OrderEventType.PAID,
-            actor=paid_order.user,
-            payload={"ref": "123"},
-        )
+        pending_order.refresh_from_db()
+        assert pending_order.status == OrderStatusType.pending
+        assert pending_order.paid_date is None
 
     # ---------------------------------------------------------
     # pending -> cancelled

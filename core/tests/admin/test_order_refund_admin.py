@@ -4,12 +4,23 @@ import pytest
 from django.urls import reverse
 
 from order.admin import OrderAdmin
+from order.events.order_event import OrderEventType
+from order.services.events import record_order_event
 from payment.services.refund import RefundService
 
 
 @pytest.mark.django_db
 def test_order_admin_refund_view_requires_staff(client, user, paid_order, consumed_payment):
     client.force_login(user)
+    record_order_event(
+        order=paid_order,
+        type=OrderEventType.PAID,
+        actor=paid_order.user,
+        payload={
+            "payment_id": consumed_payment.pk,
+            "attempt_id": consumed_payment.attempts.get().pk,
+        },
+    )
 
     url = reverse(
         "admin:order_ordermodel_refund",
@@ -31,6 +42,15 @@ def test_order_admin_refund_view_confirms_and_delegates_to_service(
     mocker,
 ):
     client.force_login(admin_user)
+    record_order_event(
+        order=paid_order,
+        type=OrderEventType.PAID,
+        actor=paid_order.user,
+        payload={
+            "payment_id": consumed_payment.pk,
+            "attempt_id": consumed_payment.attempts.get().pk,
+        },
+    )
 
     url = reverse(
         "admin:order_ordermodel_refund",

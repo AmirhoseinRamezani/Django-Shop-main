@@ -14,7 +14,7 @@ from payment.providers.base import GatewayPaymentResult
 from payment.repositories.payment_attempt_repository import PaymentAttemptRepository
 from payment.services import PaymentService
 from tests.factories.order import OrderFactory
-from tests.factories.payment import PaymentAttemptFactory
+from tests.factories.payment import PaymentAttemptFactory, PaymentFactory
 
 pytestmark = [
     pytest.mark.django_db,
@@ -30,6 +30,19 @@ class TestStartPayment:
             gateway=PaymentGateway.ZARINPAL,
             authority=authority,
         )
+
+    def test_successful_unconsumed_payment_blocks_new_payment_creation(self):
+        order = OrderFactory(payable=True)
+        payment = PaymentFactory(order=order, success=True)
+        PaymentAttemptFactory(payment=payment, success=True)
+
+        with pytest.raises(PaymentCreationForbiddenError):
+            PaymentService.start_payment(
+                order,
+                callback_url=self.CALLBACK_URL,
+            )
+
+        assert PaymentModel.objects.filter(order=order).count() == 1
 
     @patch("payment.services.gateway_service.GatewayService.current_gateway", return_value=PaymentGateway.ZARINPAL)
     @patch("payment.services.gateway_service.GatewayService.payment_url", return_value="https://gateway.test/pay/AUTH-123")

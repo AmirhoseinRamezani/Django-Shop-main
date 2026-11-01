@@ -12,6 +12,11 @@ from order.services.inventory import InventoryService
 from order.services.coupon import CouponService
 
 
+# Capability token: only the canonical payment finalizer should authorize
+# the pending -> paid transition. This is an application-layer trust boundary.
+_PAYMENT_FINALIZATION_TOKEN = object()
+
+
 class OrderStateMachine:
 
     TRANSITIONS = {
@@ -56,6 +61,7 @@ class OrderStateMachine:
         to_status,
         actor=None,
         payload=None,
+        _authorization=None,
     ):
         """
         Atomically transition an Order between valid states.
@@ -76,6 +82,14 @@ class OrderStateMachine:
         )
 
         from_status = order.status
+
+        if (
+            to_status == OrderStatusType.paid
+            and _authorization is not _PAYMENT_FINALIZATION_TOKEN
+        ):
+            raise ValidationError(
+                "Orders can only be marked paid by confirm_order_payment()."
+            )
 
         if to_status not in cls.TRANSITIONS.get(
             from_status,

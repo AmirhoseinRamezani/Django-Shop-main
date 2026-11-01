@@ -8,7 +8,10 @@ from django.utils.translation import gettext as _
 from order.events.order_event import OrderEventType
 from order.models import OrderModel, OrderStatusType
 from order.services.coupon import CouponService
-from order.services.state_machine import OrderStateMachine
+from order.services.state_machine import (
+    OrderStateMachine,
+    _PAYMENT_FINALIZATION_TOKEN,
+)
 
 from payment.enums import PaymentAttemptStatus
 from payment.policies import PaymentPolicy
@@ -252,6 +255,7 @@ def confirm_order_payment(
         order=order,
         to_status=OrderStatusType.paid,
         actor=order.user,
+        _authorization=_PAYMENT_FINALIZATION_TOKEN,
         payload={
             "payment_id": payment.pk,
             "attempt_id": attempt.pk,

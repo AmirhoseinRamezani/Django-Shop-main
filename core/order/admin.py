@@ -22,6 +22,9 @@ from payment.exceptions import (
     PaymentInvariantViolation,
     PaymentRefundAmountInvalidError,
 )
+from order.events.order_event import OrderEventType
+from payment.enums import PaymentAttemptStatus
+from payment.repositories.payment_attempt_repository import PaymentAttemptRepository
 from payment.repositories.payment_repository import PaymentRepository
 from payment.services.refund import RefundService
 
@@ -89,10 +92,47 @@ class OrderAdmin(admin.ModelAdmin):
             raise PermissionDenied("Admin access required")
 
         order = get_object_or_404(OrderModel, pk=object_id)
-        payment = PaymentRepository.latest_successful_for_order(order.pk)
+        paid_event = (
+            order.events
+            .filter(type=OrderEventType.PAID)
+            .order_by("-id")
+            .first()
+        )
+        event_payload = (
+            paid_event.payload
+            if paid_event is not None and isinstance(paid_event.payload, dict)
+            else {}
+        )
+        payment_id = event_payload.get("payment_id")
+        attempt_id = event_payload.get("attempt_id")
+        payment = (
+            PaymentRepository.find(payment_id)
+            if type(payment_id) is int and payment_id > 0
+            else None
+        )
+        attempt = (
+            PaymentAttemptRepository.queryset()
+            .filter(
+                pk=attempt_id,
+                payment_id=payment_id,
+                status=PaymentAttemptStatus.SUCCESS,
+            )
+            .first()
+            if payment is not None and type(attempt_id) is int and attempt_id > 0
+            else None
+        )
 
-        if payment is None:
-            raise Http404("No successful Payment exists for this Order.")
+        if not (
+            payment is not None
+            and payment.order_id == order.pk
+            and payment.is_successful
+            and payment.is_consumed
+            and attempt is not None
+            and (attempt.gateway_reference or attempt.gateway_transaction_id)
+        ):
+            raise Http404(
+                "No canonical consumed Payment matches this Order's PAID event."
+            )
 
         if request.method == "GET":
             request.current_app = self.admin_site.name

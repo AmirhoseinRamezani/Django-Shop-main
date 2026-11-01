@@ -96,13 +96,13 @@ class TestOrderModel:
 
         assert order.status == OrderStatusType.failed
 
-    def test_mark_paid_uses_canonical_state_machine(self, order):
-        order.mark_paid()
+    def test_mark_paid_requires_canonical_successful_payment(self, order):
+        with pytest.raises(ValidationError):
+            order.mark_paid()
 
         order.refresh_from_db()
-
-        assert order.status == OrderStatusType.paid
-        assert order.paid_date is not None
+        assert order.status == OrderStatusType.pending
+        assert order.paid_date is None
 
     def test_mark_paid_rejects_illegal_transition(self, failed_order):
         with pytest.raises(ValidationError):
