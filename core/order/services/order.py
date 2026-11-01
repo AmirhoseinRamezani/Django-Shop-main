@@ -45,11 +45,10 @@ class OrderService:
         # Coupon availability and terms are authoritatively revalidated when
         # the reservation is committed below under the Coupon row lock.
 
-        
         cart_items = list(
             cart.cart_items
             .select_related("product")
-            .select_for_update()
+            .select_for_update(of=("self",))
         )
 
         if not cart_items:
@@ -143,17 +142,6 @@ class OrderService:
             coupon_discount_percent=coupon.discount_percent if coupon else None,
         )
 
-        # items = [
-        #     OrderItemModel(
-        #         order=order,
-        #         product=item.product,
-        #         quantity=item.quantity,
-        #         price=item.product.final_price,
-        #     )
-        #     for item in cart.cart_items.select_related("product")
-        # ]
-        # OrderItemModel.objects.bulk_create(items)
-        
         #📜 event: order created
         record_order_event(
             order=order,
@@ -190,4 +178,3 @@ class OrderService:
         CouponService.reserve_for_order(order)
 
         return order
-    

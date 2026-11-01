@@ -1,5 +1,8 @@
 import pytest
 
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
+
 from order.models import OrderModel
 from order.services.order import OrderService
 from tests.builders.cart_builder import CartBuilder
@@ -66,3 +69,46 @@ class TestConcurrentCreateOrder:
         assert OrderModel.objects.filter(
             order_items__product=product,
         ).distinct().count() == 1
+
+    def test_checkout_locks_cart_items_without_locking_joined_products(
+        self,
+        user_factory,
+        address_factory,
+        product_factory,
+        cart_factory,
+        cart_item_factory,
+    ):
+        user = user_factory()
+        address = address_factory(user=user)
+        cart = cart_factory(user=user)
+        products = [
+            product_factory(stock=5),
+            product_factory(stock=5),
+        ]
+
+        for product in products:
+            cart_item_factory(
+                cart=cart,
+                product=product,
+                quantity=1,
+            )
+
+        with CaptureQueriesContext(connection) as queries:
+            OrderService.create_online_order(
+                user=user,
+                address=address,
+                cart=cart,
+            )
+
+        cart_lock_query = next(
+            (
+                query["sql"]
+                for query in queries
+                if 'FROM "cart_cartitemmodel"' in query["sql"]
+                and "FOR UPDATE" in query["sql"]
+            ),
+            None,
+        )
+
+        assert cart_lock_query is not None
+        assert 'FOR UPDATE OF "cart_cartitemmodel"' in cart_lock_query
