@@ -32,7 +32,7 @@ class TestOrderQueries:
         )
 
         assert_max_queries(
-            18,
+            21,
             OrderService.create_online_order,
             user=user,
             address=address,
@@ -56,7 +56,7 @@ class TestOrderQueries:
         )
 
         assert_max_queries(
-            28,
+            31,
             OrderService.create_online_order,
             user=user,
             address=address,

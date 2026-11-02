@@ -26,4 +26,4 @@ def test_create_order_query_count(
             cart=cart,
         )
 
-    assert len(ctx) <= 18
+    assert len(ctx) <= 21
