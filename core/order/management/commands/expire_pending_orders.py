@@ -27,6 +27,7 @@ class Command(BaseCommand):
                 status=OrderStatusType.pending,
                 expire_at__lte=now,
             )
+            .order_by("pk")
         )
 
         expired_count = 0

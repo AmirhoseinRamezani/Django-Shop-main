@@ -1,20 +1,29 @@
 # tests/concurrency/test_order_cancellation_invariants.py
+from datetime import timedelta
+from io import StringIO
 
 import pytest
 
 from django.core.exceptions import ValidationError
+from django.core.management import call_command
+from django.utils import timezone
 
+from order.events.order_event import OrderEvent, OrderEventType
 from order.models import (
+    CouponReservation,
+    CouponReservationStatus,
     InventoryReservation,
     InventoryReservationStatus,
     OrderStatusType,
 )
 from order.services.inventory import InventoryService
+from order.services.coupon import CouponService
 from order.services.state_machine import OrderStateMachine
 from order.services.confirm_payment import confirm_order_payment
+from tests.concurrency.base import ConcurrentRunner
 from tests.factories.order import OrderFactory, OrderItemFactory
 from tests.factories.payment import PaymentAttemptFactory, PaymentFactory
-from tests.factories.shop import ProductFactory
+from tests.factories.shop import CouponFactory, ProductFactory
 
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -158,7 +167,6 @@ def test_processing_order_cancellation_never_restores_consumed_inventory():
     assert product.stock == stock_after_reservation
 
 
-
 def test_canonical_paid_payment_prevents_release_of_legacy_reserved_row():
     product = ProductFactory(stock=8)
     order = OrderFactory()
@@ -192,3 +200,48 @@ def test_canonical_paid_payment_prevents_release_of_legacy_reserved_row():
     assert reservation.status == InventoryReservationStatus.RESERVED
     assert reservation.consumed_at is None
     assert product.stock == stock_after_reservation
+
+
+def test_concurrent_expiration_workers_release_order_once():
+    coupon = CouponFactory(max_limit_usage=1)
+    product = ProductFactory(stock=5)
+    order = OrderFactory(
+        payable=True,
+        coupon=coupon,
+        coupon_code=coupon.code,
+        coupon_discount_percent=coupon.discount_percent,
+    )
+    item = OrderItemFactory(
+        order=order,
+        product=product,
+        quantity=2,
+    )
+
+    InventoryService.reserve(order)
+    CouponService.reserve_for_order(order)
+
+    order.expire_at = timezone.now() - timedelta(minutes=1)
+    order.save(update_fields=("expire_at",))
+
+    def expire_orders():
+        call_command("expire_pending_orders", stdout=StringIO())
+
+    ConcurrentRunner().run(expire_orders, expire_orders)
+
+    order.refresh_from_db()
+    product.refresh_from_db()
+    coupon.refresh_from_db()
+    inventory_reservation = InventoryReservation.objects.get(order_item=item)
+    coupon_reservation = CouponReservation.objects.get(order=order)
+
+    assert order.status == OrderStatusType.cancelled
+    assert order.cancelled_date is not None
+    assert product.stock == 5
+    assert inventory_reservation.status == InventoryReservationStatus.RELEASED
+    assert coupon_reservation.status == CouponReservationStatus.RELEASED
+    assert coupon.reserved_count == 0
+    assert coupon.used_count == 0
+    assert OrderEvent.objects.filter(
+        order=order,
+        type=OrderEventType.EXPIRED,
+    ).count() == 1
