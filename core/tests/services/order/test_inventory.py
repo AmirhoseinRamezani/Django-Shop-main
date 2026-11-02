@@ -400,7 +400,6 @@ class TestConsistency:
         assert product.stock == original
         
 
-
 def test_decrease_rejects_insufficient_stock(product):
     product.stock = 2
     product.save(update_fields=["stock"])
@@ -410,3 +409,133 @@ def test_decrease_rejects_insufficient_stock(product):
 
     product.refresh_from_db()
     assert product.stock == 2
+
+
+# ==========================================================
+# Consumption lifecycle
+# ==========================================================
+class TestConsume:
+
+    def test_consume_is_idempotent_and_does_not_decrement_stock_again(
+        self,
+        paid_order,
+        product,
+    ):
+        from order.models import InventoryReservation, InventoryReservationStatus
+
+        InventoryService.reserve(paid_order)
+        product.refresh_from_db()
+        reserved_stock = product.stock
+        item = paid_order.order_items.get(product=product)
+
+        assert InventoryService.consume(paid_order) == 1
+        assert InventoryService.consume(paid_order) == 0
+
+        product.refresh_from_db()
+        reservation = InventoryReservation.objects.get(order_item=item)
+
+        assert product.stock == reserved_stock
+        assert reservation.status == InventoryReservationStatus.CONSUMED
+        assert reservation.consumed_at is not None
+        assert reservation.released_at is None
+
+    def test_consumed_reservation_cannot_be_released(
+        self,
+        paid_order,
+        product,
+    ):
+        from order.models import InventoryReservation, InventoryReservationStatus
+
+        InventoryService.reserve(paid_order)
+        InventoryService.consume(paid_order)
+        product.refresh_from_db()
+        reserved_stock = product.stock
+
+        assert InventoryService.restore(paid_order) == 0
+
+        product.refresh_from_db()
+        reservation = InventoryReservation.objects.get(
+            order_item=paid_order.order_items.get(product=product),
+        )
+
+        assert product.stock == reserved_stock
+        assert reservation.status == InventoryReservationStatus.CONSUMED
+        assert reservation.consumed_at is not None
+
+    def test_released_reservation_cannot_be_consumed(
+        self,
+        paid_order,
+        product,
+    ):
+        from order.models import InventoryReservation, InventoryReservationStatus
+
+        InventoryService.reserve(paid_order)
+        InventoryService.restore(paid_order)
+        product.refresh_from_db()
+        restored_stock = product.stock
+
+        with pytest.raises(ValidationError):
+            InventoryService.consume(paid_order)
+
+        product.refresh_from_db()
+        reservation = InventoryReservation.objects.get(
+            order_item=paid_order.order_items.get(product=product),
+        )
+
+        assert product.stock == restored_stock
+        assert reservation.status == InventoryReservationStatus.RELEASED
+        assert reservation.released_at is not None
+        assert reservation.consumed_at is None
+
+    def test_consume_rejects_reservation_quantity_mismatch(
+        self,
+        paid_order,
+        product,
+    ):
+        from order.models import InventoryReservation
+
+        InventoryService.reserve(paid_order)
+        item = paid_order.order_items.get(product=product)
+        reservation = InventoryReservation.objects.get(order_item=item)
+        reservation.quantity += 1
+        reservation.save(update_fields=("quantity",))
+
+        with pytest.raises(ValidationError, match="quantity mismatch"):
+            InventoryService.consume(paid_order)
+
+        reservation.refresh_from_db()
+        assert reservation.status == "RESERVED"
+        assert reservation.consumed_at is None
+
+
+    def test_consume_only_mutates_reservations_owned_by_order(
+        self,
+        product_factory,
+        order_factory,
+        order_item_factory,
+    ):
+        from order.models import InventoryReservation, InventoryReservationStatus
+
+        product = product_factory(stock=10)
+        first_order = order_factory()
+        second_order = order_factory()
+        first_item = order_item_factory(
+            order=first_order,
+            product=product,
+            quantity=2,
+        )
+        second_item = order_item_factory(
+            order=second_order,
+            product=product,
+            quantity=2,
+        )
+
+        InventoryService.reserve(first_order)
+        InventoryService.reserve(second_order)
+        InventoryService.consume(first_order)
+
+        first_reservation = InventoryReservation.objects.get(order_item=first_item)
+        second_reservation = InventoryReservation.objects.get(order_item=second_item)
+
+        assert first_reservation.status == InventoryReservationStatus.CONSUMED
+        assert second_reservation.status == InventoryReservationStatus.RESERVED

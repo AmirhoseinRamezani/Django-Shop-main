@@ -4,10 +4,17 @@ import pytest
 
 from django.core.exceptions import ValidationError
 
-from order.models import OrderStatusType
+from order.models import (
+    InventoryReservation,
+    InventoryReservationStatus,
+    OrderStatusType,
+)
 from order.services.inventory import InventoryService
 from order.services.state_machine import OrderStateMachine
-from tests.factories.order import OrderFactory
+from order.services.confirm_payment import confirm_order_payment
+from tests.factories.order import OrderFactory, OrderItemFactory
+from tests.factories.payment import PaymentAttemptFactory, PaymentFactory
+from tests.factories.shop import ProductFactory
 
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -109,3 +116,79 @@ def test_pending_order_can_be_cancelled_through_model_method(order):
     assert result.status == OrderStatusType.cancelled
     assert result.cancelled_date is not None
     assert result.paid_date is None
+
+
+def test_processing_order_cancellation_never_restores_consumed_inventory():
+    product = ProductFactory(stock=8)
+    order = OrderFactory()
+    item = OrderItemFactory(
+        order=order,
+        product=product,
+        quantity=2,
+    )
+    InventoryService.reserve(order)
+    product.refresh_from_db()
+    stock_after_reservation = product.stock
+
+    payment = PaymentFactory(order=order, success=True)
+    PaymentAttemptFactory(payment=payment, success=True)
+
+    confirm_order_payment(order.pk, payment.pk)
+
+    reservation = InventoryReservation.objects.get(order_item=item)
+    assert reservation.status == InventoryReservationStatus.CONSUMED
+
+    OrderStateMachine.transition(
+        order=order,
+        to_status=OrderStatusType.processing,
+    )
+    OrderStateMachine.transition(
+        order=order,
+        to_status=OrderStatusType.cancelled,
+    )
+
+    order.refresh_from_db()
+    product.refresh_from_db()
+    reservation.refresh_from_db()
+
+    assert order.status == OrderStatusType.cancelled
+    assert reservation.status == InventoryReservationStatus.CONSUMED
+    assert reservation.consumed_at is not None
+    assert reservation.released_at is None
+    assert product.stock == stock_after_reservation
+
+
+
+def test_canonical_paid_payment_prevents_release_of_legacy_reserved_row():
+    product = ProductFactory(stock=8)
+    order = OrderFactory()
+    item = OrderItemFactory(order=order, product=product, quantity=2)
+    InventoryService.reserve(order)
+    product.refresh_from_db()
+    stock_after_reservation = product.stock
+
+    payment = PaymentFactory(order=order, success=True)
+    PaymentAttemptFactory(payment=payment, success=True)
+    confirm_order_payment(order.pk, payment.pk)
+
+    # Simulate a legacy row left RESERVED by the pre-consumption implementation.
+    reservation = InventoryReservation.objects.get(order_item=item)
+    reservation.status = InventoryReservationStatus.RESERVED
+    reservation.consumed_at = None
+    reservation.save(update_fields=("status", "consumed_at"))
+
+    OrderStateMachine.transition(
+        order=order,
+        to_status=OrderStatusType.processing,
+    )
+    OrderStateMachine.transition(
+        order=order,
+        to_status=OrderStatusType.cancelled,
+    )
+
+    reservation.refresh_from_db()
+    product.refresh_from_db()
+
+    assert reservation.status == InventoryReservationStatus.RESERVED
+    assert reservation.consumed_at is None
+    assert product.stock == stock_after_reservation

@@ -6,9 +6,13 @@ import pytest
 from django.core.exceptions import ValidationError
 
 from order.events.order_event import OrderEvent, OrderEventType
-from order.models import OrderStatusType
+from order.models import (
+    InventoryReservation,
+    InventoryReservationStatus,
+    OrderStatusType,
+)
 from order.services.confirm_payment import confirm_order_payment
-
+from order.services.inventory import InventoryService
 from payment.enums import (
     PaymentAttemptStatus,
     PaymentStatusType,
@@ -98,6 +102,27 @@ class TestConfirmOrderPayment:
         assert order.status == OrderStatusType.paid
         assert order.paid_date is not None
         assert success_payment.is_consumed is True
+
+    def test_success_consumes_inventory_without_second_stock_decrement(
+        self,
+        order,
+        success_payment,
+    ):
+        InventoryService.reserve(order)
+        item = order.order_items.get()
+        product = item.product
+        product.refresh_from_db()
+        stock_after_reservation = product.stock
+
+        confirm_order_payment(order.id, payment_id=success_payment.pk)
+
+        reservation = InventoryReservation.objects.get(order_item=item)
+        product.refresh_from_db()
+
+        assert reservation.status == InventoryReservationStatus.CONSUMED
+        assert reservation.consumed_at is not None
+        assert reservation.released_at is None
+        assert product.stock == stock_after_reservation
 
     def test_return_order(
         self,
@@ -449,6 +474,12 @@ class TestAtomic:
         success_payment,
         mocker,
     ):
+        InventoryService.reserve(order)
+        item = order.order_items.get()
+        product = item.product
+        product.refresh_from_db()
+        stock_after_reservation = product.stock
+
         mocker.patch(
             "order.services.confirm_payment.OrderStateMachine.transition",
             side_effect=RuntimeError(),
@@ -460,8 +491,13 @@ class TestAtomic:
             )
 
         success_payment.refresh_from_db()
+        reservation = InventoryReservation.objects.get(order_item=item)
+        product.refresh_from_db()
 
         assert success_payment.is_consumed is False
+        assert reservation.status == InventoryReservationStatus.RESERVED
+        assert reservation.consumed_at is None
+        assert product.stock == stock_after_reservation
 
     def test_coupon_reconciliation_is_scheduled_after_financial_finalization(
         self,
@@ -497,6 +533,9 @@ class TestIdempotency:
         order,
         success_payment,
     ):
+        InventoryService.reserve(order)
+        item = order.order_items.get()
+
         first = confirm_order_payment(
             order.id,
         )
@@ -505,8 +544,12 @@ class TestIdempotency:
             order.id,
         )
 
+        reservation = InventoryReservation.objects.get(order_item=item)
         assert first.pk == second.pk
         assert second.status == OrderStatusType.paid
+        assert reservation.status == InventoryReservationStatus.CONSUMED
+        assert reservation.consumed_at is not None
+
 
     def test_consumed_payment_requires_matching_paid_event_attempt(
         self,

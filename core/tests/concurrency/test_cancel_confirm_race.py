@@ -179,7 +179,8 @@ def test_cancellation_and_confirmation_serialize_on_order_lock(
         assert payment.status == PaymentStatusType.SUCCESS
         assert payment.is_consumed is True
         assert attempt.status == PaymentAttemptStatus.SUCCESS
-        assert reservation.status == InventoryReservationStatus.RESERVED
+        assert reservation.status == InventoryReservationStatus.CONSUMED
+        assert reservation.consumed_at is not None
         assert product.stock == stock_after_reservation
         assert coupon_reservation.status == CouponReservationStatus.CONSUMED
         assert coupon.used_count == 1

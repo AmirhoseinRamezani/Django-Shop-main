@@ -545,6 +545,7 @@ class OrderItemModel(models.Model):
 class InventoryReservationStatus(models.TextChoices):
     RESERVED = "RESERVED", _("Reserved")
     RELEASED = "RELEASED", _("Released")
+    CONSUMED = "CONSUMED", _("Consumed")
 
 
 class InventoryReservation(models.Model):
@@ -564,6 +565,7 @@ class InventoryReservation(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     released_at = models.DateTimeField(null=True, blank=True)
+    consumed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [
@@ -580,6 +582,12 @@ class InventoryReservation(models.Model):
                     | Q(
                         status=InventoryReservationStatus.RELEASED,
                         released_at__isnull=False,
+                        consumed_at__isnull=True,
+                    )
+                    | Q(
+                        status=InventoryReservationStatus.CONSUMED,
+                        released_at__isnull=True,
+                        consumed_at__isnull=False,
                     )
                 ),
                 name="inventory_reservation_status_consistent",
@@ -592,7 +600,7 @@ class InventoryReservation(models.Model):
 
         if self.status != InventoryReservationStatus.RESERVED:
             raise ValidationError(
-                _("Invalid inventory reservation state.")
+                _("Only a reserved inventory reservation can be released.")
             )
 
         self.status = InventoryReservationStatus.RELEASED
@@ -601,6 +609,25 @@ class InventoryReservation(models.Model):
             update_fields=[
                 "status",
                 "released_at",
+            ]
+        )
+        return True
+
+    def consume(self):
+        if self.status == InventoryReservationStatus.CONSUMED:
+            return False
+
+        if self.status != InventoryReservationStatus.RESERVED:
+            raise ValidationError(
+                _("Only a reserved inventory reservation can be consumed.")
+            )
+
+        self.status = InventoryReservationStatus.CONSUMED
+        self.consumed_at = timezone.now()
+        self.save(
+            update_fields=[
+                "status",
+                "consumed_at",
             ]
         )
         return True

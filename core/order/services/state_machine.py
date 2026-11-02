@@ -175,11 +175,10 @@ class OrderStateMachine:
                 OrderStatusType.failed,
                 OrderStatusType.processing,
             }
-            and not CouponService.has_unresolved_payment_outcome(order)
-         ):
-            # An unknown provider outcome retains inventory as well as coupon
-            # capacity. A later reconciliation may release it only after the
-            # payment path is definitively ineligible.
+        ):
+            # InventoryService owns payment-evidence checks as well as the
+            # reservation transition. Unknown outcomes and canonical paid
+            # Payments retain consumed/reserved inventory.
             InventoryService.restore(order)
 
     @staticmethod

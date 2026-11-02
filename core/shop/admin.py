@@ -11,8 +11,10 @@ from .models import (
 class ProductAdmin(admin.ModelAdmin):
     list_display = (
         "id", "title", "price", "discount_percent",
-        "stock", "status", "created_date"
+        "stock", "reserved_stock", "status", "created_date"
     )
+    readonly_fields = ("stock", "reserved_stock")
+    actions = None
     list_filter = ("status", "created_date")
     search_fields = ("title", "slug")
     prepopulated_fields = {"slug": ("title",)}

@@ -8,6 +8,8 @@ import pytest
 from order.events.order_event import OrderEventType
 from order.models import OrderStatusType
 from order.services.confirm_payment import confirm_order_payment
+from order.services.inventory import InventoryService
+from order.models import InventoryReservation, InventoryReservationStatus
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -19,6 +21,12 @@ class TestConcurrentConfirmPayment:
         order,
         successful_payment,
     ):
+        InventoryService.reserve(order)
+        item = order.order_items.get()
+        product = item.product
+        product.refresh_from_db()
+        stock_after_reservation = product.stock
+
         results: list[bool] = []
         errors: list[Exception] = []
         barrier = threading.Barrier(2)
@@ -61,6 +69,12 @@ class TestConcurrentConfirmPayment:
         assert order.status == OrderStatusType.paid
         assert order.paid_date is not None
         assert successful_payment.is_consumed is True
+        reservation = InventoryReservation.objects.get(order_item=item)
+        product.refresh_from_db()
+        assert reservation.status == InventoryReservationStatus.CONSUMED
+        assert reservation.consumed_at is not None
+        assert product.stock == stock_after_reservation
+
         assert (
             order.events
             .filter(type=OrderEventType.PAID)
