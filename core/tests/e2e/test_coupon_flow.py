@@ -1,6 +1,8 @@
 # tests/e2e/test_coupon_flow.py
 import pytest
 
+from order.services.coupon import CouponService
+
 from payment.services.payment_flow import handle_successful_payment
 
 
@@ -15,20 +17,25 @@ class DummySession(dict):
 def test_coupon_consumed_after_payment(
     successful_payment,
     coupon,
+    django_capture_on_commit_callbacks,
 ):
 
     order = successful_payment.order
 
     order.coupon = coupon
-    order.save(update_fields=["coupon"])
+    order.coupon_code = coupon.code
+    order.coupon_discount_percent = coupon.discount_percent
+    order.save(update_fields=["coupon", "coupon_code", "coupon_discount_percent"])
+    CouponService.reserve_for_order(order)
 
-    handle_successful_payment(
-        payment_id=successful_payment.pk,
-        attempt_id=successful_payment.attempts.get().pk,
-        ref_id="REF-SUCCESSFUL",
-        response={},
-        session=DummySession(),
-    )
+    with django_capture_on_commit_callbacks(execute=True):
+        handle_successful_payment(
+            payment_id=successful_payment.pk,
+            attempt_id=successful_payment.attempts.get().pk,
+            ref_id="REF-SUCCESSFUL",
+            response={},
+            session=DummySession(),
+        )
 
     coupon.refresh_from_db()
 

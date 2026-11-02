@@ -23,6 +23,7 @@ class TestCouponCheckout:
         product,
         coupon,
         payment_factory,
+        django_capture_on_commit_callbacks,
     ):
 
         cart.add(product)
@@ -44,7 +45,8 @@ class TestCouponCheckout:
             success=True,
         )
 
-        confirm_order_payment(order.id)
+        with django_capture_on_commit_callbacks(execute=True):
+            confirm_order_payment(order.id)
 
         coupon.refresh_from_db()
 

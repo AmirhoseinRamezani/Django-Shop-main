@@ -26,6 +26,7 @@ class TestCouponCheckout:
         cart_builder,
         product,
         mocker,
+        django_capture_on_commit_callbacks,
     ):
         cart = (
             cart_builder
@@ -84,13 +85,14 @@ class TestCouponCheckout:
             ),
         )
 
-        handle_successful_payment(
-            payment_id=payment.pk,
-            attempt_id=attempt.pk,
-            ref_id="REF-AUTH-1",
-            response={},
-            session=DummySession(),
-        )
+        with django_capture_on_commit_callbacks(execute=True):
+            handle_successful_payment(
+                payment_id=payment.pk,
+                attempt_id=attempt.pk,
+                ref_id="REF-AUTH-1",
+                response={},
+                session=DummySession(),
+            )
 
         coupon.refresh_from_db()
 
