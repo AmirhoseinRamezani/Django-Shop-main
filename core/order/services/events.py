@@ -1,27 +1,30 @@
 # order/services/events.py
+from django.db import transaction
+
 from order.events.order_event import OrderEvent
 from events.models.outbox import OutboxEvent
 
 
+@transaction.atomic
 def record_order_event(*, order, type, actor=None, payload=None):
-    payload = payload or {}
-    
-    # 1. Domain Event (history)
+    """Persist the domain event and its outbox message atomically."""
+    event_payload = {
+        **(payload or {}),
+        # Aggregate identity is authoritative; caller data cannot override it.
+        "order_id": order.pk,
+        "user_id": order.user_id,
+    }
+
     OrderEvent.objects.create(
         order=order,
         type=type,
         actor=actor,
-        payload=payload,
+        payload=event_payload,
     )
 
-    # 2. Integration Event (Outbox)
     OutboxEvent.objects.create(
         topic=_map_order_event_to_topic(type),
-        payload={
-            "order_id": order.id,
-            "user_id": order.user_id,
-            **payload,
-        }
+        payload=event_payload,
     )
 
 def _map_order_event_to_topic(event_type: str) -> str:
