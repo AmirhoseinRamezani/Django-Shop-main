@@ -133,6 +133,13 @@ class OrderStateMachine:
             update_fields.append("paid_date")
 
         if (
+            to_status == OrderStatusType.delivered
+            and order.completed_date is None
+        ):
+            order.completed_date = timezone.now()
+            update_fields.append("completed_date")
+
+        if (
             to_status == OrderStatusType.cancelled
             and order.cancelled_date is None
         ):
@@ -197,6 +204,13 @@ class OrderStateMachine:
 
         return {
             OrderStatusType.paid: OrderEventType.PAID,
+            OrderStatusType.processing: OrderEventType.PROCESSING,
+            OrderStatusType.shipped: OrderEventType.SHIPPED,
+            OrderStatusType.delivered: OrderEventType.DELIVERED,
+            OrderStatusType.return_requested: (
+                OrderEventType.RETURN_REQUESTED
+            ),
+            OrderStatusType.returned: OrderEventType.RETURNED,
             OrderStatusType.refunded: OrderEventType.REFUNDED,
         }.get(
             status,

@@ -467,15 +467,12 @@ class OrderModel(models.Model):
         return confirm_order_payment(order_id=self.pk)
 
     def mark_completed(self):
+        """Mark a shipped Order as delivered through the canonical lifecycle."""
+        from order.services.state_machine import OrderStateMachine
 
-        self.completed_date = (
-            timezone.now()
-        )
-
-        self.save(
-            update_fields=[
-                "completed_date",
-            ]
+        return OrderStateMachine.transition(
+            order=self,
+            to_status=OrderStatusType.delivered,
         )
 
     def mark_cancelled(self):

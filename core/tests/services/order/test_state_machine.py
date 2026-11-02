@@ -312,7 +312,7 @@ class TestOrderStateMachine:
 
         args = record.call_args.kwargs
 
-        assert args["type"] == OrderEventType.ADMIN_NOTE
+        assert args["type"] == OrderEventType.PROCESSING
 
     # ---------------------------------------------------------
     # processing -> shipped
@@ -357,6 +357,34 @@ class TestOrderStateMachine:
         order.refresh_from_db()
 
         assert order.status == OrderStatusType.delivered
+        assert order.completed_date is not None
+
+    def test_mark_completed_uses_canonical_delivered_transition(
+        self,
+        shipped_order,
+        mocker,
+    ):
+        record = mocker.patch(
+            "order.services.state_machine.record_order_event"
+        )
+
+        result = shipped_order.mark_completed()
+
+        result.refresh_from_db()
+        assert result.status == OrderStatusType.delivered
+        assert result.completed_date is not None
+        assert record.call_args.kwargs["type"] == OrderEventType.DELIVERED
+
+    def test_mark_completed_rejects_non_shipped_order(
+        self,
+        pending_order,
+    ):
+        with pytest.raises(ValidationError, match="Illegal transition"):
+            pending_order.mark_completed()
+
+        pending_order.refresh_from_db()
+        assert pending_order.status == OrderStatusType.pending
+        assert pending_order.completed_date is None
 
     # ---------------------------------------------------------
     # paid -> refunded
@@ -383,6 +411,31 @@ class TestOrderStateMachine:
         args = record.call_args.kwargs
 
         assert args["type"] == OrderEventType.REFUNDED
+
+    @pytest.mark.parametrize(
+        ("status", "expected_event"),
+        [
+            (OrderStatusType.paid, OrderEventType.PAID),
+            (OrderStatusType.processing, OrderEventType.PROCESSING),
+            (OrderStatusType.shipped, OrderEventType.SHIPPED),
+            (OrderStatusType.delivered, OrderEventType.DELIVERED),
+            (
+                OrderStatusType.return_requested,
+                OrderEventType.RETURN_REQUESTED,
+            ),
+            (OrderStatusType.returned, OrderEventType.RETURNED),
+            (OrderStatusType.refunded, OrderEventType.REFUNDED),
+        ],
+    )
+    def test_status_event_mapping_is_explicit(
+        self,
+        status,
+        expected_event,
+    ):
+        assert (
+            OrderStateMachine._map_status_to_event(status)
+            == expected_event
+        )
 
     # ---------------------------------------------------------
     # illegal transition
