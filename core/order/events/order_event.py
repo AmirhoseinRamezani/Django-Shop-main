@@ -7,6 +7,11 @@ from django.utils.translation import gettext_lazy as _
 class OrderEventType(models.TextChoices):
     CREATED = "CREATED", "Order Created"
 
+    PENDING = (
+        "PENDING",
+        _("Pending Payment")
+    )
+
     PAYMENT_STARTED = (
         "PAYMENT_STARTED",
         _("Payment Started")
@@ -15,6 +20,11 @@ class OrderEventType(models.TextChoices):
     PAID = (
         "PAID",
         _("Payment Successful")
+    )
+
+    FAILED = (
+        "FAILED",
+        _("Payment Failed")
     )
 
     PROCESSING = (
@@ -97,10 +107,14 @@ class OrderEvent(models.Model):
         return {
             OrderEventType.CREATED:
                 _("Order Created"),
+            OrderEventType.PENDING:
+                _("Pending Payment"),
             OrderEventType.PAYMENT_STARTED:
                 _("Payment Started"),
             OrderEventType.PAID:
                 _("Payment Successful"),
+            OrderEventType.FAILED:
+                _("Payment Failed"),
             OrderEventType.PROCESSING:
                 _("Order Processing"),
             OrderEventType.SHIPPED:

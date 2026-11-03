@@ -1,7 +1,7 @@
 # order/services/events.py
 from django.db import transaction
 
-from order.events.order_event import OrderEvent
+from order.events.order_event import OrderEvent, OrderEventType
 from events.models.outbox import OutboxEvent
 
 
@@ -28,10 +28,26 @@ def record_order_event(*, order, type, actor=None, payload=None):
     )
 
 def _map_order_event_to_topic(event_type: str) -> str:
-    return {
-        "PAID": "order.paid",
-        "CREATED": "order.created",
-        "CANCELLED": "order.cancelled",
-        "EXPIRED": "order.expired",
-        "REFUNDED": "order.refunded",
-    }.get(event_type, "order.unknown")
+    topics = {
+        OrderEventType.CREATED: "order.created",
+        OrderEventType.PENDING: "order.pending",
+        OrderEventType.PAYMENT_STARTED: "order.payment_started",
+        OrderEventType.PAID: "order.paid",
+        OrderEventType.FAILED: "order.failed",
+        OrderEventType.PROCESSING: "order.processing",
+        OrderEventType.SHIPPED: "order.shipped",
+        OrderEventType.DELIVERED: "order.delivered",
+        OrderEventType.RETURN_REQUESTED: "order.return_requested",
+        OrderEventType.RETURNED: "order.returned",
+        OrderEventType.EXPIRED: "order.expired",
+        OrderEventType.CANCELLED: "order.cancelled",
+        OrderEventType.REFUNDED: "order.refunded",
+        OrderEventType.ADMIN_NOTE: "order.admin_note",
+    }
+
+    try:
+        return topics[event_type]
+    except KeyError as exc:
+        raise ValueError(
+            f"No outbox topic is defined for OrderEventType {event_type!r}."
+        ) from exc

@@ -202,7 +202,9 @@ class OrderStateMachine:
 
             return OrderEventType.CANCELLED
 
-        return {
+        event_type = {
+            OrderStatusType.pending: OrderEventType.PENDING,
+            OrderStatusType.failed: OrderEventType.FAILED,
             OrderStatusType.paid: OrderEventType.PAID,
             OrderStatusType.processing: OrderEventType.PROCESSING,
             OrderStatusType.shipped: OrderEventType.SHIPPED,
@@ -212,7 +214,11 @@ class OrderStateMachine:
             ),
             OrderStatusType.returned: OrderEventType.RETURNED,
             OrderStatusType.refunded: OrderEventType.REFUNDED,
-        }.get(
-            status,
-            OrderEventType.ADMIN_NOTE,
-        )
+        }.get(status)
+
+        if event_type is None:
+            raise ValidationError(
+                f"No OrderEventType is defined for Order status {status!r}."
+            )
+
+        return event_type

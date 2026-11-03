@@ -1,202 +1,4 @@
-# # test/services/order/test_state_machine
-# import pytest
-
-# from django.core.exceptions import ValidationError
-
-# from tests.base import BaseTestCase
-
-# from order.services.state_machine import OrderStateMachine
-# from order.models import OrderStatusType
-
-
-# pytestmark = [
-#     pytest.mark.django_db,
-#     pytest.mark.service,
-# ]
-
-
-# class TestOrderStateMachine(BaseTestCase):
-
-#     def test_pending_to_paid(
-#         self,
-#         order_factory,
-#     ):
-#         order = order_factory()
-
-#         OrderStateMachine.transition(
-#             order=order,
-#             to_status=OrderStatusType.paid,
-#         )
-
-#         self.assert_order_paid(order)
-
-#     def test_paid_to_processing(
-#         self,
-#         order_factory,
-#     ):
-#         order = order_factory(
-#             paid=True,
-#         )
-
-#         OrderStateMachine.transition(
-#             order=order,
-#             to_status=OrderStatusType.processing,
-#         )
-
-#         order.refresh_from_db()
-
-#         assert (
-#             order.status
-#             == OrderStatusType.processing
-#         )
-
-#     def test_processing_to_shipped(
-#         self,
-#         order_factory,
-#     ):
-#         order = order_factory(
-#             processing=True,
-#         )
-
-#         OrderStateMachine.transition(
-#             order=order,
-#             to_status=OrderStatusType.shipped,
-#         )
-
-#         order.refresh_from_db()
-
-#         assert (
-#             order.status
-#             == OrderStatusType.shipped
-#         )
-
-#     def test_shipped_to_delivered(
-#         self,
-#         order_factory,
-#     ):
-#         order = order_factory(
-#             shipped=True,
-#         )
-
-#         OrderStateMachine.transition(
-#             order=order,
-#             to_status=OrderStatusType.delivered,
-#         )
-
-#         order.refresh_from_db()
-
-#         assert (
-#             order.status
-#             == OrderStatusType.delivered
-#         )
-
-#     def test_return_request(
-#         self,
-#         order_factory,
-#     ):
-#         order = order_factory(
-#             shipped=True,
-#         )
-
-#         OrderStateMachine.transition(
-#             order=order,
-#             to_status=OrderStatusType.return_requested,
-#         )
-
-#         order.refresh_from_db()
-
-#         assert (
-#             order.status
-#             == OrderStatusType.return_requested
-#         )
-
-#     def test_returned(
-#         self,
-#         order_factory,
-#     ):
-#         order = order_factory(
-#             return_requested=True,
-#         )
-
-#         OrderStateMachine.transition(
-#             order=order,
-#             to_status=OrderStatusType.returned,
-#         )
-
-#         order.refresh_from_db()
-
-#         assert (
-#             order.status
-#             == OrderStatusType.returned
-#         )
-
-#     def test_refunded(
-#         self,
-#         order_factory,
-#     ):
-#         order = order_factory(
-#             returned=True,
-#         )
-
-#         OrderStateMachine.transition(
-#             order=order,
-#             to_status=OrderStatusType.refunded,
-#         )
-
-#         order.refresh_from_db()
-
-#         assert (
-#             order.status
-#             == OrderStatusType.refunded
-#         )
-
-#     @pytest.mark.parametrize(
-#         "from_status,to_status",
-#         [
-#             (
-#                 OrderStatusType.pending,
-#                 OrderStatusType.processing,
-#             ),
-#             (
-#                 OrderStatusType.pending,
-#                 OrderStatusType.shipped,
-#             ),
-#             (
-#                 OrderStatusType.processing,
-#                 OrderStatusType.paid,
-#             ),
-#             (
-#                 OrderStatusType.delivered,
-#                 OrderStatusType.processing,
-#             ),
-#             (
-#                 OrderStatusType.cancelled,
-#                 OrderStatusType.pending,
-#             ),
-#             (
-#                 OrderStatusType.refunded,
-#                 OrderStatusType.processing,
-#             ),
-#         ]
-#     )
-#     def test_invalid_transition(
-#         self,
-#         order_factory,
-#         from_status,
-#         to_status,
-#     ):
-#         order = order_factory(
-#             status=from_status,
-#         )
-
-#         with pytest.raises(
-#             ValidationError
-#         ):
-#             OrderStateMachine.transition(
-#                 order=order,
-#                 to_status=to_status,
-#             )
-
+# test/services/order/test_state_machine
 import pytest
 
 from django.core.exceptions import ValidationError
@@ -415,6 +217,8 @@ class TestOrderStateMachine:
     @pytest.mark.parametrize(
         ("status", "expected_event"),
         [
+            (OrderStatusType.pending, OrderEventType.PENDING),
+            (OrderStatusType.failed, OrderEventType.FAILED),
             (OrderStatusType.paid, OrderEventType.PAID),
             (OrderStatusType.processing, OrderEventType.PROCESSING),
             (OrderStatusType.shipped, OrderEventType.SHIPPED),
@@ -436,6 +240,10 @@ class TestOrderStateMachine:
             OrderStateMachine._map_status_to_event(status)
             == expected_event
         )
+
+    def test_unmapped_status_does_not_fall_back_to_admin_note(self):
+        with pytest.raises(ValidationError, match="No OrderEventType"):
+            OrderStateMachine._map_status_to_event(999)
 
     # ---------------------------------------------------------
     # illegal transition
