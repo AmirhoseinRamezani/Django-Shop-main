@@ -1,42 +1,30 @@
 # tests/services/events/test_router.py
 import pytest
-
 from unittest.mock import Mock
 
-from events.dispatchers.router import dispatch
-from events.dispatchers.registry import ROUTES
+from events.dispatchers.router import (
+    UnknownTopicError,
+    dispatch,
+)
 
-pytestmark = pytest.mark.django_db
+def test_calls_handlers(monkeypatch):
+    first = Mock()
+    second = Mock()
+    import events.dispatchers.router as router
+
+    monkeypatch.setitem(router.ROUTES, "topic.test", (first, second))
+    event = Mock(topic="topic.test")
+
+    dispatch(event)
+
+    first.assert_called_once_with(event)
+    second.assert_called_once_with(event)
 
 
-class TestRouter:
+def test_explicit_noop_topic_is_accepted():
+    dispatch(Mock(topic="order.pending"))
 
-    def test_calls_handlers(
-        self,
-        monkeypatch,
-    ):
-        first = Mock()
-        second = Mock()
 
-        monkeypatch.setitem(
-            __import__("events.dispatchers.router", fromlist=["ROUTES"]).ROUTES,
-            "topic.test",
-            (
-                first,
-                second,
-            ),
-        )
-
-        event = Mock(topic="topic.test")
-
-        dispatch(event)
-
-        first.assert_called_once_with(event)
-        second.assert_called_once_with(event)
-
-    def test_unknown_topic(
-        self,
-    ):
-        dispatch(
-            Mock(topic="unknown"),
-        )
+def test_unknown_topic_is_rejected():
+    with pytest.raises(UnknownTopicError, match="No dispatch route"):
+        dispatch(Mock(topic="order.typo"))

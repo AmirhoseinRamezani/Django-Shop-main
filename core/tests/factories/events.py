@@ -1,5 +1,4 @@
 # tests/factories/events.py
-
 import factory
 
 from tests.factories.base import BaseFactory
@@ -14,9 +13,7 @@ class OutboxEventFactory(BaseFactory):
     class Meta:
         model = OutboxEvent
 
-    topic = factory.Sequence(
-        lambda n: f"order.created.{n}"
-    )
+    topic = "order.pending"
 
     payload = factory.LazyFunction(
         lambda: {

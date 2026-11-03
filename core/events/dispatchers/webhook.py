@@ -1,25 +1,16 @@
-# events/dispatchers/webhook.py
 from django.conf import settings
 
-from events.clients.webhook import (
-    WebhookClient,
-)
+from events.clients.webhook import WebhookClient
 
 
 def send_webhook_event(event):
-
-    endpoint = getattr(
-        settings,
-        "PARTNER_WEBHOOK",
-        "http://localhost/webhook",
-    )
+    endpoint = getattr(settings, "PARTNER_WEBHOOK", None)
+    if not endpoint:
+        raise RuntimeError("PARTNER_WEBHOOK is not configured.")
 
     client = WebhookClient(endpoint)
-
-    client.post({
-
-        "topic": event.topic,
-
-        "payload": event.payload,
-
-    })
+    client.post(
+        event.payload,
+        event.topic,
+        event_id=str(event.event_id),
+    )

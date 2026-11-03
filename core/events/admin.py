@@ -11,6 +11,8 @@ class OutboxEventAdmin(admin.ModelAdmin):
         "retry_count",
         "created_date",
         "processed_date",
+        "available_at",
+        "claimed_at",
     )
     list_filter = ("status", "topic")
     search_fields = ("topic", "payload")
@@ -22,5 +24,8 @@ class OutboxEventAdmin(admin.ModelAdmin):
         "last_error",
         "created_date",
         "processed_date",
+        "available_at",
+        "claimed_at",
+        "claim_token",
     )
     ordering = ("-created_date",)
