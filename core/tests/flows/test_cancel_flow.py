@@ -270,7 +270,7 @@ class TestCancelFlow:
         kwargs = event.call_args.kwargs
 
         assert kwargs["payload"]["reason"] == "customer"
-        
+
 """
 This file covers almost all Cancel scenarios
 
@@ -286,6 +286,5 @@ Test coverage:
 ✅ payload
 ✅ rollback
 ✅ idempotency
-✅ side effect"""
-        
-        
+✅ side effect
+"""

@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 
 from payment.enums import (
     Currency,
@@ -428,7 +428,8 @@ class TestPaymentDatabaseConstraints:
         )
 
         with pytest.raises(IntegrityError):
-            payment.save(force_insert=True)
+            with transaction.atomic():
+                payment.save(force_insert=True)
 
     def test_database_rejects_negative_amount(self):
         payment = build_valid_payment(
@@ -436,7 +437,8 @@ class TestPaymentDatabaseConstraints:
         )
 
         with pytest.raises(IntegrityError):
-            payment.save(force_insert=True)
+            with transaction.atomic():
+                payment.save(force_insert=True)
 
     def test_database_rejects_invalid_version(self):
         payment = build_valid_payment(
@@ -444,13 +446,17 @@ class TestPaymentDatabaseConstraints:
         )
 
         with pytest.raises(IntegrityError):
-            payment.save(force_insert=True)
+            with transaction.atomic():
+                payment.save(force_insert=True)
 
+    @pytest.mark.django_db(transaction=True)
     def test_database_allows_only_one_pending_payment_per_order(self):
         payment = PaymentFactory()
 
         with pytest.raises(IntegrityError):
-            PaymentFactory(order=payment.order)
+            with transaction.atomic():
+                PaymentFactory(order=payment.order)
+
 
     def test_successful_payment_does_not_conflict_with_pending_constraint(self):
         payment = PaymentFactory()

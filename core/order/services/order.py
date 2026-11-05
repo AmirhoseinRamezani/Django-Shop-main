@@ -39,9 +39,6 @@ class OrderService:
     def create_online_order(*, user, address, cart, coupon=None):
         OrderPolicy.can_create_order(user)
 
-        if not cart.cart_items.exists():
-            raise ValidationError(_("Your shopping cart is empty"))
-
         # Coupon availability and terms are authoritatively revalidated when
         # the reservation is committed below under the Coupon row lock.
 

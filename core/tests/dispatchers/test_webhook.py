@@ -1,4 +1,5 @@
 # tests/dispatchers/test_webhook.py
+import uuid
 import pytest
 
 from unittest.mock import patch
@@ -15,6 +16,7 @@ def test_webhook(client):
     class Event:
 
         topic = "order.paid"
+        event_id = uuid.UUID("f8a3d4b1-2c6e-4d91-9a70-5b8e2c1f6a43")
 
         payload = {
             "order_id": 1,
@@ -22,4 +24,8 @@ def test_webhook(client):
 
     send_webhook_event(Event())
 
-    client.assert_called_once()
+    client.assert_called_once_with(
+        Event.payload,
+        Event.topic,
+        event_id=str(Event.event_id),
+    )

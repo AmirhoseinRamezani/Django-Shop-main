@@ -5,9 +5,19 @@ from order.events.order_event import OrderEvent, OrderEventType
 from events.models.outbox import OutboxEvent
 
 
-@transaction.atomic
+@transaction.atomic(savepoint=False)
 def record_order_event(*, order, type, actor=None, payload=None):
     """Persist the domain event and its outbox message atomically."""
+    _record_order_event(
+        order=order,
+        type=type,
+        actor=actor,
+        payload=payload,
+    )
+
+def _record_order_event(*, order, type, actor=None, payload=None):
+    """Persist events inside the caller's transaction."""
+
     event_payload = {
         **(payload or {}),
         # Aggregate identity is authoritative; caller data cannot override it.

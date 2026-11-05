@@ -7,7 +7,7 @@ from django.utils import timezone
 
 from order.events.order_event import OrderEventType
 from order.models import OrderStatusType
-from order.services.events import record_order_event
+from order.services.events import _record_order_event as record_order_event
 from order.services.inventory import InventoryService
 from order.services.coupon import CouponService
 

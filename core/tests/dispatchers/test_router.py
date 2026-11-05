@@ -3,11 +3,9 @@
 import pytest
 
 import events.dispatchers.router as router
-from events.dispatchers.router import dispatch
-
+from events.dispatchers.router import dispatch, UnknownTopicError
 
 pytestmark = pytest.mark.django_db
-
 
 class DummyEvent:
 
@@ -41,4 +39,5 @@ def test_order_paid_route(mocker):
 
 
 def test_unknown_topic():
-    dispatch(DummyEvent("unknown.topic"))
+    with pytest.raises(UnknownTopicError, match="unknown.topic"):
+        dispatch(DummyEvent("unknown.topic"))

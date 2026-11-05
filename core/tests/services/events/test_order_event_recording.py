@@ -32,7 +32,7 @@ def test_record_order_event_persists_domain_and_outbox_identity():
     assert outbox_event.payload == expected_payload
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_record_order_event_rolls_back_domain_event_when_outbox_insert_fails(mocker):
     order = OrderFactory()
     mocker.patch(
