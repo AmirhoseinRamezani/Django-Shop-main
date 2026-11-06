@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import threading
 from unittest.mock import patch
+from datetime import timedelta
+
+from django.core.management import call_command
+from django.utils import timezone
 
 import pytest
 from django.db import close_old_connections, connections, connection
@@ -208,6 +212,158 @@ def test_order_cancellation_races_with_gateway_initiation(
     resolution = PaymentResolution.objects.get(payment=reconciled_payment)
     assert resolution.status == PaymentResolutionStatus.OPEN
     assert resolution.reason == PaymentResolutionReason.ORDER_CANCELLED
+    assert resolution.attempt_id == attempt.pk
+
+    assert coupon.reserved_count == 1
+    assert coupon.used_count == 0
+    assert reservation.status == CouponReservationStatus.RESERVED
+    
+def test_order_expiration_during_gateway_initiation_is_deferred_and_reconciled():
+    """
+    Expiration must not release reservations while gateway initiation is
+    unresolved. If the provider accepts the initiation after the deadline,
+    the authority is retained, the URL is withheld, and later inquiry records
+    a durable resolution without resurrecting or consuming the Order.
+    """
+    coupon = CouponFactory(max_limit_usage=1)
+    order = OrderFactory(
+        coupon=coupon,
+        coupon_code=coupon.code,
+        coupon_discount_percent=coupon.discount_percent,
+    )
+    CouponService.reserve_for_order(order)
+
+    gateway_entered = threading.Event()
+    release_gateway = threading.Event()
+    worker_finished = threading.Event()
+    worker_results: list[str] = []
+    worker_errors: list[BaseException] = []
+
+    authority = "AUTH-EXPIRED-DURING-INITIATION"
+    payment_url = "https://gateway.test/pay/AUTH-EXPIRED-DURING-INITIATION"
+
+    def initiate_gateway(*args, **kwargs):
+        gateway_entered.set()
+        if not release_gateway.wait(timeout=15):
+            raise AssertionError("Gateway barrier was not released.")
+
+        return GatewayPaymentResult(
+            success=True,
+            gateway=PaymentGateway.ZARINPAL,
+            authority=authority,
+            response_code="100",
+            message="accepted",
+        )
+
+    def payment_worker():
+        close_old_connections()
+        try:
+            result = PaymentService.start_payment(
+                order,
+                callback_url="https://shop.test/payment/verify/",
+            )
+            worker_results.append(result)
+        except BaseException as exc:
+            worker_errors.append(exc)
+        finally:
+            connections.close_all()
+            worker_finished.set()
+
+    with (
+        patch(
+            "payment.services.services.GatewayService.current_gateway",
+            return_value=PaymentGateway.ZARINPAL,
+        ),
+        patch(
+            "payment.services.services.GatewayService.initiate_payment",
+            side_effect=initiate_gateway,
+        ),
+        patch(
+            "payment.services.services.GatewayService.payment_url",
+            return_value=payment_url,
+        ) as mocked_payment_url,
+    ):
+        worker = threading.Thread(target=payment_worker)
+        worker.start()
+
+        try:
+            assert gateway_entered.wait(timeout=15), (
+                "Payment initiation did not reach Gateway I/O."
+            )
+
+            order.expire_at = timezone.now() - timedelta(seconds=1)
+            order.save(update_fields=("expire_at",))
+
+            # Expiry must defer while the Payment outcome is unresolved.
+            call_command("expire_pending_orders")
+
+            order.refresh_from_db()
+            assert order.status == OrderStatusType.pending
+
+            coupon.refresh_from_db()
+            reservation = CouponReservation.objects.get(order=order)
+
+            assert coupon.reserved_count == 1
+            assert coupon.used_count == 0
+            assert reservation.status == CouponReservationStatus.RESERVED
+        finally:
+            release_gateway.set()
+            worker.join(timeout=20)
+
+    assert not worker.is_alive()
+    assert worker_finished.is_set()
+    assert worker_results == []
+    assert len(worker_errors) == 1
+    assert isinstance(worker_errors[0], PaymentInitiationForbiddenError)
+    mocked_payment_url.assert_not_called()
+
+    order.refresh_from_db()
+    payment = order.payments.get()
+    attempt = payment.attempts.get()
+
+    assert order.status == OrderStatusType.pending
+    assert order.is_expired()
+    assert payment.status == PaymentStatusType.PENDING
+    assert payment.is_consumed is False
+    assert attempt.status == PaymentAttemptStatus.PENDING
+    assert attempt.authority_id == authority
+
+    # Reconciliation must preserve provider evidence without finalizing
+    # the expired Order or consuming its coupon reservation.
+    with patch(
+        "payment.services.reconciliation.GatewayService.inquire",
+        return_value=GatewayInquiryResult(
+            success=True,
+            gateway=PaymentGateway.ZARINPAL,
+            gateway_reference="REF-EXPIRED-DURING-INITIATION",
+            gateway_transaction_id="TX-EXPIRED-DURING-INITIATION",
+            response_code="100",
+            message="verified",
+            amount=payment.amount,
+            currency=payment.currency,
+        ),
+    ):
+        reconciled_payment = PaymentReconciliationService.reconcile_payment(
+            payment_id=payment.pk,
+            attempt_id=attempt.pk,
+        )
+
+    order.refresh_from_db()
+    reconciled_payment.refresh_from_db()
+    attempt.refresh_from_db()
+    coupon.refresh_from_db()
+    reservation.refresh_from_db()
+
+    assert reconciled_payment.status == PaymentStatusType.SUCCESS
+    assert reconciled_payment.is_consumed is False
+    assert attempt.status == PaymentAttemptStatus.SUCCESS
+    assert order.status == OrderStatusType.pending
+    assert order.is_expired()
+    assert not order.events.filter(type=OrderEventType.PAID).exists()
+
+    resolution = PaymentResolution.objects.get(payment=reconciled_payment)
+    assert resolution.status == PaymentResolutionStatus.OPEN
+    assert resolution.reason == PaymentResolutionReason.ORDER_DEADLINE_PASSED
     assert resolution.attempt_id == attempt.pk
 
     assert coupon.reserved_count == 1
