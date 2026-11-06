@@ -23,7 +23,7 @@ def test_concurrent_retries_create_at_most_one_new_attempt(payment, mocker):
         status=PaymentAttemptStatus.FAILED,
     )
 
-    mocker.patch(
+    initiate = mocker.patch(
         "payment.services.retry.GatewayService.initiate_payment",
         return_value=GatewayPaymentResult(
             success=True,
@@ -39,10 +39,13 @@ def test_concurrent_retries_create_at_most_one_new_attempt(payment, mocker):
     def worker():
         close_old_connections()
         try:
-            return RetryPaymentService.retry(
-                order=payment.order,
-                callback_url="https://shop.test/payment/verify/",
-            )
+            try:
+                return RetryPaymentService.retry(
+                    order=payment.order,
+                    callback_url="https://shop.test/payment/verify/",
+                )
+            except PaymentGatewayError as exc:
+                return exc
         finally:
             connections.close_all()
 
@@ -53,10 +56,27 @@ def test_concurrent_retries_create_at_most_one_new_attempt(payment, mocker):
         PaymentAttempt.objects.filter(payment=payment).order_by("attempt_number")
     )
 
+    # Exactly one new retry attempt must be created.
     assert len(attempts) == 2
     assert [attempt.attempt_number for attempt in attempts] == [1, 2]
     assert attempts[1].retry_of_id == attempts[0].pk
     assert attempts[1].retry_count == 2
+
+    # Gateway initiation must never be duplicated.
+    assert initiate.call_count == 1
+
+    # The concurrent caller either receives the already-created payment URL
+    # or gets an explicit retryable "initiation in progress" response.
+    assert all(
+        isinstance(result, (str, PaymentGatewayError))
+        for result in results
+    )
+    assert any(isinstance(result, str) for result in results)
+
+    for result in results:
+        if isinstance(result, PaymentGatewayError):
+            assert result.retryable is True
+            assert "already in progress" in str(result).lower()
 
 
 def test_concurrent_same_retry_key_creates_one_attempt(payment, mocker):
