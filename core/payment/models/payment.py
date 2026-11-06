@@ -1,7 +1,7 @@
-# core/payment/models/payment.py
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any
 
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -16,13 +16,11 @@ from payment.managers import PaymentManager
 class PaymentModel(models.Model):
     """Payment aggregate root.
 
-    The model owns only aggregate-local state and deterministic domain
-    mutations. Persistence, locking, transactions, gateway calls, Order
-    mutation and event dispatch remain outside the model.
+    The model owns aggregate-local state and deterministic domain mutations.
+    Persistence, locking, transactions, gateway calls, Order mutation and
+    event dispatch remain outside the model.
 
-    ``is_refunded`` means the Payment has been *fully* refunded. Partial
-    refunds and the cumulative refundable balance belong to the Refund
-    workflow and are evaluated while the Payment row is locked.
+    Existing Payment instances must be persisted through PaymentRepository.
     """
 
     order = models.ForeignKey(
@@ -65,8 +63,6 @@ class PaymentModel(models.Model):
 
     is_consumed = models.BooleanField(default=False)
 
-    # This flag is deliberately retained for compatibility with the existing
-    # schema. Its semantic meaning is now explicitly FULL refund only.
     is_refunded = models.BooleanField(
         default=False,
         help_text=_("True only when the Payment has been fully refunded."),
@@ -108,14 +104,29 @@ class PaymentModel(models.Model):
                 condition=Q(currency__gt=""),
                 name="payment_currency_required",
             ),
-            # One active Payment lifecycle per Order. Historical SUCCESS and
-            # FAILED aggregates remain fully queryable and immutable.
             models.UniqueConstraint(
                 fields=("order",),
                 condition=Q(status=PaymentStatusType.PENDING),
                 name="payment_one_pending_per_order",
             ),
         ]
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Prevent instance-level persistence from bypassing the repository.
+
+        Initial creation remains supported. Updates to existing Payment
+        aggregates must use PaymentRepository, which owns CAS/version changes.
+        """
+
+        if not self._state.adding:
+            raise ValidationError(
+                _(
+                    "Persisting an existing Payment must use "
+                    "PaymentRepository.save()."
+                )
+            )
+
+        super().save(*args, **kwargs)
 
     @property
     def state(self) -> PaymentStatusType:
@@ -152,17 +163,11 @@ class PaymentModel(models.Model):
 
     @property
     def can_refund(self) -> bool:
-        """Return whether this Payment can participate in a refund.
-
-        This intentionally does not require ``not is_refunded`` because
-        partial/multiple refunds are valid. The Refund workflow must enforce
-        the cumulative amount invariant under the Payment row lock.
-        """
+        """Return whether this Payment can participate in a refund."""
         return self.is_successful and self.is_consumed and not self.is_refunded
 
     @property
     def is_fully_refunded(self) -> bool:
-        """Explicit alias for the historical ``is_refunded`` flag."""
         return self.is_refunded
 
     def validate_financial_snapshot(
@@ -176,16 +181,20 @@ class PaymentModel(models.Model):
 
         if normalized_amount != self.amount:
             raise ValidationError(
-                {"amount": _(
-                    "Payment amount does not match the expected financial amount."
-                )}
+                {
+                    "amount": _(
+                        "Payment amount does not match the expected financial amount."
+                    )
+                }
             )
 
         if normalized_currency != self.currency:
             raise ValidationError(
-                {"currency": _(
-                    "Payment currency does not match the expected financial currency."
-                )}
+                {
+                    "currency": _(
+                        "Payment currency does not match the expected financial currency."
+                    )
+                }
             )
 
     def succeed(self) -> "PaymentModel":
@@ -210,12 +219,7 @@ class PaymentModel(models.Model):
         return self
 
     def refund(self) -> "PaymentModel":
-        """Record the aggregate fact that the Payment is fully refunded.
-
-        Gateway execution and cumulative refund calculation are owned by the
-        Refund application workflow. This command should be called only after
-        that workflow has established that no refundable balance remains.
-        """
+        """Record the aggregate fact that the Payment is fully refunded."""
         if self.is_refunded:
             return self
         self.require_successful()
@@ -229,20 +233,26 @@ class PaymentModel(models.Model):
 
         if self.amount is None or self.amount <= Decimal("0"):
             errors["amount"] = _("Payment amount must be greater than zero.")
+
         if not self.currency:
             errors["currency"] = _("Payment currency is required.")
+
         if not self.gateway:
             errors["gateway"] = _("Payment gateway is required.")
+
         if self.version < 1:
             errors["version"] = _("Payment version must be greater than zero.")
+
         if self.is_consumed and not self.is_successful:
             errors["is_consumed"] = _(
                 "Only successful payments can be consumed."
             )
+
         if self.is_refunded and not self.is_successful:
             errors["is_refunded"] = _(
                 "Only successful payments can be refunded."
             )
+
         if self.is_refunded and not self.is_consumed:
             errors["is_refunded"] = _(
                 "Consumed payment required before full refund."
@@ -285,15 +295,23 @@ class PaymentModel(models.Model):
 
     def _transition_to(self, state: PaymentStatusType) -> None:
         current = self.state
+
         if current == state:
             return
+
         allowed = self._ALLOWED_TRANSITIONS.get(current, set())
+
         if state not in allowed:
             raise ValidationError(
                 _(
                     "Invalid Payment transition: %(source)s -> %(target)s."
-                ) % {"source": current.label, "target": state.label}
+                )
+                % {
+                    "source": current.label,
+                    "target": state.label,
+                }
             )
+
         self.status = state
 
     def require_pending(self) -> None:
