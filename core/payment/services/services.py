@@ -6,12 +6,13 @@ from decimal import Decimal
 from django.conf import settings
 from django.db import transaction
 
-from order.models import OrderModel
+from order.models import OrderModel, OrderStatusType
 from payment.enums import Currency, PaymentAttemptStatus, PaymentGateway, PaymentStatusType
 from payment.exceptions import (
     PaymentAttemptIdentityConflictError,
     PaymentCreationForbiddenError,
     PaymentGatewayError,
+    PaymentInitiationForbiddenError,
     PaymentInvariantViolation,
 )
 from payment.models import PaymentAttempt, PaymentModel
@@ -35,7 +36,8 @@ class PaymentService:
             Gateway HTTP with no database lock/transaction
 
         Phase C:
-            Payment lock -> Attempt lock -> persist gateway identity -> commit
+            Order lock -> Payment lock -> Attempt lock
+            -> persist gateway identity -> commit
 
     PaymentAttempt is the owner of gateway execution identity. Payment owns
     the immutable financial snapshot.
@@ -230,10 +232,19 @@ class PaymentService:
         # PHASE C — PERSIST GATEWAY RESULT
         # ==============================================================
         rejection_error: PaymentGatewayError | None = None
+        initiation_forbidden_error: PaymentInitiationForbiddenError | None = None
         with transaction.atomic():
+            locked_order = (
+                OrderModel.objects
+                .select_for_update()
+                .get(pk=order_id)
+            )
             payment = PaymentRepository.get_for_update(payment_id)
             attempt = PaymentAttemptRepository.find_for_update(attempt_id)
-
+            if payment.order_id != locked_order.pk:
+                raise PaymentInvariantViolation(
+                    "Payment does not belong to the locked Order."
+                )
             if attempt.payment_id != payment.pk:
                 raise PaymentInvariantViolation(
                     "PaymentAttempt does not belong to the expected Payment."
@@ -257,6 +268,26 @@ class PaymentService:
             if result.success:
                 PaymentAttemptRepository.save_gateway_identity(attempt)
                 authority = attempt.authority_id
+                # Cancellation/expiration may win while Gateway I/O is
+                # in flight. Keep the accepted Gateway identity durable,
+                # but never expose a payment URL for a non-payable Order.
+                if (
+                    locked_order.status != OrderStatusType.pending
+                    or locked_order.is_expired()
+                ):
+                    initiation_forbidden_error = PaymentInitiationForbiddenError(
+                        "Gateway initiation was accepted, but the Order is "
+                        "no longer payable. The PaymentAttempt was retained "
+                        "for reconciliation.",
+                        details={
+                            "order_id": locked_order.pk,
+                            "payment_id": payment.pk,
+                            "attempt_id": attempt.pk,
+                            "order_status": str(locked_order.status),
+                            "operation": "initiate_payment",
+                            "reason": "order_not_payable",
+                        },
+                    )
             else:
                 attempt.mark_failed(
                     reason=result.message or "Payment gateway rejected initiation.",
@@ -287,6 +318,9 @@ class PaymentService:
         # اگر رد درگاه رخ داده باشد، پس از commit شدن وضعیت FAILED در دیتابیس، استثنا شلیک می‌شود
         if rejection_error is not None:
             raise rejection_error
+        
+        if initiation_forbidden_error is not None:
+            raise initiation_forbidden_error
 
         # URL generation is pure gateway infrastructure and occurs after the
         # database transaction has committed.
