@@ -576,6 +576,8 @@ class RefundRepository(BaseRepository[Refund]):
     def reserved_amount_for_payment(
         cls,
         payment_id: int,
+        *,
+        exclude_refund_id: int | None = None,
     ) -> Decimal:
         """
         Return the amount currently consuming refundable capacity.
@@ -583,14 +585,17 @@ class RefundRepository(BaseRepository[Refund]):
         SUCCESS + PENDING
         """
 
+        queryset = cls.for_payment(payment_id).filter(
+            status__in=(
+                RefundStatus.PENDING,
+                RefundStatus.SUCCESS,
+            ),
+        )
+        if exclude_refund_id is not None:
+            queryset = queryset.exclude(pk=exclude_refund_id)
+
         result = (
-            cls.for_payment(payment_id)
-            .filter(
-                status__in=(
-                    RefundStatus.PENDING,
-                    RefundStatus.SUCCESS,
-                ),
-            )
+            queryset
             .aggregate(
                 total=Sum("amount"),
             )

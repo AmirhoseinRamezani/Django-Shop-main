@@ -316,6 +316,10 @@ class RefundService:
         Order -> Payment lock hierarchy is held, then delegates the actual
         financial workflow to ``refund``.
         """
+
+        normalized_key = cls._normalize_idempotency_key(
+            idempotency_key,
+        )
         with transaction.atomic():
             order = (
                 OrderModel.objects
@@ -336,17 +340,28 @@ class RefundService:
             )
 
             existing = RefundRepository.find_by_idempotency_key_for_update(
-                idempotency_key.strip(),
+                normalized_key,
             )
             if existing is not None:
+                reserved_without_existing = (
+                    RefundRepository.reserved_amount_for_payment(
+                        payment.pk,
+                        exclude_refund_id=existing.pk,
+                    )
+                )
+                requested_full_amount = (
+                    payment.amount - reserved_without_existing
+                )
                 cls._validate_idempotent_request(
                     refund=existing,
                     payment=payment,
-                    amount=existing.amount,
+                    amount=requested_full_amount,
                 )
                 return existing
 
-            reserved = RefundRepository.reserved_amount_for_payment(payment.pk)
+            reserved = RefundRepository.reserved_amount_for_payment(
+                payment.pk,
+            )
             amount = payment.amount - reserved
             if amount <= Decimal("0"):
                 raise PaymentRefundAmountInvalidError(
@@ -356,7 +371,7 @@ class RefundService:
         return cls.refund(
             payment_id=payment_id,
             amount=amount,
-            idempotency_key=idempotency_key,
+            idempotency_key=normalized_key,
             reason="customer_request",
             actor=actor,
         )

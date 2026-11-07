@@ -9,7 +9,10 @@ from events.models import OutboxEvent, OutboxStatus
 from order.events.order_event import OrderEvent, OrderEventType
 from order.models import OrderStatusType
 from payment.enums import PaymentGateway, PaymentStatusType, RefundStatus
-from payment.exceptions import PaymentInvariantViolation
+from payment.exceptions import (
+    PaymentInvariantViolation,
+    PaymentRefundAmountInvalidError,
+)
 from payment.providers.base import GatewayRefundResult
 from payment.services.refund import RefundService
 from tests.factories.payment import PaymentAttemptFactory, PaymentFactory
@@ -71,6 +74,95 @@ def refunded_order_outbox_events(order_id: int):
 
 
 class TestRefundOrderConsistency:
+    
+    def test_refund_order_rejects_partial_refund_key_reuse(
+        self,
+        admin_user,
+    ):
+        payment = make_refundable_payment()
+
+        with patch(
+            "payment.services.refund.GatewayService.refund",
+            return_value=successful_gateway_result("PARTIAL-KEY-REUSE"),
+        ) as gateway:
+            partial = RefundService.refund(
+                payment_id=payment.pk,
+                amount=Decimal("400000"),
+                idempotency_key="shared-refund-order-key",
+                reason="customer_request",
+                actor=admin_user,
+            )
+
+            with pytest.raises(PaymentRefundAmountInvalidError):
+                RefundService.refund_order(
+                    order_id=payment.order_id,
+                    payment_id=payment.pk,
+                    actor=admin_user,
+                    idempotency_key="shared-refund-order-key",
+                )
+
+        assert partial.status == RefundStatus.SUCCESS
+        assert payment.refunds.count() == 1
+        gateway.assert_called_once()
+
+    def test_repeated_full_refund_order_request_returns_existing_refund(
+        self,
+        admin_user,
+    ):
+        payment = make_refundable_payment()
+
+        with patch(
+            "payment.services.refund.GatewayService.refund",
+            return_value=successful_gateway_result("FULL-KEY-REPLAY"),
+        ) as gateway:
+            first = RefundService.refund_order(
+                order_id=payment.order_id,
+                payment_id=payment.pk,
+                actor=admin_user,
+                idempotency_key="full-refund-order-replay",
+            )
+            second = RefundService.refund_order(
+                order_id=payment.order_id,
+                payment_id=payment.pk,
+                actor=admin_user,
+                idempotency_key="full-refund-order-replay",
+            )
+
+        assert second.pk == first.pk
+        assert payment.refunds.count() == 1
+        gateway.assert_called_once()
+
+    def test_refund_order_rejects_key_owned_by_another_payment(
+        self,
+        admin_user,
+    ):
+        first_payment = make_refundable_payment()
+        second_payment = make_refundable_payment()
+
+        with patch(
+            "payment.services.refund.GatewayService.refund",
+            return_value=successful_gateway_result("CROSS-PAYMENT-KEY"),
+        ) as gateway:
+            RefundService.refund(
+                payment_id=first_payment.pk,
+                amount=Decimal("300000"),
+                idempotency_key="cross-payment-refund-key",
+                reason="customer_request",
+                actor=admin_user,
+            )
+
+            with pytest.raises(PaymentInvariantViolation):
+                RefundService.refund_order(
+                    order_id=second_payment.order_id,
+                    payment_id=second_payment.pk,
+                    actor=admin_user,
+                    idempotency_key="cross-payment-refund-key",
+                )
+
+        assert first_payment.refunds.count() == 1
+        assert second_payment.refunds.count() == 0
+        gateway.assert_called_once()
+
     def test_full_refund_atomically_finalizes_payment_order_event_and_outbox(
         self,
         admin_user,
