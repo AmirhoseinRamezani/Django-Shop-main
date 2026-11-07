@@ -53,11 +53,21 @@ class OrderPolicy:
         return True
 
     @staticmethod
-    def can_refund(user, order):
-        """Authorize an actor and validate the order refund lifecycle."""
+    def authorize_refund_actor(user):
+        """
+        Enforce the staff-only Refund V1 authorization boundary.
+        """
         if not user or not user.is_authenticated or not user.is_staff:
             raise PermissionDenied(_("Admin access required"))
 
+        return True
+
+    @staticmethod
+    def can_refund(user, order):
+        """
+        Authorize an actor and validate the order refund lifecycle.
+        """
+        OrderPolicy.authorize_refund_actor(user)
         return OrderPolicy.can_refund_order(order)
     
     @staticmethod
@@ -90,4 +100,3 @@ class OrderPolicy:
                 OrderStatusType.failed,
             }
         )
-        

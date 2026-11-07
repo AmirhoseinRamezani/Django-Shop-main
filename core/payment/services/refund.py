@@ -1,5 +1,4 @@
 # core/payment/services/refund.py
-
 from __future__ import annotations
 
 from decimal import Decimal
@@ -44,6 +43,7 @@ class RefundService:
     - Refund domain transitions
     - Refund persistence
     - fully-refunded Payment synchronization
+    - Order lifecycle finalization through OrderStateMachine
 
     Non-responsibilities
     --------------------
@@ -52,8 +52,8 @@ class RefundService:
     - repository locking implementation
     - gateway HTTP/protocol implementation
     - provider-specific response parsing
-    - Order mutation
-    - event publication
+    - direct Order persistence outside OrderStateMachine
+    - event publication outside the canonical Order event path
     - raw gateway payload persistence
 
     Concurrency contract
@@ -136,7 +136,11 @@ class RefundService:
                     "Payment ownership changed while refund was starting."
                 )
 
-            OrderPolicy.can_refund(actor, locked_order)
+            # Authorization must always happen before idempotency resolution.
+            # Lifecycle eligibility must happen after idempotency resolution,
+            # because a completed Full Refund has a non-refundable Order.
+
+            OrderPolicy.authorize_refund_actor(actor)
 
             PaymentPolicy.validate_order_financial_snapshot(
                 payment,
@@ -157,6 +161,19 @@ class RefundService:
                 )
                 return existing
 
+            # Preserve the established exception contract for a fully
+            # refunded Payment, even when its Order is already REFUNDED.
+            if payment.is_refunded:
+                PaymentPolicy.can_refund(payment)
+
+            # Validate the commercial Order lifecycle before checking
+            # the remaining Payment eligibility rules.
+            #
+            # During an in-flight verification, the Order is still PENDING
+            # and must reject Refund initiation with PermissionDenied.
+            OrderPolicy.can_refund_order(locked_order)
+
+            # The Order is refundable, so now validate the Payment itself.
             PaymentPolicy.can_refund(payment)
 
             attempt = (
@@ -280,6 +297,7 @@ class RefundService:
             response_code=cls._gateway_response_code(result),
             gateway_message=cls._gateway_message(result),
             latency_ms=cls._gateway_latency(result),
+            actor=actor,
         )
 
 
@@ -304,7 +322,7 @@ class RefundService:
                 .select_for_update()
                 .get(pk=order_id)
             )
-            OrderPolicy.can_refund(actor, order)
+            OrderPolicy.authorize_refund_actor(actor)
 
             payment = PaymentRepository.get_for_update(payment_id)
             if payment.order_id != order.pk:
@@ -482,6 +500,7 @@ class RefundService:
         response_code: str,
         gateway_message: str,
         latency_ms: int | None,
+        actor: Any | None = None,
     ) -> Refund:
         with transaction.atomic():
             payment_reference = PaymentRepository.get(payment_id)
@@ -511,6 +530,12 @@ class RefundService:
                 cls._sync_payment_refund_state(
                     payment=payment,
                 )
+                if payment.is_fully_refunded:
+                    cls._sync_order_refund_state(
+                        order=locked_order,
+                        payment=payment,
+                        actor=actor,
+                    )
                 return refund
 
             if refund.is_failed:
@@ -540,6 +565,13 @@ class RefundService:
             cls._sync_payment_refund_state(
                 payment=payment,
             )
+
+            if payment.is_fully_refunded:
+                cls._sync_order_refund_state(
+                    order=locked_order,
+                    payment=payment,
+                    actor=actor,
+                )
 
             return refund
 
@@ -667,6 +699,50 @@ class RefundService:
             payment.is_refunded = False
 
         PaymentRepository.save_refund_state(payment)
+
+    @staticmethod
+    def _sync_order_refund_state(
+        *,
+        order: OrderModel,
+        payment,
+        actor: Any | None,
+    ) -> None:
+        """Finalize the Order lifecycle after the Payment is fully refunded.
+
+        This runs inside ``_finalize_success``'s transaction, after the
+        successful Refund aggregate has been persisted and the Payment's
+        repository-owned refund flag has been synchronized. The canonical
+        OrderStateMachine persists both the Order transition and its
+        OrderEvent/Outbox pair in the same database transaction.
+
+        A state that cannot legally transition to ``refunded`` is deliberately
+        not revived or rewritten. Raising rolls back this local finalization,
+        leaving the Refund unresolved for operational reconciliation.
+        """
+        from order.models import OrderStatusType
+        from order.services.state_machine import OrderStateMachine
+
+        if order.status == OrderStatusType.refunded:
+            return
+
+        if order.status not in {
+            OrderStatusType.paid,
+            OrderStatusType.returned,
+        }:
+            raise PaymentInvariantViolation(
+                "A fully refunded Payment cannot finalize an Order from its current lifecycle state."
+            )
+
+        OrderStateMachine.transition(
+            order=order,
+            to_status=OrderStatusType.refunded,
+            actor=actor,
+            payload={
+                "payment_id": payment.pk,
+                "refunded_amount": str(payment.amount),
+                "currency": payment.currency,
+            },
+        )
 
     # ============================
     # IDEMPOTENCY

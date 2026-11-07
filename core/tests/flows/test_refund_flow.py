@@ -41,10 +41,12 @@ class TestRefundFlow:
         refund.refresh_from_db()
         consumed_payment.refresh_from_db()
 
+        paid_order.refresh_from_db()
+
         assert refund.status == RefundStatus.SUCCESS
         assert consumed_payment.is_refunded is True
         assert consumed_payment.status == PaymentStatusType.SUCCESS
-        assert paid_order.status == OrderStatusType.paid
+        assert paid_order.status == OrderStatusType.refunded
 
     def test_partial_refund_does_not_mark_payment_fully_refunded(
         self,
