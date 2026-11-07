@@ -1,4 +1,4 @@
-# core/tests/payment/test_payment_domain.py
+# tests/payment/test_payment_domain.py
 from decimal import Decimal
 
 import pytest
@@ -10,6 +10,7 @@ from payment.enums import (
     PaymentGateway,
     PaymentStatusType,
 )
+from payment.repositories.payment_repository import PaymentRepository
 from tests.builders import PaymentScenarioBuilder ,OrderScenarioBuilder
 from tests.factories.payment import PaymentFactory
 
@@ -462,7 +463,7 @@ class TestPaymentDatabaseConstraints:
         payment = PaymentFactory()
 
         payment.succeed()
-        payment.save(update_fields=["status"])
+        PaymentRepository.save(payment, update_fields=["status"])
 
         second = PaymentFactory(order=payment.order)
 

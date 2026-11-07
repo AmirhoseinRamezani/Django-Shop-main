@@ -1,3 +1,4 @@
+# tests/flows/test_payment_retry_flow.py
 import pytest
 
 from payment.enums import PaymentAttemptStatus, PaymentGateway, PaymentStatusType
@@ -9,6 +10,7 @@ from payment.exceptions import (
 )
 from payment.models import PaymentAttempt
 from payment.providers.base import GatewayPaymentResult
+from payment.repositories.payment_repository import PaymentRepository
 from payment.services.retry import RetryPaymentService
 
 from tests.factories.payment import PaymentAttemptFactory, PaymentFactory
@@ -187,7 +189,7 @@ def test_transport_failure_leaves_new_attempt_pending(payment, mocker):
 @pytest.mark.parametrize("status", [PaymentStatusType.SUCCESS, PaymentStatusType.FAILED])
 def test_terminal_payment_cannot_retry(payment, status):
     payment.status = status
-    payment.save(update_fields=["status"])
+    PaymentRepository.save(payment, update_fields=["status"])
 
     with pytest.raises(Exception):
         RetryPaymentService.retry(

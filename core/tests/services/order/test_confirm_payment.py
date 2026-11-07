@@ -21,6 +21,7 @@ from payment.models import PaymentAttempt
 from payment.repositories.payment_attempt_repository import (
     PaymentAttemptRepository,
 )
+from payment.repositories.payment_repository import PaymentRepository
 from tests.factories.payment import PaymentAttemptFactory
 
 
@@ -571,7 +572,7 @@ class TestIdempotency:
         )
 
         success_payment.is_consumed = True
-        success_payment.save(update_fields=("is_consumed",))
+        PaymentRepository.save(success_payment, update_fields=("is_consumed",))
 
         transition = mocker.patch(
             "order.services.confirm_payment.OrderStateMachine.transition",
@@ -595,7 +596,7 @@ class TestIdempotency:
     ):
         success_payment.attempts.all().delete()
         success_payment.is_consumed = True
-        success_payment.save(update_fields=("is_consumed",))
+        PaymentRepository.save(success_payment, update_fields=("is_consumed",))
 
         with pytest.raises(
             ValidationError,

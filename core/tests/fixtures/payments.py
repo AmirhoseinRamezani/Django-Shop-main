@@ -7,7 +7,7 @@ from payment.enums import (
     PaymentAttemptStatus,
     PaymentStatusType,
 )
-from payment.models import PaymentModel
+from payment.repositories.payment_repository import PaymentRepository
 from tests.factories.payment import (
     PaymentAttemptFactory,
     PaymentFactory,
@@ -64,10 +64,9 @@ def consumed_payment(
 ):
     success_payment.is_consumed = True
 
-    success_payment.save(
-        update_fields=[
-            "is_consumed",
-        ],
+    PaymentRepository.save(
+        success_payment,
+        update_fields=["is_consumed"],
     )
 
     return success_payment
