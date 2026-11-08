@@ -64,6 +64,10 @@ class RefundRepository(BaseRepository[Refund]):
 
     model: ClassVar[type[Refund]] = Refund
 
+    # Distinguishes the amount-based API from the administrative
+    # remaining-balance API without adding a database column.
+    REQUEST_OPERATION_META_KEY: ClassVar[str] = "_refund_operation"
+
     # --------------------------------------------
     # Status groups
     # --------------------------------------------
@@ -879,7 +883,7 @@ class RefundRepository(BaseRepository[Refund]):
         persisted = (
             cls.model.objects
             .filter(pk=refund.pk)
-            .values(*persisted_fields)
+            .values(*persisted_fields, "meta")
             .first()
         )
         if persisted is None:
@@ -887,6 +891,15 @@ class RefundRepository(BaseRepository[Refund]):
                 "Refund disappeared during persistence.",
                 details={"refund_id": refund.pk},
             )
+
+        if "meta" in fields:
+            old_meta = persisted.get("meta") or {}
+            new_meta = refund.meta or {}
+            operation_key = cls.REQUEST_OPERATION_META_KEY
+            if old_meta.get(operation_key) != new_meta.get(operation_key):
+                raise ValueError(
+                    "Refund operation identity cannot be modified after creation."
+                )
 
         current_status = persisted["status"]
         target_status = refund.status

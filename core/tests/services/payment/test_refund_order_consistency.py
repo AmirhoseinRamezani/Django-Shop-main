@@ -74,7 +74,7 @@ def refunded_order_outbox_events(order_id: int):
 
 
 class TestRefundOrderConsistency:
-    
+
     def test_refund_order_rejects_partial_refund_key_reuse(
         self,
         admin_user,
@@ -93,7 +93,14 @@ class TestRefundOrderConsistency:
                 actor=admin_user,
             )
 
-            with pytest.raises(PaymentRefundAmountInvalidError):
+            # The partial refund was stored with operation_type="amount".
+            # refund_order requests operation_type="full" with the same
+            # idempotency key, so the operation-type guard fires before
+            # any amount comparison.
+            with pytest.raises(
+                PaymentInvariantViolation,
+                match="different operation type",
+            ):
                 RefundService.refund_order(
                     order_id=payment.order_id,
                     payment_id=payment.pk,

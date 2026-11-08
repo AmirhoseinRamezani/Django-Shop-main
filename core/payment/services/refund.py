@@ -109,6 +109,7 @@ class RefundService:
         ip_address: str | None = None,
         user_agent: str = "",
         meta: dict[str, Any] | None = None,
+        _operation_type: str = "amount",
     ) -> Refund:
         """
         Reserve one refund request durably, execute the gateway outside the
@@ -121,6 +122,19 @@ class RefundService:
 
         normalized_amount = cls._normalize_amount(amount)
         normalized_key = cls._normalize_idempotency_key(idempotency_key)
+
+        if _operation_type not in {"amount", "full"}:
+            raise PaymentInvariantViolation(
+                "Unsupported internal refund operation type."
+            )
+
+        request_meta = dict(meta or {})
+        operation_meta_key = RefundRepository.REQUEST_OPERATION_META_KEY
+        if operation_meta_key in request_meta:
+            raise PaymentInvariantViolation(
+                "Refund metadata contains a reserved operation identity."
+            )
+        request_meta[operation_meta_key] = _operation_type
 
         with transaction.atomic():
             payment_reference = PaymentRepository.get(payment_id)
@@ -158,6 +172,7 @@ class RefundService:
                     refund=existing,
                     payment=payment,
                     amount=normalized_amount,
+                    operation_type=_operation_type,
                 )
                 return existing
 
@@ -216,7 +231,7 @@ class RefundService:
                 status=RefundStatus.PENDING,
                 ip_address=ip_address,
                 user_agent=user_agent,
-                meta=meta or {},
+                meta=request_meta,
             )
 
             refund.validate_against_payment(
@@ -356,6 +371,7 @@ class RefundService:
                     refund=existing,
                     payment=payment,
                     amount=requested_full_amount,
+                    operation_type="full",
                 )
                 return existing
 
@@ -374,6 +390,7 @@ class RefundService:
             idempotency_key=normalized_key,
             reason="customer_request",
             actor=actor,
+            _operation_type="full",
         )
 
     @classmethod
@@ -769,6 +786,7 @@ class RefundService:
         refund: Refund,
         payment,
         amount: Decimal,
+        operation_type: str = "amount",
     ) -> None:
         """
         Validate reuse of an existing refund idempotency key.
@@ -784,6 +802,15 @@ class RefundService:
         if refund.payment_id != payment.pk:
             raise PaymentInvariantViolation(
                 "Refund idempotency key belongs to another Payment.",
+            )
+        
+        stored_operation_type = (refund.meta or {}).get(
+            RefundRepository.REQUEST_OPERATION_META_KEY,
+            "amount",
+        )
+        if stored_operation_type != operation_type:
+            raise PaymentInvariantViolation(
+                "Refund idempotency key was already used for a different operation type."
             )
 
         if refund.amount != amount:

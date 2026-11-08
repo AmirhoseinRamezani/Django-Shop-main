@@ -183,6 +183,45 @@ class TestRefundService:
                 actor=admin_user,
             )
 
+    def test_same_idempotency_key_cannot_be_reused_for_another_payment(
+        self,
+        admin_user,
+    ):
+        payment_a = refundable_payment()
+        payment_b = refundable_payment()
+
+        with patch(
+            "payment.services.refund.GatewayService.refund",
+            return_value=refund_result(reference="REFUND-CROSS-PAYMENT"),
+        ) as gateway:
+            original = RefundService.refund(
+                payment_id=payment_a.pk,
+                amount=Decimal("300000"),
+                idempotency_key="refund-cross-payment-key",
+                reason="customer_request",
+                actor=admin_user,
+            )
+
+            with pytest.raises(PaymentInvariantViolation):
+                RefundService.refund(
+                    payment_id=payment_b.pk,
+                    amount=Decimal("300000"),
+                    idempotency_key="refund-cross-payment-key",
+                    reason="customer_request",
+                    actor=admin_user,
+                )
+
+        assert Refund.objects.filter(
+            idempotency_key="refund-cross-payment-key",
+        ).count() == 1
+        assert Refund.objects.get(pk=original.pk).payment_id == payment_a.pk
+        assert Refund.objects.filter(payment=payment_b).count() == 0
+        payment_a.refresh_from_db()
+        payment_b.refresh_from_db()
+        assert payment_a.is_refunded is False
+        assert payment_b.is_refunded is False
+        gateway.assert_called_once()
+
     def test_gateway_transport_error_keeps_refund_pending(self, admin_user):
         payment = refundable_payment()
 
@@ -535,6 +574,51 @@ class TestRefundService:
                 )
 
         inquiry_gateway.assert_called_once()
+        refund_gateway.assert_not_called()
+
+    def test_duplicate_provider_inquiry_success_is_idempotent(self, admin_user):
+        payment = refundable_payment()
+        pending = RefundFactory(
+            payment=payment,
+            amount=Decimal("300000"),
+            idempotency_key="refund-duplicate-inquiry-success",
+            status=RefundStatus.PENDING,
+        )
+        inquiry = GatewayRefundInquiryResult(
+            success=True,
+            status=RefundStatus.SUCCESS,
+            gateway=PaymentGateway.ZARINPAL,
+            gateway_reference="DUPLICATE-INQUIRY-REF",
+            gateway_transaction_id="DUPLICATE-INQUIRY-TX",
+            response_code="100",
+            message="Refund completed",
+            amount=pending.amount,
+            currency=payment.currency,
+        )
+
+        with patch(
+            "payment.services.refund.GatewayService.inquire_refund",
+            return_value=inquiry,
+        ) as inquiry_gateway:
+            with patch(
+                "payment.services.refund.GatewayService.refund",
+            ) as refund_gateway:
+                first = RefundService.reconcile_pending_refund(
+                    refund_id=pending.pk,
+                )
+                second = RefundService.reconcile_pending_refund(
+                    refund_id=pending.pk,
+                )
+
+        payment.refresh_from_db()
+        first.refresh_from_db()
+        second.refresh_from_db()
+
+        assert first.pk == second.pk == pending.pk
+        assert second.status == RefundStatus.SUCCESS
+        assert RefundRepository.successful_amount_for_payment(payment.pk) == pending.amount
+        assert payment.is_refunded is False
+        assert inquiry_gateway.call_count == 1
         refund_gateway.assert_not_called()
 
     @pytest.mark.parametrize(
