@@ -7,7 +7,6 @@ from payment.enums import PaymentAttemptStatus, PaymentGateway, PaymentStatusTyp
 from payment.exceptions import (
     PaymentCreationForbiddenError,
     PaymentGatewayError,
-    PaymentInvariantViolation,
 )
 from payment.models import PaymentAttempt, PaymentModel
 from payment.providers.base import GatewayPaymentResult
@@ -217,6 +216,25 @@ class TestStartPayment:
                 callback_url=self.CALLBACK_URL,
             )
 
+    def test_zero_payable_order_is_rejected_before_payment_creation(self):
+        order = OrderFactory(
+            payable=True,
+            total_price=Decimal("0"),
+            subtotal_price=Decimal("0"),
+            discount_amount=Decimal("0"),
+            shipping_price=Decimal("0"),
+            tax_amount=Decimal("0"),
+            payable_price=Decimal("0"),
+        )
+
+        with pytest.raises(PaymentCreationForbiddenError):
+            PaymentService.start_payment(
+                order,
+                callback_url=self.CALLBACK_URL,
+            )
+
+        assert not PaymentModel.objects.filter(order=order).exists()
+
     def test_cancelled_order_rejected(self):
         order = OrderFactory(cancelled=True)
 
@@ -226,20 +244,22 @@ class TestStartPayment:
                 callback_url=self.CALLBACK_URL,
             )
 
-    @patch("payment.services.gateway_service.GatewayService.current_gateway", return_value=PaymentGateway.ZARINPAL)
-    def test_existing_payment_amount_mismatch_is_rejected_before_gateway(self, mock_current_gateway, payment_factory):
-        order = OrderFactory(payable=True)
-        payment_factory(
-            order=order,
-            amount=order.payable_price + 1,
-            status=PaymentStatusType.PENDING,
-        )
+    def test_database_rejects_payment_amount_that_does_not_match_order_snapshot(self):
+        from django.db import IntegrityError, transaction
 
-        with pytest.raises(PaymentInvariantViolation, match="financial snapshot"):
-            PaymentService.start_payment(
-                order,
-                callback_url=self.CALLBACK_URL,
+        order = OrderFactory(payable=True)
+
+        with pytest.raises(IntegrityError), transaction.atomic():
+            PaymentModel.objects.create(
+                order=order,
+                amount=order.payable_price + 1,
+                currency="IRR",
+                gateway=PaymentGateway.ZARINPAL,
+                status=PaymentStatusType.PENDING,
             )
+
+        assert not PaymentModel.objects.filter(order=order).exists()
+
 
     def test_missing_callback_url_does_not_create_payment_or_attempt(self):
         order = OrderFactory(payable=True)

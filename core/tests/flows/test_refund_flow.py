@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 from django.core.exceptions import PermissionDenied
+from django.db import IntegrityError, transaction
 
 from order.models import OrderStatusType
 from payment.enums import (
@@ -607,26 +608,21 @@ class TestRefundAuthorization:
                 idempotency_key="refund-flow-wrong-order",
             )
 
-    def test_refund_rejects_payment_order_amount_mismatch(
+    def test_order_financial_snapshot_cannot_be_rewritten_before_refund(
         self,
         paid_order,
         consumed_payment,
-        admin_user,
     ):
-        paid_order.payable_price = (
-            paid_order.payable_price + Decimal("1")
-        )
-        paid_order.save(update_fields=("payable_price",))
-
-        with pytest.raises(
-            PaymentInvariantViolation,
-        ):
-            RefundService.refund_order(
-                order_id=paid_order.pk,
-                payment_id=consumed_payment.pk,
-                actor=admin_user,
-                idempotency_key="refund-flow-snapshot-mismatch",
+        with pytest.raises(IntegrityError), transaction.atomic():
+            type(paid_order).objects.filter(pk=paid_order.pk).update(
+                total_price=paid_order.total_price + Decimal("1"),
+                payable_price=paid_order.payable_price + Decimal("1"),
+                subtotal_price=paid_order.subtotal_price + Decimal("1"),
             )
+
+        paid_order.refresh_from_db()
+        consumed_payment.refresh_from_db()
+        assert paid_order.payable_price == consumed_payment.amount
 
 
 # ==========================================================

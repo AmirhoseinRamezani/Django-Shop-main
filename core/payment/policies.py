@@ -62,6 +62,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from order.models import OrderStatusType
 from payment.enums import (
     PaymentAttemptStatus,
@@ -167,6 +169,11 @@ class PaymentPolicy:
         if order.is_expired():
             raise PaymentCreationForbiddenError(
                 "Payment is not allowed for an expired order."
+            )
+        
+        if Decimal(str(order.final_price)) <= Decimal("0"):
+            raise PaymentCreationForbiddenError(
+                "Payment requires a positive Order payable amount."
             )
 
         return True
@@ -379,7 +386,6 @@ class PaymentPolicy:
     @staticmethod
     def validate_order_financial_snapshot(payment, order) -> bool:
         """Ensure Payment matches the trusted immutable Order price snapshot."""
-        from decimal import Decimal
         from payment.enums import Currency
         from payment.exceptions import PaymentInvariantViolation
 

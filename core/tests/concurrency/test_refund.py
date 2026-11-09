@@ -19,6 +19,8 @@ def test_concurrent_refunds_never_over_refund_one_payment(admin_user):
     payment = PaymentFactory(
         order__status=OrderStatusType.paid,
         order__paid_date=timezone.now(),
+        order__total_price=Decimal("1000000"),
+        order__subtotal_price=Decimal("1000000"),
         order__payable_price=Decimal("1000000"),
         amount=Decimal("1000000"),
         status=PaymentStatusType.SUCCESS,
@@ -87,6 +89,8 @@ def test_concurrent_same_idempotency_key_creates_one_refund_and_one_gateway_call
     payment = PaymentFactory(
         order__status=OrderStatusType.paid,
         order__paid_date=timezone.now(),
+        order__total_price=Decimal("1000000"),
+        order__subtotal_price=Decimal("1000000"),
         order__payable_price=Decimal("1000000"),
         amount=Decimal("1000000"),
         status=PaymentStatusType.SUCCESS,

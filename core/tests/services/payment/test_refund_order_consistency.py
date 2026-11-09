@@ -27,6 +27,8 @@ def make_refundable_payment(*, amount=PAYMENT_AMOUNT):
     payment = PaymentFactory(
         order__status=OrderStatusType.paid,
         order__paid_date=timezone.now(),
+        order__total_price=amount,
+        order__subtotal_price=amount,
         order__payable_price=amount,
         amount=amount,
         status=PaymentStatusType.SUCCESS,
@@ -176,6 +178,7 @@ class TestRefundOrderConsistency:
     ):
         payment = make_refundable_payment()
         order = payment.order
+        original_payment_amount = payment.amount
 
         with patch(
             "payment.services.refund.GatewayService.refund",
@@ -199,6 +202,7 @@ class TestRefundOrderConsistency:
 
         assert gateway.call_count == 1
         assert refund.status == RefundStatus.SUCCESS
+        assert payment.amount == original_payment_amount
         assert successful_total == payment.amount
         assert payment.is_refunded is True
         assert payment.is_fully_refunded is True
@@ -220,6 +224,7 @@ class TestRefundOrderConsistency:
     ):
         payment = make_refundable_payment()
         order = payment.order
+        original_payment_amount = payment.amount
 
         with patch(
             "payment.services.refund.GatewayService.refund",
@@ -272,6 +277,7 @@ class TestRefundOrderConsistency:
         assert gateway.call_count == 2
         assert first.status == RefundStatus.SUCCESS
         assert second.status == RefundStatus.SUCCESS
+        assert payment.amount == original_payment_amount
         assert successful_total == payment.amount
         assert payment.amount - successful_total == Decimal("0")
         assert payment.is_refunded is True

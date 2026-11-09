@@ -29,6 +29,8 @@ def _payment():
     payment = PaymentFactory(
         order__status=OrderStatusType.paid,
         order__paid_date=timezone.now(),
+        order__total_price=Decimal("1000000"),
+        order__subtotal_price=Decimal("1000000"),
         order__payable_price=Decimal("1000000"),
         amount=Decimal("1000000"),
         status=PaymentStatusType.SUCCESS,

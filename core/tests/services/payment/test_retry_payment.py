@@ -1,10 +1,9 @@
-from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
 
-from payment.exceptions import PaymentInvariantViolation
-from payment.models import PaymentAttempt
+from payment.enums import PaymentGateway
+from payment.providers.base import GatewayPaymentResult
 from payment.services.retry import RetryPaymentService
 from tests.factories.order import OrderFactory
 from tests.factories.payment import PaymentAttemptFactory, PaymentFactory
@@ -16,29 +15,42 @@ pytestmark = [
 ]
 
 
-def test_retry_rejects_changed_order_financial_snapshot_before_gateway_io():
+def test_retry_uses_immutable_payment_amount_as_gateway_amount():
     order = OrderFactory()
     payment = PaymentFactory(order=order)
+    original_amount = payment.amount
     PaymentAttemptFactory(
         payment=payment,
         attempt_number=1,
         failed=True,
     )
 
-    order.payable_price = Decimal("101000")
-    order.save(update_fields=("payable_price",))
+    result = GatewayPaymentResult(
+        success=True,
+        gateway=PaymentGateway.ZARINPAL,
+        authority="AUTH-RETRY-SNAPSHOT",
+    )
 
-    with patch(
-        "payment.services.retry.GatewayService.initiate_payment"
-    ) as initiate:
-        with pytest.raises(
-            PaymentInvariantViolation,
-            match="Payment amount does not match the Order financial snapshot",
-        ):
-            RetryPaymentService.retry(
-                order=order,
-                callback_url="https://shop.test/payment/verify/",
-            )
+    with (
+        patch(
+            "payment.services.retry.GatewayService.initiate_payment",
+            return_value=result,
+        ) as initiate,
+        patch(
+            "payment.services.retry.GatewayService.payment_url",
+            return_value="https://gateway.test/pay/AUTH-RETRY-SNAPSHOT",
+        ),
+    ):
+        url = RetryPaymentService.retry(
+            order=order,
+            callback_url="https://shop.test/payment/verify/",
+        )
 
-    initiate.assert_not_called()
-    assert PaymentAttempt.objects.filter(payment=payment).count() == 1
+    assert url == "https://gateway.test/pay/AUTH-RETRY-SNAPSHOT"
+    assert initiate.call_args.kwargs["amount"] == original_amount
+    assert initiate.call_args.kwargs["currency"] == "IRR"
+
+    order.refresh_from_db()
+    payment.refresh_from_db()
+    assert order.payable_price == original_amount
+    assert payment.amount == original_amount
