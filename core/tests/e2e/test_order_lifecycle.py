@@ -1,5 +1,6 @@
 # tests/e2e/test_order_lifecycle.py
 import pytest
+from django.core.exceptions import ValidationError
 
 from order.models import OrderStatusType
 
@@ -54,15 +55,15 @@ class TestLifecycle:
             to_status=OrderStatusType.returned,
         )
 
-        OrderStateMachine.transition(
-            order=processing_order,
-            to_status=OrderStatusType.refunded,
-        )
+        with pytest.raises(
+            ValidationError,
+            match="RefundService finalization",
+        ):
+            OrderStateMachine.transition(
+                order=processing_order,
+                to_status=OrderStatusType.refunded,
+            )
 
         processing_order.refresh_from_db()
 
-        assert (
-            processing_order.status
-            ==
-            OrderStatusType.refunded
-        )
+        assert processing_order.status == OrderStatusType.returned

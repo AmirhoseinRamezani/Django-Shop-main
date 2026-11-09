@@ -4,7 +4,10 @@ import pytest
 from django.core.exceptions import ValidationError
 
 from order.models import OrderStatusType
-from order.services.state_machine import OrderStateMachine
+from order.services.state_machine import (
+    OrderStateMachine,
+    _PAYMENT_FINALIZATION_TOKEN,
+)
 from order.events.order_event import OrderEventType
 
 pytestmark = pytest.mark.django_db
@@ -192,27 +195,77 @@ class TestOrderStateMachine:
     # paid -> refunded
     # ---------------------------------------------------------
 
-    def test_paid_to_refunded(
+    def test_paid_to_refunded_is_forbidden_without_refund_capability(
         self,
         paid_order,
-        mocker,
     ):
-        record = mocker.patch(
-            "order.services.state_machine.record_order_event"
-        )
+        with pytest.raises(
+            ValidationError,
+            match="RefundService finalization",
+        ):
+            OrderStateMachine.transition(
+                order=paid_order,
+                to_status=OrderStatusType.refunded,
+            )
+        paid_order.refresh_from_db()
+        assert paid_order.status == OrderStatusType.paid
 
-        order = OrderStateMachine.transition(
-            order=paid_order,
-            to_status=OrderStatusType.refunded,
-        )
+    @pytest.mark.parametrize(
+        "capability",
+        [None, True, False, "refund", _PAYMENT_FINALIZATION_TOKEN],
+    )
+    def test_refund_transition_rejects_missing_or_unrelated_capability(
+        self,
+        paid_order,
+        capability,
+    ):
+        with pytest.raises(
+            ValidationError,
+            match="RefundService finalization",
+        ):
+            OrderStateMachine.transition(
+                order=paid_order,
+                to_status=OrderStatusType.refunded,
+                _refund_authorization=capability,
+            )
+        paid_order.refresh_from_db()
+        assert paid_order.status == OrderStatusType.paid
 
-        order.refresh_from_db()
+    def test_refund_capability_does_not_bypass_transition_graph(
+        self,
+        processing_order,
+    ):
+        from order.services.state_machine import _REFUND_FINALIZATION_TOKEN
 
-        assert order.status == OrderStatusType.refunded
+        with pytest.raises(ValidationError, match="Illegal transition"):
+            OrderStateMachine.transition(
+                order=processing_order,
+                to_status=OrderStatusType.refunded,
+                _refund_authorization=_REFUND_FINALIZATION_TOKEN,
+            )
 
-        args = record.call_args.kwargs
+        processing_order.refresh_from_db()
+        assert processing_order.status == OrderStatusType.processing
 
-        assert args["type"] == OrderEventType.REFUNDED
+    def test_refund_capability_cannot_authorize_another_transition(
+        self,
+        paid_order,
+    ):
+        from order.services.state_machine import _REFUND_FINALIZATION_TOKEN
+
+        with pytest.raises(
+            ValidationError,
+            match="only authorizes Order -> REFUNDED",
+        ):
+            OrderStateMachine.transition(
+                order=paid_order,
+                to_status=OrderStatusType.processing,
+                _refund_authorization=_REFUND_FINALIZATION_TOKEN,
+            )
+
+        paid_order.refresh_from_db()
+        assert paid_order.status == OrderStatusType.paid
+
 
     @pytest.mark.parametrize(
         ("status", "expected_event"),
@@ -336,30 +389,24 @@ class TestOrderStateMachine:
     # payload forwarded
     # ---------------------------------------------------------
 
-    def test_payload_forwarded(
+    def test_refund_payload_cannot_bypass_finalization_capability(
         self,
         paid_order,
-        mocker,
     ):
-        record = mocker.patch(
-            "order.services.state_machine.record_order_event"
-        )
+        
+        with pytest.raises(ValidationError, match="RefundService finalization"):
+            OrderStateMachine.transition(
+                order=paid_order,
+                to_status=OrderStatusType.refunded,
+                payload={
+                    "payment_id": 12,
+                    "gateway": "zarinpal",
+                },
+            )
 
-        payload = {
-            "payment_id": 12,
-            "gateway": "zarinpal",
-        }
-
-        OrderStateMachine.transition(
-            order=paid_order,
-            to_status=OrderStatusType.refunded,
-            payload=payload,
-        )
-
-        kwargs = record.call_args.kwargs
-
-        assert kwargs["payload"] == payload
-
+        paid_order.refresh_from_db()
+        assert paid_order.status == OrderStatusType.paid
+ 
     # ---------------------------------------------------------
     # actor forwarded
     # ---------------------------------------------------------

@@ -12,10 +12,10 @@ from order.services.inventory import InventoryService
 from order.services.coupon import CouponService
 
 
-# Capability token: only the canonical payment finalizer should authorize
-# the pending -> paid transition. This is an application-layer trust boundary.
+# Opaque application-layer capabilities for the two privileged transitions.
+# They are intentionally separate and are never accepted from request data.
 _PAYMENT_FINALIZATION_TOKEN = object()
-
+_REFUND_FINALIZATION_TOKEN = object()
 
 class OrderStateMachine:
 
@@ -62,6 +62,7 @@ class OrderStateMachine:
         actor=None,
         payload=None,
         _authorization=None,
+        _refund_authorization=None,
     ):
         """
         Atomically transition an Order between valid states.
@@ -89,6 +90,25 @@ class OrderStateMachine:
         ):
             raise ValidationError(
                 "Orders can only be marked paid by confirm_order_payment()."
+            )
+
+        # Refund finalization has a separate, narrowly-scoped capability.
+        # It cannot authorize any other transition and cannot be substituted
+        # by the Payment finalization capability or a public value.
+        if (
+            _refund_authorization is not None
+            and to_status != OrderStatusType.refunded
+        ):
+            raise ValidationError(
+                "Refund finalization capability only authorizes Order -> REFUNDED."
+            )
+
+        if (
+            to_status == OrderStatusType.refunded
+            and _refund_authorization is not _REFUND_FINALIZATION_TOKEN
+        ):
+            raise ValidationError(
+                "Orders can only be marked refunded by RefundService finalization."
             )
 
         if to_status not in cls.TRANSITIONS.get(

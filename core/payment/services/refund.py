@@ -752,7 +752,10 @@ class RefundService:
         leaving the Refund unresolved for operational reconciliation.
         """
         from order.models import OrderStatusType
-        from order.services.state_machine import OrderStateMachine
+        from order.services.state_machine import (
+            OrderStateMachine,
+            _REFUND_FINALIZATION_TOKEN,
+        )
 
         if order.status == OrderStatusType.refunded:
             return
@@ -769,6 +772,7 @@ class RefundService:
             order=order,
             to_status=OrderStatusType.refunded,
             actor=actor,
+            _refund_authorization=_REFUND_FINALIZATION_TOKEN,
             payload={
                 "payment_id": payment.pk,
                 "refunded_amount": str(payment.amount),
