@@ -20,7 +20,20 @@ class TestRefundRepository:
         assert list(RefundRepository.for_payment(payment.pk)) == [refund]
 
     def test_status_queries_and_successful_amount(self):
-        payment = PaymentFactory(success=True, consumed=True, amount=Decimal("1000000"))
+        from tests.factories.order import OrderFactory
+        
+        amount = Decimal("1000000")
+        order = OrderFactory(
+            total_price=amount,
+            subtotal_price=amount,
+            payable_price=amount,
+        )
+        payment = PaymentFactory(
+            order=order,
+            success=True,
+            consumed=True,
+            amount=amount,
+        )
         successful = RefundFactory(
             payment=payment,
             amount=Decimal("400000"),
@@ -47,10 +60,19 @@ class TestRefundRepository:
 
 
     def test_reserved_amount_includes_pending_and_successful_refunds(self):
+        from tests.factories.order import OrderFactory
+
+        amount = Decimal("1000000")
+        order = OrderFactory(
+            total_price=amount,
+            subtotal_price=amount,
+            payable_price=amount,
+        )
         payment = PaymentFactory(
+            order=order,
             success=True,
             consumed=True,
-            amount=Decimal("1000000"),
+            amount=amount,
         )
         RefundFactory(
             payment=payment,

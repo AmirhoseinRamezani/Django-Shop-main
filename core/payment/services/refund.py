@@ -762,6 +762,7 @@ class RefundService:
 
         if order.status not in {
             OrderStatusType.paid,
+            OrderStatusType.processing,
             OrderStatusType.returned,
         }:
             raise PaymentInvariantViolation(

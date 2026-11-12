@@ -231,16 +231,40 @@ class TestOrderStateMachine:
         paid_order.refresh_from_db()
         assert paid_order.status == OrderStatusType.paid
 
-    def test_refund_capability_does_not_bypass_transition_graph(
+    def test_processing_to_refunded_requires_dedicated_capability(
         self,
         processing_order,
     ):
         from order.services.state_machine import _REFUND_FINALIZATION_TOKEN
 
-        with pytest.raises(ValidationError, match="Illegal transition"):
+        with pytest.raises(ValidationError, match="RefundService finalization"):
             OrderStateMachine.transition(
                 order=processing_order,
                 to_status=OrderStatusType.refunded,
+            )
+
+        refunded = OrderStateMachine.transition(
+            order=processing_order,
+            to_status=OrderStatusType.refunded,
+            _refund_authorization=_REFUND_FINALIZATION_TOKEN,
+        )
+
+        refunded.refresh_from_db()
+        assert refunded.status == OrderStatusType.refunded
+
+    def test_refund_capability_does_not_authorize_processing_cancellation(
+        self,
+        processing_order,
+    ):
+        from order.services.state_machine import _REFUND_FINALIZATION_TOKEN
+
+        with pytest.raises(
+            ValidationError,
+            match="only authorizes Order -> REFUNDED",
+        ):
+            OrderStateMachine.transition(
+                order=processing_order,
+                to_status=OrderStatusType.cancelled,
                 _refund_authorization=_REFUND_FINALIZATION_TOKEN,
             )
 

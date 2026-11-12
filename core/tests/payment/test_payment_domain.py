@@ -346,7 +346,7 @@ class TestPaymentFinancialSnapshot:
     """
 
     def test_matching_amount_and_currency_are_valid(self):
-        payment = PaymentFactory(
+        payment = PaymentFactory.build(
             amount=Decimal("1000000"),
             currency=Currency.IRR,
         )
@@ -357,7 +357,7 @@ class TestPaymentFinancialSnapshot:
         )
 
     def test_different_amount_is_rejected(self):
-        payment = PaymentFactory(
+        payment = PaymentFactory.build(
             amount=Decimal("1000000"),
             currency=Currency.IRR,
         )
@@ -369,7 +369,7 @@ class TestPaymentFinancialSnapshot:
             )
 
     def test_different_currency_is_rejected(self):
-        payment = PaymentFactory(
+        payment = PaymentFactory.build(
             amount=Decimal("1000000"),
             currency=Currency.IRR,
         )

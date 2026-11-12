@@ -560,24 +560,37 @@ class TestRefundAuthorization:
 
     def test_refund_order_requires_refundable_order_lifecycle(
         self,
-        processing_order,
+        paid_order,
         consumed_payment,
         admin_user,
     ):
-        # Reassign the consumed Payment to the processing Order so the
-        # refundability of the Order lifecycle — not ownership — is what
-        # the service validates.
-        consumed_payment.order = processing_order
-        PaymentRepository.save(
-            consumed_payment,
-            update_fields=("status",),
+        from order.services.state_machine import OrderStateMachine
+
+        # Move the owning Order past the refundable lifecycle states
+        # (paid -> processing -> shipped). Both paid and processing are
+        # refundable after the order-refund-inventory boundary patch, so
+        # shipped is the first lifecycle state that must reject refund
+        # finalization.
+        OrderStateMachine.transition(
+            order=paid_order,
+            to_status=OrderStatusType.processing,
         )
+        OrderStateMachine.transition(
+            order=paid_order,
+            to_status=OrderStatusType.shipped,
+        )
+
+        paid_order.refresh_from_db()
+        consumed_payment.refresh_from_db()
+        assert paid_order.status == OrderStatusType.shipped
+        assert consumed_payment.order_id == paid_order.pk
 
         with pytest.raises(
             PermissionDenied,
+            match="not refundable",
         ):
             RefundService.refund_order(
-                order_id=processing_order.pk,
+                order_id=paid_order.pk,
                 payment_id=consumed_payment.pk,
                 actor=admin_user,
                 idempotency_key="refund-flow-not-refundable",

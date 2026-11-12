@@ -182,25 +182,27 @@ class TestCancelFlow:
 
         restore.assert_called_once()
 
-    def test_only_pending_restores_inventory(
+    def test_processing_order_cannot_be_cancelled_or_release_inventory(
         self,
         processing_order,
         mocker,
     ):
+        from django.core.exceptions import ValidationError
 
         restore = mocker.patch(
             "order.services.state_machine.InventoryService.restore"
         )
 
-        OrderStateMachine.transition(
-            order=processing_order,
-            to_status=OrderStatusType.cancelled,
-        )
+        with pytest.raises(ValidationError, match="Illegal transition"):
+            OrderStateMachine.transition(
+                order=processing_order,
+                to_status=OrderStatusType.cancelled,
+            )
 
         processing_order.refresh_from_db()
 
-        assert processing_order.status == OrderStatusType.cancelled
-        restore.assert_called_once()
+        assert processing_order.status == OrderStatusType.processing
+        restore.assert_not_called()
 
     def test_cancel_is_atomic(
         self,

@@ -423,6 +423,7 @@ class OrderModel(models.Model):
     def can_refund(self) -> bool:
         return self.status in {
             OrderStatusType.paid,
+            OrderStatusType.processing,
             OrderStatusType.returned,
         }
 

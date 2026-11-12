@@ -7,7 +7,13 @@ from django.utils import timezone
 
 from events.models import OutboxEvent, OutboxStatus
 from order.events.order_event import OrderEvent, OrderEventType
-from order.models import OrderStatusType
+from order.models import (
+    InventoryReservation,
+    InventoryReservationStatus,
+    OrderStatusType,
+)
+from order.services.inventory import InventoryService
+from order.services.state_machine import OrderStateMachine
 from payment.enums import PaymentGateway, PaymentStatusType, RefundStatus
 from payment.exceptions import (
     PaymentInvariantViolation,
@@ -15,7 +21,9 @@ from payment.exceptions import (
 )
 from payment.providers.base import GatewayRefundResult
 from payment.services.refund import RefundService
+from tests.factories.order import OrderItemFactory
 from tests.factories.payment import PaymentAttemptFactory, PaymentFactory
+from tests.factories.shop import ProductFactory
 
 pytestmark = pytest.mark.django_db
 
@@ -359,6 +367,12 @@ class TestRefundOrderConsistency:
                 to_status=OrderStatusType.processing,
                 actor=admin_user,
             )
+            OrderStateMachine.transition(
+                order=order,
+                to_status=OrderStatusType.shipped,
+                actor=admin_user,
+            )
+
             return successful_gateway_result("ORDER-ADVANCED-1")
 
         with patch(
@@ -385,6 +399,84 @@ class TestRefundOrderConsistency:
 
         assert refund.status == RefundStatus.PENDING
         assert payment.is_refunded is False
-        assert order.status == OrderStatusType.processing
+        assert order.status == OrderStatusType.shipped
         assert refunded_order_events(order.pk).count() == 0
         assert refunded_order_outbox_events(order.pk).count() == 0
+
+
+    def test_processing_order_remains_processing_until_cumulative_full_refund(
+        self,
+        admin_user,
+    ):
+        payment = make_refundable_payment()
+        order = payment.order
+        OrderStateMachine.transition(
+            order=order,
+            to_status=OrderStatusType.processing,
+        )
+
+        product = ProductFactory(stock=10)
+        item = OrderItemFactory(
+            order=order,
+            product=product,
+            quantity=2,
+        )
+        InventoryService.reserve(order)
+        InventoryService.consume(order)
+        product.refresh_from_db()
+        stock_after_consumption = product.stock
+        reservation = InventoryReservation.objects.get(order_item=item)
+        original_payment_amount = payment.amount
+
+        with patch(
+            "payment.services.refund.GatewayService.refund",
+            side_effect=[
+                successful_gateway_result("PROCESSING-PARTIAL-1"),
+                successful_gateway_result("PROCESSING-PARTIAL-2"),
+            ],
+        ) as gateway:
+            first = RefundService.refund(
+                payment_id=payment.pk,
+                amount=Decimal("400000"),
+                idempotency_key="processing-partial-1",
+                reason="customer_request",
+                actor=admin_user,
+            )
+
+            order.refresh_from_db()
+            payment.refresh_from_db()
+            product.refresh_from_db()
+            reservation.refresh_from_db()
+
+            assert first.status == RefundStatus.SUCCESS
+            assert order.status == OrderStatusType.processing
+            assert payment.is_refunded is False
+            assert payment.amount == original_payment_amount
+            assert reservation.status == InventoryReservationStatus.CONSUMED
+            assert product.stock == stock_after_consumption
+            assert refunded_order_events(order.pk).count() == 0
+            assert refunded_order_outbox_events(order.pk).count() == 0
+
+            second = RefundService.refund(
+                payment_id=payment.pk,
+                amount=Decimal("600000"),
+                idempotency_key="processing-partial-2",
+                reason="customer_request",
+                actor=admin_user,
+            )
+
+        order.refresh_from_db()
+        payment.refresh_from_db()
+        product.refresh_from_db()
+        reservation.refresh_from_db()
+
+        assert second.status == RefundStatus.SUCCESS
+        assert order.status == OrderStatusType.refunded
+        assert payment.is_refunded is True
+        assert payment.amount == original_payment_amount
+        assert reservation.status == InventoryReservationStatus.CONSUMED
+        assert reservation.released_at is None
+        assert product.stock == stock_after_consumption
+        assert refunded_order_events(order.pk).count() == 1
+        assert refunded_order_outbox_events(order.pk).count() == 1
+        assert gateway.call_count == 2

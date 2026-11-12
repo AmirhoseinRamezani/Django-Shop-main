@@ -294,7 +294,7 @@ def test_duplicate_after_canonical_consumption_does_not_create_resolution_if_ord
     
     # Simulate a legitimate later lifecycle transition without replaying payment.
     OrderStateMachine.transition(order=order, to_status=OrderStatusType.processing)
-    OrderStateMachine.transition(order=order, to_status=OrderStatusType.cancelled)
+    OrderStateMachine.transition(order=order, to_status=OrderStatusType.shipped)    
 
     result = synchronize_successful_payment(payment_id=payment.pk)
 

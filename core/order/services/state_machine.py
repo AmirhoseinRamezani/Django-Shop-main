@@ -35,7 +35,7 @@ class OrderStateMachine:
         },
         OrderStatusType.processing: {
             OrderStatusType.shipped,
-            OrderStatusType.cancelled,
+            OrderStatusType.refunded,
         },
         OrderStatusType.shipped: {
             OrderStatusType.delivered,
@@ -200,7 +200,6 @@ class OrderStateMachine:
             and from_status in {
                 OrderStatusType.pending,
                 OrderStatusType.failed,
-                OrderStatusType.processing,
             }
         ):
             # InventoryService owns payment-evidence checks as well as the

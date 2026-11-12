@@ -127,7 +127,7 @@ def test_pending_order_can_be_cancelled_through_model_method(order):
     assert result.paid_date is None
 
 
-def test_processing_order_cancellation_never_restores_consumed_inventory():
+def test_processing_order_cancellation_is_rejected_without_inventory_mutation():
     product = ProductFactory(stock=8)
     order = OrderFactory()
     item = OrderItemFactory(
@@ -151,16 +151,17 @@ def test_processing_order_cancellation_never_restores_consumed_inventory():
         order=order,
         to_status=OrderStatusType.processing,
     )
-    OrderStateMachine.transition(
-        order=order,
-        to_status=OrderStatusType.cancelled,
-    )
+    with pytest.raises(ValidationError, match="Illegal transition"):
+        OrderStateMachine.transition(
+            order=order,
+            to_status=OrderStatusType.cancelled,
+        )
 
     order.refresh_from_db()
     product.refresh_from_db()
     reservation.refresh_from_db()
 
-    assert order.status == OrderStatusType.cancelled
+    assert order.status == OrderStatusType.processing
     assert reservation.status == InventoryReservationStatus.CONSUMED
     assert reservation.consumed_at is not None
     assert reservation.released_at is None
@@ -189,14 +190,17 @@ def test_canonical_paid_payment_prevents_release_of_legacy_reserved_row():
         order=order,
         to_status=OrderStatusType.processing,
     )
-    OrderStateMachine.transition(
-        order=order,
-        to_status=OrderStatusType.cancelled,
-    )
+    with pytest.raises(ValidationError, match="Illegal transition"):
+        OrderStateMachine.transition(
+            order=order,
+            to_status=OrderStatusType.cancelled,
+        )
 
+    order.refresh_from_db()
     reservation.refresh_from_db()
     product.refresh_from_db()
 
+    assert order.status == OrderStatusType.processing
     assert reservation.status == InventoryReservationStatus.RESERVED
     assert reservation.consumed_at is None
     assert product.stock == stock_after_reservation
