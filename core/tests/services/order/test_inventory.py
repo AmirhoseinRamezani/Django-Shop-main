@@ -1,8 +1,35 @@
 # tests/services/order/test_inventory.py
 import pytest
+from uuid import uuid4
 from django.core.exceptions import ValidationError
 
 from order.services.inventory import InventoryService
+from shop.models import InventoryAdjustmentDirection
+from shop.services.inventory_adjustment import InventoryAdjustmentService
+
+
+def _manual_adjust(product, actor, direction, quantity):
+    return InventoryAdjustmentService.adjust(
+        product_id=product.pk,
+        actor=actor,
+        direction=direction,
+        quantity=quantity,
+        reason="Inventory service regression test",
+        idempotency_key=f"inventory-test-{uuid4()}",
+    )
+
+
+@pytest.fixture
+def inventory_adjustment_actor(db, user):
+    from django.contrib.auth.models import Permission
+
+    permission = Permission.objects.get(
+        content_type__app_label="shop",
+        codename="adjust_product_stock",
+    )
+    user.user_permissions.add(permission)
+    return user
+
 
 pytestmark = pytest.mark.django_db
 
@@ -172,12 +199,15 @@ class TestIncrease:
     def test_increase(
         self,
         product,
+        inventory_adjustment_actor,
     ):
 
         old_stock = product.stock
 
-        InventoryService.increase(
+        _manual_adjust(
             product,
+            inventory_adjustment_actor,
+            InventoryAdjustmentDirection.INCREASE,
             5,
         )
 
@@ -192,13 +222,16 @@ class TestIncrease:
     def test_parametrized(
         self,
         product,
+        inventory_adjustment_actor,
         qty,
     ):
 
         old_stock = product.stock
 
-        InventoryService.increase(
+        _manual_adjust(
             product,
+            inventory_adjustment_actor,
+            InventoryAdjustmentDirection.INCREASE,
             qty,
         )
 
@@ -210,11 +243,17 @@ class TestIncrease:
     def test_rejects_non_positive_quantity(
         self,
         product,
+        inventory_adjustment_actor,
     ):
         old_stock = product.stock
 
         with pytest.raises(ValidationError):
-            InventoryService.increase(product, 0)
+            _manual_adjust(
+                product,
+                inventory_adjustment_actor,
+                InventoryAdjustmentDirection.INCREASE,
+                0,
+            )
 
         product.refresh_from_db()
         assert product.stock == old_stock
@@ -229,12 +268,15 @@ class TestDecrease:
     def test_decrease(
         self,
         product,
+        inventory_adjustment_actor,
     ):
 
         old_stock = product.stock
 
-        InventoryService.decrease(
+        _manual_adjust(
             product,
+            inventory_adjustment_actor,
+            InventoryAdjustmentDirection.DECREASE,
             4,
         )
 
@@ -249,13 +291,16 @@ class TestDecrease:
     def test_parametrized(
         self,
         product,
+        inventory_adjustment_actor,
         qty,
     ):
 
         old_stock = product.stock
 
-        InventoryService.decrease(
+        _manual_adjust(
             product,
+            inventory_adjustment_actor,
+            InventoryAdjustmentDirection.DECREASE,
             qty,
         )
 
@@ -360,17 +405,22 @@ class TestConsistency:
     def test_increase_then_decrease(
         self,
         product,
+        inventory_adjustment_actor,
     ):
 
         original = product.stock
 
-        InventoryService.increase(
+        _manual_adjust(
             product,
+            inventory_adjustment_actor,
+            InventoryAdjustmentDirection.INCREASE,
             10,
         )
 
-        InventoryService.decrease(
+        _manual_adjust(
             product,
+            inventory_adjustment_actor,
+            InventoryAdjustmentDirection.DECREASE,
             10,
         )
 
@@ -381,17 +431,22 @@ class TestConsistency:
     def test_decrease_then_increase(
         self,
         product,
+        inventory_adjustment_actor,
     ):
 
         original = product.stock
 
-        InventoryService.decrease(
+        _manual_adjust(
             product,
+            inventory_adjustment_actor,
+            InventoryAdjustmentDirection.DECREASE,
             8,
         )
 
-        InventoryService.increase(
+        _manual_adjust(
             product,
+            inventory_adjustment_actor,
+            InventoryAdjustmentDirection.INCREASE,
             8,
         )
 
@@ -400,12 +455,17 @@ class TestConsistency:
         assert product.stock == original
         
 
-def test_decrease_rejects_insufficient_stock(product):
+def test_decrease_rejects_insufficient_stock(product, inventory_adjustment_actor):
     product.stock = 2
     product.save(update_fields=["stock"])
 
     with pytest.raises(ValidationError):
-        InventoryService.decrease(product, 3)
+        _manual_adjust(
+            product,
+            inventory_adjustment_actor,
+            InventoryAdjustmentDirection.DECREASE,
+            3,
+        )
 
     product.refresh_from_db()
     assert product.stock == 2

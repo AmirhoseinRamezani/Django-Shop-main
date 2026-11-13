@@ -318,35 +318,3 @@ class InventoryService:
                 return True
 
         return False
-
-    @staticmethod
-    @transaction.atomic
-    def increase(product, quantity):
-        if quantity <= 0:
-            raise ValidationError(_("Inventory quantity must be positive."))
-
-        product.__class__.objects.filter(
-            id=product.id
-        ).update(
-            stock=F("stock") + quantity
-        )
-
-    @staticmethod
-    @transaction.atomic
-    def decrease(product, quantity):
-        if quantity <= 0:
-            raise ValidationError(_("Inventory quantity must be positive."))
-
-        updated = (
-            product.__class__.objects
-            .filter(
-                id=product.id,
-                stock__gte=quantity,
-            )
-            .update(
-                stock=F("stock") - quantity,
-            )
-        )
-
-        if updated != 1:
-            raise ValidationError(_("Insufficient inventory."))

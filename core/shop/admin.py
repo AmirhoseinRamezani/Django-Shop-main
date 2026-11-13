@@ -3,7 +3,8 @@ from .models import (
     ProductModel,
     ProductImageModel,
     ProductCategoryModel,
-    WishlistProductModel
+    WishlistProductModel,
+    InventoryAdjustment,
 )
 
 
@@ -29,6 +30,35 @@ class ProductCategoryAdmin(admin.ModelAdmin):
 @admin.register(ProductImageModel)
 class ProductImageAdmin(admin.ModelAdmin):
     list_display = ("id", "product", "created_date")
+
+
+@admin.register(InventoryAdjustment)
+class InventoryAdjustmentAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "product",
+        "direction",
+        "quantity",
+        "previous_stock",
+        "resulting_stock",
+        "actor",
+        "created_at",
+    )
+    list_filter = ("direction", "created_at")
+    search_fields = ("product__title", "actor__email", "idempotency_key", "reason")
+    readonly_fields = tuple(field.name for field in InventoryAdjustment._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def has_view_permission(self, request, obj=None):
+        return request.user.is_staff
 
 
 @admin.register(WishlistProductModel)
