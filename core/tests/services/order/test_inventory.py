@@ -620,3 +620,162 @@ class TestConsume:
 
         assert first_reservation.status == InventoryReservationStatus.CONSUMED
         assert second_reservation.status == InventoryReservationStatus.RESERVED
+
+class TestReservationSetIntegrity:
+
+    def test_restore_rejects_missing_reservation_without_stock_mutation(
+        self,
+        paid_order,
+        product,
+    ):
+        item = paid_order.order_items.get(product=product)
+        InventoryService.reserve(paid_order)
+        product.refresh_from_db()
+        stock_after_reservation = product.stock
+
+        item.inventory_reservation.delete()
+
+        with pytest.raises(ValidationError, match="reservations are incomplete"):
+            InventoryService.restore(paid_order)
+
+        product.refresh_from_db()
+        assert product.stock == stock_after_reservation
+
+    def test_restore_rejects_quantity_mismatch_without_stock_mutation(
+        self,
+        paid_order,
+        product,
+    ):
+        item = paid_order.order_items.get(product=product)
+        InventoryService.reserve(paid_order)
+        reservation = item.inventory_reservation
+        reservation.quantity += 1
+        reservation.save(update_fields=("quantity",))
+        product.refresh_from_db()
+        stock_after_reservation = product.stock
+
+        with pytest.raises(ValidationError, match="quantity mismatch"):
+            InventoryService.restore(paid_order)
+
+        product.refresh_from_db()
+        reservation.refresh_from_db()
+        assert product.stock == stock_after_reservation
+        assert reservation.status == "RESERVED"
+
+    def test_restore_rejects_positive_integer_overflow_atomically(
+        self,
+        paid_order,
+        product,
+    ):
+        item = paid_order.order_items.get(product=product)
+        InventoryService.reserve(paid_order)
+        reservation = item.inventory_reservation
+
+        product.stock = 2_147_483_647 - reservation.quantity + 1
+        product.save(update_fields=("stock",))
+        stock_before = product.stock
+
+        with pytest.raises(ValidationError, match="stock capacity"):
+            InventoryService.restore(paid_order)
+
+        product.refresh_from_db()
+        reservation.refresh_from_db()
+        assert product.stock == stock_before
+        assert reservation.status == "RESERVED"
+
+    def test_consume_rejects_missing_reservation(
+        self,
+        paid_order,
+        product,
+    ):
+        item = paid_order.order_items.get(product=product)
+        InventoryService.reserve(paid_order)
+        item.inventory_reservation.delete()
+
+        with pytest.raises(ValidationError, match="reservations are incomplete"):
+            InventoryService.consume(
+                paid_order,
+                _authorization=_CONSUME_AUTHORIZATION,
+            )
+
+    def test_consume_rejects_quantity_mismatch_before_any_consumption(
+        self,
+        paid_order_with_two_products,
+        product,
+        second_product,
+    ):
+        InventoryService.reserve(paid_order_with_two_products)
+        first_item = paid_order_with_two_products.order_items.get(product=product)
+        second_item = paid_order_with_two_products.order_items.get(product=second_product)
+        second_item.inventory_reservation.quantity += 1
+        second_item.inventory_reservation.save(update_fields=("quantity",))
+
+        with pytest.raises(ValidationError, match="quantity mismatch"):
+            InventoryService.consume(
+                paid_order_with_two_products,
+                _authorization=_CONSUME_AUTHORIZATION,
+            )
+
+        first_item.inventory_reservation.refresh_from_db()
+        second_item.inventory_reservation.refresh_from_db()
+        assert first_item.inventory_reservation.status == "RESERVED"
+        assert second_item.inventory_reservation.status == "RESERVED"
+
+
+def test_increase_reserves_headroom_for_real_active_reservations(
+    product_factory,
+    order_factory,
+    order_item_factory,
+    inventory_adjustment_actor,
+):
+    max_stock = 2_147_483_647
+    product = product_factory(stock=max_stock - 4)
+    order = order_factory()
+    order_item_factory(order=order, product=product, quantity=3)
+
+    InventoryService.reserve(order)
+    product.refresh_from_db()
+
+    assert product.reserved_stock == 0
+    assert product.stock == max_stock - 7
+
+    with pytest.raises(ValidationError, match="insufficient stock capacity"):
+        _manual_adjust(
+            product,
+            inventory_adjustment_actor,
+            InventoryAdjustmentDirection.INCREASE,
+            5,
+        )
+
+    product.refresh_from_db()
+    assert product.stock == max_stock - 7
+
+
+def test_restore_rejects_mixed_reservation_lifecycle_states(
+    paid_order_with_two_products,
+    product,
+    second_product,
+):
+    InventoryService.reserve(paid_order_with_two_products)
+    first_item = paid_order_with_two_products.order_items.get(product=product)
+    first_item.inventory_reservation.release()
+
+    product.refresh_from_db()
+    second_product.refresh_from_db()
+    first_stock = product.stock
+    second_stock = second_product.stock
+
+    with pytest.raises(ValidationError, match="inconsistent lifecycle states"):
+        InventoryService.restore(paid_order_with_two_products)
+
+    product.refresh_from_db()
+    second_product.refresh_from_db()
+    assert product.stock == first_stock
+    assert second_product.stock == second_stock
+    assert first_item.inventory_reservation.status == "RELEASED"
+    assert (
+        paid_order_with_two_products.order_items.get(
+            product=second_product,
+        ).inventory_reservation.status
+        == "RESERVED"
+    )

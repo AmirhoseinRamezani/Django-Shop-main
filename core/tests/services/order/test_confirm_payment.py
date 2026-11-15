@@ -92,6 +92,8 @@ class TestConfirmOrderPayment:
         order,
         success_payment,
     ):
+        InventoryService.reserve(order)
+
         result = confirm_order_payment(
             order.id,
         )
@@ -130,6 +132,7 @@ class TestConfirmOrderPayment:
         order,
         success_payment,
     ):
+        InventoryService.reserve(order)
         result = confirm_order_payment(
             order.id,
         )
@@ -141,6 +144,7 @@ class TestConfirmOrderPayment:
         order,
         success_payment,
     ):
+        InventoryService.reserve(order)
         confirm_order_payment(
             order.id,
         )
@@ -154,6 +158,7 @@ class TestConfirmOrderPayment:
         order,
         success_payment,
     ):
+        InventoryService.reserve(order)
         confirm_order_payment(
             order.id,
         )
@@ -170,6 +175,8 @@ class TestConfirmOrderPayment:
         success_payment,
         mocker,
     ):
+        InventoryService.reserve(order_with_coupon)
+
         schedule = mocker.patch(
             "order.services.confirm_payment.CouponService.schedule_reconciliation",
         )
@@ -188,6 +195,7 @@ class TestConfirmOrderPayment:
         success_payment,
         mocker,
     ):
+        InventoryService.reserve(order)
         transition = _patch_transition(
             mocker,
             order,
@@ -205,6 +213,7 @@ class TestConfirmOrderPayment:
         success_payment,
         mocker,
     ):
+        InventoryService.reserve(order)
         attempt = PaymentAttemptRepository.latest_for_payment(
             success_payment.pk,
         )
@@ -231,6 +240,7 @@ class TestConfirmOrderPayment:
         success_payment,
         mocker,
     ):
+        InventoryService.reserve(order)
         transition = _patch_transition(
             mocker,
             order,
@@ -419,6 +429,7 @@ class TestCoupon:
         success_payment,
         mocker,
     ):
+        InventoryService.reserve(order)
         schedule = mocker.patch(
             "order.services.confirm_payment.CouponService.schedule_reconciliation",
         )
@@ -435,6 +446,7 @@ class TestCoupon:
         success_payment,
         mocker,
     ):
+        InventoryService.reserve(order_with_coupon)
         schedule = mocker.patch(
             "order.services.confirm_payment.CouponService.schedule_reconciliation",
          )
@@ -451,6 +463,7 @@ class TestCoupon:
         success_payment,
         mocker,
     ):
+        InventoryService.reserve(order_with_coupon)
         schedule = mocker.patch(
             "order.services.confirm_payment.CouponService.schedule_reconciliation",
         )
@@ -506,6 +519,7 @@ class TestAtomic:
         success_payment,
         mocker,
     ):
+        InventoryService.reserve(order_with_coupon)
         schedule = mocker.patch(
             "order.services.confirm_payment.CouponService.schedule_reconciliation",
         )
@@ -612,6 +626,7 @@ class TestIdempotency:
         order,
         success_payment,
     ):
+        InventoryService.reserve(order)
         confirm_order_payment(
             order.id,
         )
@@ -625,6 +640,7 @@ class TestIdempotency:
         order,
         success_payment,
     ):
+        InventoryService.reserve(order)
         confirm_order_payment(
             order.id,
         )
@@ -679,6 +695,7 @@ class TestMultiplePayments:
         success_payment,
         mocker,
     ):
+        InventoryService.reserve(order)
         successful_for_order = mocker.patch(
             "order.services.confirm_payment.PaymentRepository.successful_for_order",
             side_effect=AssertionError(
@@ -702,6 +719,7 @@ class TestMultiplePayments:
         success_payment,
         payment_factory,
     ):
+        InventoryService.reserve(order)
         another = payment_factory(
             order=order,
             status=PaymentStatusType.SUCCESS,
@@ -731,6 +749,7 @@ class TestMultiplePayments:
         order_factory,
         payment_factory,
     ):
+        InventoryService.reserve(order)
         other_order = order_factory()
 
         other_payment = payment_factory(
@@ -759,6 +778,7 @@ class TestMultiplePayments:
         order,
         payment_factory,
     ):
+        InventoryService.reserve(order)
         payment_factory(
             order=order,
             status=PaymentStatusType.FAILED,
@@ -791,6 +811,7 @@ class TestMultiplePayments:
         order,
         payment_factory,
     ):
+        InventoryService.reserve(order)
         payment_factory(
             order=order,
             status=PaymentStatusType.PENDING,
@@ -993,6 +1014,8 @@ class TestTransitionPayload:
         success_payment,
         mocker,
     ):
+        InventoryService.reserve(order)
+
         transition = _patch_transition(
             mocker,
             order,
@@ -1014,6 +1037,7 @@ class TestTransitionPayload:
         success_payment,
         mocker,
     ):
+        InventoryService.reserve(order)
         transition = _patch_transition(
             mocker,
             order,
@@ -1033,6 +1057,7 @@ class TestTransitionPayload:
         success_payment,
         mocker,
     ):
+        InventoryService.reserve(order)
         attempt = PaymentAttemptRepository.latest_for_payment(
             success_payment.pk,
         )
@@ -1056,6 +1081,7 @@ class TestTransitionPayload:
         success_payment,
         mocker,
     ):
+        InventoryService.reserve(order)
         attempt = PaymentAttemptRepository.latest_for_payment(
             success_payment.pk,
         )
@@ -1079,6 +1105,7 @@ class TestTransitionPayload:
         success_payment,
         mocker,
     ):
+        InventoryService.reserve(order)
         transition = _patch_transition(
             mocker,
             order,
@@ -1108,6 +1135,7 @@ class TestServiceCalls:
         success_payment,
         mocker,
     ):
+        InventoryService.reserve(order)
         schedule = mocker.patch(
             "order.services.confirm_payment.CouponService.schedule_reconciliation",
         )
@@ -1124,6 +1152,7 @@ class TestServiceCalls:
         success_payment,
         mocker,
     ):
+        InventoryService.reserve(order_with_coupon)
         schedule = mocker.patch(
             "order.services.confirm_payment.CouponService.schedule_reconciliation",
         )
@@ -1140,6 +1169,7 @@ class TestServiceCalls:
         success_payment,
         mocker,
     ):
+        InventoryService.reserve(order)
         transition = _patch_transition(
             mocker,
             order,
@@ -1181,6 +1211,8 @@ class TestFailureOrdering:
         success_payment,
         mocker,
     ):
+        InventoryService.reserve(order_with_coupon)
+
         mocker.patch(
             "order.services.confirm_payment.OrderStateMachine.transition",
             side_effect=RuntimeError(),
@@ -1203,6 +1235,7 @@ class TestFailureOrdering:
         success_payment,
         mocker,
     ):
+        InventoryService.reserve(order)
         mocker.patch(
             "order.services.confirm_payment.OrderStateMachine.transition",
             side_effect=RuntimeError(),
@@ -1316,3 +1349,27 @@ class TestPaymentAttemptIntegrity:
         foreign_payment.refresh_from_db()
 
         assert foreign_payment.is_consumed is False
+
+def test_payment_finalization_rejects_missing_inventory_reservation_atomically(
+    order,
+    success_payment,
+):
+    from django.core.exceptions import ValidationError
+
+    from order.models import InventoryReservation
+    from order.services.inventory import InventoryService
+
+    InventoryService.reserve(order)
+    InventoryReservation.objects.filter(
+        order_item__order=order,
+    ).delete()
+
+    with pytest.raises(ValidationError, match="reservations are incomplete"):
+        confirm_order_payment(order.pk, payment_id=success_payment.pk)
+
+    order.refresh_from_db()
+    success_payment.refresh_from_db()
+
+    assert order.status == OrderStatusType.pending
+    assert success_payment.is_consumed is False
+    assert not order.events.filter(type=OrderEventType.PAID).exists()

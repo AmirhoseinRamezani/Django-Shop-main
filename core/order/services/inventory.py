@@ -145,6 +145,10 @@ class InventoryService:
         """
         Release active reservations exactly once when payment evidence permits.
 
+        Every OrderItem must have exactly one matching reservation. All
+        reservation and product invariants are validated before the first
+        stock mutation, so corrupted reservation data cannot over-credit stock.
+
         Lock order:
             Order -> Payment -> PaymentAttempt -> InventoryReservation
             -> Product (ascending PK)
@@ -161,12 +165,15 @@ class InventoryService:
             return 0
 
         # A canonical PAID event backed by a consumed successful Payment and
-        # its exact successful Attempt makes inventory irreversible. Do not
-        # rely on Order.status: the event and financial aggregate are evidence.
+        # its exact successful Attempt makes inventory irreversible.
         if InventoryService._has_canonical_paid_payment(locked_order):
             return 0
 
-        order_item_count = locked_order.order_items.count()
+        items = list(
+            locked_order.order_items
+            .only("pk", "product_id", "quantity")
+            .order_by("product_id", "pk")
+        )
         reservations = list(
             InventoryReservation.objects
             .select_for_update()
@@ -175,53 +182,83 @@ class InventoryService:
             .order_by("order_item__product_id", "order_item_id", "pk")
         )
 
-        if order_item_count != len(reservations):
+        items_by_id = {item.pk: item for item in items}
+        if len(items_by_id) != len(items) or len(reservations) != len(items):
             raise ValidationError(
-                _("Order inventory reservations are incomplete.")
+                _("Order inventory reservations are incomplete or duplicated.")
             )
 
-        if not reservations:
+        restore_quantities = {}
+        reservation_states = set()
+        for reservation in reservations:
+            reservation_states.add(reservation.status)
+            item = items_by_id.get(reservation.order_item_id)
+            if item is None:
+                raise ValidationError(
+                    _("Inventory reservation does not belong to this Order.")
+                )
+            if reservation.quantity != item.quantity:
+                raise ValidationError(
+                    _("Inventory reservation quantity mismatch.")
+                )
+            if reservation.status not in (
+                InventoryReservationStatus.RESERVED,
+                InventoryReservationStatus.RELEASED,
+                InventoryReservationStatus.CONSUMED,
+            ):
+                raise ValidationError(_("Invalid inventory reservation state."))
+
+            if reservation.status == InventoryReservationStatus.RESERVED:
+                restore_quantities[item.product_id] = (
+                    restore_quantities.get(item.product_id, 0)
+                    + reservation.quantity
+                )
+
+        if (
+            InventoryReservationStatus.RESERVED in reservation_states
+            and len(reservation_states) > 1
+        ):
+            raise ValidationError(
+                _("Order inventory reservations have inconsistent lifecycle states.")
+            )
+
+        if not restore_quantities:
             return 0
 
-        product_ids = sorted({
-            reservation.order_item.product_id
-            for reservation in reservations
-            if reservation.status == InventoryReservationStatus.RESERVED
-        })
         products = (
             ProductModel.objects
             .select_for_update()
-            .filter(pk__in=product_ids)
+            .filter(pk__in=sorted(restore_quantities))
             .order_by("pk")
             .in_bulk()
         )
 
-        released_count = 0
-
-        for reservation in reservations:
-            if reservation.status != InventoryReservationStatus.RESERVED:
-                continue
-
-            product = products.get(reservation.order_item.product_id)
+        # Preflight the complete restore before changing any Product or
+        # Reservation. PositiveIntegerField is bounded by PostgreSQL's
+        # signed 32-bit integer range.
+        max_stock_value = 2_147_483_647
+        for product_id, quantity in restore_quantities.items():
+            product = products.get(product_id)
             if product is None:
+                raise ValidationError(_("Order product no longer exists."))
+            if product.stock > max_stock_value - quantity:
                 raise ValidationError(
-                    _("Order product no longer exists.")
+                    _("Restoring inventory would exceed the product stock capacity.")
                 )
 
-            updated = (
-                ProductModel.objects
-                .filter(pk=product.pk)
-                .update(
-                    stock=F("stock") + reservation.quantity,
-                )
-            )
+        for product_id, quantity in restore_quantities.items():
+            updated = ProductModel.objects.filter(
+                pk=product_id,
+                stock__lte=max_stock_value - quantity,
+            ).update(stock=F("stock") + quantity)
             if updated != 1:
-                raise ValidationError(
-                    _("Unable to restore inventory.")
-                )
+                raise ValidationError(_("Unable to restore inventory."))
 
-            if reservation.release():
-                released_count += 1
+        released_count = 0
+        for reservation in reservations:
+            if reservation.status == InventoryReservationStatus.RESERVED:
+                if reservation.release():
+                    released_count += 1
 
         return released_count
 
@@ -270,26 +307,44 @@ class InventoryService:
             .order_by("order_item__product_id", "order_item_id", "pk")
         )
 
-        consumed_count = 0
+        # Payment success must never finalize an Order with missing or
+        # mismatched inventory evidence. Validate the full set before changing
+        # any reservation so the caller's financial transaction can roll back
+        # cleanly on inconsistency.
+        if len(reservations) != len(items):
+            raise ValidationError(
+                _("Order inventory reservations are incomplete or duplicated.")
+            )
+
+        reservation_item_ids = {
+            reservation.order_item_id
+            for reservation in reservations
+        }
+        if reservation_item_ids != set(items_by_id):
+            raise ValidationError(
+                _("Order inventory reservations do not match Order items.")
+            )
+
         for reservation in reservations:
-            item = items_by_id.get(reservation.order_item_id)
-            if item is None:
-                raise ValidationError(
-                    _("Inventory reservation does not belong to this Order.")
-                )
+            item = items_by_id[reservation.order_item_id]
 
             if reservation.quantity != item.quantity:
                 raise ValidationError(
                     _("Inventory reservation quantity mismatch.")
                 )
 
-            if reservation.status == InventoryReservationStatus.CONSUMED:
-                continue
-
-            if reservation.status != InventoryReservationStatus.RESERVED:
+            if reservation.status not in (
+                InventoryReservationStatus.RESERVED,
+                InventoryReservationStatus.CONSUMED,
+            ):
                 raise ValidationError(
                     _("Released inventory cannot be consumed.")
                 )
+
+        consumed_count = 0
+        for reservation in reservations:
+            if reservation.status == InventoryReservationStatus.CONSUMED:
+                continue
 
             if reservation.consume():
                 consumed_count += 1

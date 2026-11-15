@@ -110,3 +110,39 @@ def test_concurrent_distinct_adjustments_on_one_product_do_not_lose_updates():
     assert InventoryAdjustment.objects.filter(
         pk__in=results,
     ).count() == 2
+
+def test_concurrent_stock_adjustment_and_reservation_restore_preserve_capacity():
+    from order.models import InventoryReservationStatus
+    from order.services.inventory import InventoryService
+    from tests.factories.order import OrderFactory, OrderItemFactory
+
+    max_stock = 2_147_483_647
+    product = ProductFactory(stock=max_stock - 6)
+    order = OrderFactory()
+    item = OrderItemFactory(order=order, product=product, quantity=2)
+    InventoryService.reserve(order)
+
+    actor = UserFactory(superuser=True)
+
+    def increase_stock():
+        return InventoryAdjustmentService.adjust(
+            product_id=product.pk,
+            actor=actor,
+            direction=InventoryAdjustmentDirection.INCREASE,
+            quantity=4,
+            reason="Concurrent reservation restore capacity regression",
+            idempotency_key="concurrent-adjustment-reservation-restore",
+        )
+
+    ConcurrentRunner().run(
+        increase_stock,
+        lambda: InventoryService.restore(order),
+    )
+
+    product.refresh_from_db()
+    reservation = item.inventory_reservation
+    reservation.refresh_from_db()
+
+    assert product.stock == max_stock - 2
+    assert reservation.status == InventoryReservationStatus.RELEASED
+    assert product.stock <= max_stock

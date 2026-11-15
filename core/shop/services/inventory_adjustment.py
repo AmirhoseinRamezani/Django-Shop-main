@@ -72,13 +72,33 @@ class InventoryAdjustmentService:
 
         previous_stock = product.stock
         if direction == InventoryAdjustmentDirection.INCREASE:
-            # restore() adds each outstanding reservation back to stock.
-            # Reserve headroom for that future release now, otherwise a valid
-            # restore could overflow PositiveIntegerField after this adjustment.
-            resulting_stock = previous_stock + quantity
-            maximum_after_release = (
-                resulting_stock + product.reserved_stock
+            # Product.stock is already reduced when an order is reserved.
+            # The active InventoryReservation rows therefore represent stock
+            # that a future cancellation/expiry may add back. reserved_stock is
+            # retained as a legacy/conservative capacity guard, but is not
+            # assumed to be maintained by the current reservation service.
+            from django.db.models import Sum
+
+            from order.models import (
+                InventoryReservation,
+                InventoryReservationStatus,
             )
+
+            active_reserved_quantity = (
+                InventoryReservation.objects.filter(
+                    order_item__product_id=product.pk,
+                    status=InventoryReservationStatus.RESERVED,
+                ).aggregate(total=Sum("quantity"))["total"]
+                or 0
+             )
+            restore_headroom = max(
+                product.reserved_stock,
+                active_reserved_quantity,
+            )
+
+            resulting_stock = previous_stock + quantity
+            maximum_after_release = resulting_stock + restore_headroom
+
             if maximum_after_release > cls.max_stock_value:
                 raise ValidationError(
                     _(
