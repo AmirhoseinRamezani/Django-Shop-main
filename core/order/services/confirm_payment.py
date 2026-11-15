@@ -7,7 +7,10 @@ from django.utils.translation import gettext as _
 
 from order.events.order_event import OrderEventType
 from order.models import OrderModel, OrderStatusType
-from order.services.inventory import InventoryService
+from order.services.inventory import (
+    InventoryService,
+    _CONSUME_AUTHORIZATION,
+)
 from order.services.coupon import CouponService
 from order.services.state_machine import (
     OrderStateMachine,
@@ -207,7 +210,10 @@ def confirm_order_payment(
             # Reconcile any legacy/incomplete RESERVED rows on an otherwise
             # canonically finalized Payment. The operation is idempotent and
             # remains inside this transaction.
-            InventoryService.consume(order)            
+            InventoryService.consume(
+                order,
+                _authorization=_CONSUME_AUTHORIZATION,
+            )
             if order.coupon_id:
                 CouponService.schedule_reconciliation(order.pk)
             return order
@@ -254,7 +260,10 @@ def confirm_order_payment(
     
     # Inventory consumption is part of the same atomic finalization as the
     # canonical Payment and Order transition. Stock is not decremented again.
-    InventoryService.consume(order)
+    InventoryService.consume(
+        order,
+        _authorization=_CONSUME_AUTHORIZATION,
+    )
 
     # ==========================================================
     # 9. TRANSITION ORDER -> PAID

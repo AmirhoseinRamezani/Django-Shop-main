@@ -12,7 +12,10 @@ from order.models import (
     InventoryReservationStatus,
     OrderStatusType,
 )
-from order.services.inventory import InventoryService
+from order.services.inventory import (
+    InventoryService,
+    _CONSUME_AUTHORIZATION,
+)
 from order.services.state_machine import OrderStateMachine
 from payment.enums import PaymentGateway, PaymentStatusType, RefundStatus
 from payment.exceptions import (
@@ -422,7 +425,10 @@ class TestRefundOrderConsistency:
             quantity=2,
         )
         InventoryService.reserve(order)
-        InventoryService.consume(order)
+        InventoryService.consume(
+            order,
+            _authorization=_CONSUME_AUTHORIZATION,
+        )
         product.refresh_from_db()
         stock_after_consumption = product.stock
         reservation = InventoryReservation.objects.get(order_item=item)

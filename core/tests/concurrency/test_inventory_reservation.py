@@ -16,7 +16,10 @@ from order.models import (
     OrderModel,
     OrderStatusType,
 )
-from order.services.inventory import InventoryService
+from order.services.inventory import (
+    InventoryService,
+    _CONSUME_AUTHORIZATION,
+)
 from order.services.order import OrderService
 from order.services.state_machine import OrderStateMachine
 
@@ -152,10 +155,13 @@ def test_concurrent_consume_requests_are_idempotent():
     product.refresh_from_db()
     reserved_stock = product.stock
 
-    ConcurrentRunner().run(
-        lambda: InventoryService.consume(order),
-        lambda: InventoryService.consume(order),
-    )
+    def consume():
+        InventoryService.consume(
+            order,
+            _authorization=_CONSUME_AUTHORIZATION,
+        )
+
+    ConcurrentRunner().run(consume, consume)
 
     product.refresh_from_db()
     reservation = InventoryReservation.objects.get(order_item=item)
@@ -175,7 +181,10 @@ def test_concurrent_release_and_consume_have_one_terminal_winner():
 
     def consume():
         try:
-            InventoryService.consume(order)
+            InventoryService.consume(
+                order,
+                _authorization=_CONSUME_AUTHORIZATION,
+            )
         except ValidationError:
             outcomes.append("consume_rejected")
         else:

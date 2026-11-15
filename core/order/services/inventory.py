@@ -1,7 +1,7 @@
 # order/services/inventory.py
 from django.db import transaction
 from django.db.models import F
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.utils.translation import gettext as _
 
 from order.models import (
@@ -11,6 +11,11 @@ from order.models import (
 )
 from order.services.coupon import CouponService
 from shop.models import ProductModel
+
+
+# Capability is intentionally private to this module. Only the canonical
+# payment finalizer imports it and can authorize reservation consumption.
+_CONSUME_AUTHORIZATION = object()
 
 
 class InventoryService:
@@ -222,18 +227,27 @@ class InventoryService:
 
     @staticmethod
     @transaction.atomic
-    def consume(order: OrderModel):
+    def consume(order: OrderModel, *, _authorization=None):
         """
         Permanently consume all active reservations owned by this Order.
 
         Consumption changes reservation state only: stock was deducted at
         reservation time and must never be decremented again.
 
+        This operation is restricted to confirm_order_payment() through a
+        module-private capability. Calling it from any other application path
+        is rejected before acquiring or mutating database rows.
+
         Lock order:
             Order -> Payment -> PaymentAttempt -> InventoryReservation
         The canonical payment finalizer already owns Payment and Attempt
         locks before invoking this method.
         """
+        if _authorization is not _CONSUME_AUTHORIZATION:
+            raise PermissionDenied(
+                "Inventory consumption is only allowed during canonical payment finalization."
+            )
+
         locked_order = (
             OrderModel.objects
             .select_for_update()

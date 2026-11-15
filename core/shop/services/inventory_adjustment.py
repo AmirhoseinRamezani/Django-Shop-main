@@ -72,9 +72,20 @@ class InventoryAdjustmentService:
 
         previous_stock = product.stock
         if direction == InventoryAdjustmentDirection.INCREASE:
+            # restore() adds each outstanding reservation back to stock.
+            # Reserve headroom for that future release now, otherwise a valid
+            # restore could overflow PositiveIntegerField after this adjustment.
             resulting_stock = previous_stock + quantity
-            if resulting_stock > cls.max_stock_value:
-                raise ValidationError(_("The resulting stock exceeds the supported range."))
+            maximum_after_release = (
+                resulting_stock + product.reserved_stock
+            )
+            if maximum_after_release > cls.max_stock_value:
+                raise ValidationError(
+                    _(
+                        "The adjustment would leave insufficient stock capacity "
+                        "to release active reservations."
+                    )
+                )
         else:
             resulting_stock = previous_stock - quantity
             if resulting_stock < product.reserved_stock:

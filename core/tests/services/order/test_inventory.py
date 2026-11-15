@@ -3,7 +3,10 @@ import pytest
 from uuid import uuid4
 from django.core.exceptions import ValidationError
 
-from order.services.inventory import InventoryService
+from order.services.inventory import (
+    InventoryService,
+    _CONSUME_AUTHORIZATION,
+)
 from shop.models import InventoryAdjustmentDirection
 from shop.services.inventory_adjustment import InventoryAdjustmentService
 
@@ -488,8 +491,14 @@ class TestConsume:
         reserved_stock = product.stock
         item = paid_order.order_items.get(product=product)
 
-        assert InventoryService.consume(paid_order) == 1
-        assert InventoryService.consume(paid_order) == 0
+        assert InventoryService.consume(
+            paid_order,
+            _authorization=_CONSUME_AUTHORIZATION,
+        ) == 1
+        assert InventoryService.consume(
+            paid_order,
+            _authorization=_CONSUME_AUTHORIZATION,
+        ) == 0
 
         product.refresh_from_db()
         reservation = InventoryReservation.objects.get(order_item=item)
@@ -507,7 +516,10 @@ class TestConsume:
         from order.models import InventoryReservation, InventoryReservationStatus
 
         InventoryService.reserve(paid_order)
-        InventoryService.consume(paid_order)
+        InventoryService.consume(
+            paid_order,
+            _authorization=_CONSUME_AUTHORIZATION,
+        )
         product.refresh_from_db()
         reserved_stock = product.stock
 
@@ -535,7 +547,10 @@ class TestConsume:
         restored_stock = product.stock
 
         with pytest.raises(ValidationError):
-            InventoryService.consume(paid_order)
+            InventoryService.consume(
+                paid_order,
+                _authorization=_CONSUME_AUTHORIZATION,
+            )
 
         product.refresh_from_db()
         reservation = InventoryReservation.objects.get(
@@ -561,7 +576,10 @@ class TestConsume:
         reservation.save(update_fields=("quantity",))
 
         with pytest.raises(ValidationError, match="quantity mismatch"):
-            InventoryService.consume(paid_order)
+            InventoryService.consume(
+                paid_order,
+                _authorization=_CONSUME_AUTHORIZATION,
+            )
 
         reservation.refresh_from_db()
         assert reservation.status == "RESERVED"
@@ -592,7 +610,10 @@ class TestConsume:
 
         InventoryService.reserve(first_order)
         InventoryService.reserve(second_order)
-        InventoryService.consume(first_order)
+        InventoryService.consume(
+            first_order,
+            _authorization=_CONSUME_AUTHORIZATION,
+        )
 
         first_reservation = InventoryReservation.objects.get(order_item=first_item)
         second_reservation = InventoryReservation.objects.get(order_item=second_item)
