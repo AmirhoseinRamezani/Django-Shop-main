@@ -2,6 +2,7 @@
 import pytest
 
 from order.services.coupon import CouponService
+from order.services.inventory import InventoryService
 
 from payment.services.payment_flow import (
     handle_successful_payment,
@@ -29,6 +30,8 @@ class TestCouponFlow:
         django_capture_on_commit_callbacks,
     ):
         order = successful_payment.order
+
+        InventoryService.reserve(order)
 
         order.coupon = coupon
         order.coupon_code = coupon.code

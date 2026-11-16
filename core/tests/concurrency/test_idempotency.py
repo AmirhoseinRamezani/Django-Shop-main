@@ -1,5 +1,6 @@
 import pytest
 
+from order.services.inventory import InventoryService
 from payment.services.verify import verify_payment
 
 pytestmark = pytest.mark.django_db
@@ -7,6 +8,8 @@ pytestmark = pytest.mark.django_db
 
 def test_verify_twice_returns_same_payment(successful_payment):
     attempt = successful_payment.attempts.get()
+
+    InventoryService.reserve(successful_payment.order)
 
     first = verify_payment(
         payment_id=successful_payment.pk,

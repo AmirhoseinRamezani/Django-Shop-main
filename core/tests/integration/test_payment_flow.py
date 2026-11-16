@@ -1,6 +1,8 @@
 # tests/integration/test_payment_flow.py
 import pytest
 
+from order.services.inventory import InventoryService
+
 from payment.enums import PaymentGateway
 from payment.providers.base import GatewayPaymentResult, GatewayVerificationResult
 from payment.services.services import PaymentService
@@ -44,6 +46,8 @@ class TestPaymentFlow:
             order,
             callback_url="https://shop.test/payment/verify/",
         )
+
+        InventoryService.reserve(order)
 
         payment = order.payments.first()
         attempt = payment.attempts.first()

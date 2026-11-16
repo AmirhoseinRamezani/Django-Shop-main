@@ -2,6 +2,7 @@
 import pytest
 
 from order.services.coupon import CouponService
+from order.services.inventory import InventoryService
 
 from payment.services.payment_flow import handle_successful_payment
 
@@ -21,6 +22,8 @@ def test_coupon_consumed_after_payment(
 ):
 
     order = successful_payment.order
+
+    InventoryService.reserve(order)
 
     order.coupon = coupon
     order.coupon_code = coupon.code
