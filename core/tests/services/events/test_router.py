@@ -28,3 +28,30 @@ def test_explicit_noop_topic_is_accepted():
 def test_unknown_topic_is_rejected():
     with pytest.raises(UnknownTopicError, match="No dispatch route"):
         dispatch(Mock(topic="order.typo"))
+
+
+def test_all_handlers_are_attempted_when_one_fails(monkeypatch):
+    from events.dispatchers.router import DispatchError
+    import events.dispatchers.router as router
+
+    calls = []
+
+    def broken_handler(event):
+        calls.append("broken")
+        raise RuntimeError("email unavailable")
+
+    def successful_handler(event):
+        calls.append("successful")
+
+    monkeypatch.setitem(
+        router.ROUTES,
+        "topic.partial_failure",
+        (broken_handler, successful_handler),
+    )
+
+    event = Mock(topic="topic.partial_failure")
+
+    with pytest.raises(DispatchError):
+        dispatch(event)
+
+    assert calls == ["broken", "successful"]

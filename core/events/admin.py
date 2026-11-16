@@ -1,4 +1,6 @@
+
 from django.contrib import admin
+
 from events.models.outbox import OutboxEvent
 
 
@@ -6,6 +8,7 @@ from events.models.outbox import OutboxEvent
 class OutboxEventAdmin(admin.ModelAdmin):
     list_display = (
         "id",
+        "event_id",
         "topic",
         "status",
         "retry_count",
@@ -15,8 +18,9 @@ class OutboxEventAdmin(admin.ModelAdmin):
         "claimed_at",
     )
     list_filter = ("status", "topic")
-    search_fields = ("topic", "payload")
+    search_fields = ("event_id", "topic")
     readonly_fields = (
+        "event_id",
         "topic",
         "payload",
         "status",
@@ -29,3 +33,10 @@ class OutboxEventAdmin(admin.ModelAdmin):
         "claim_token",
     )
     ordering = ("-created_date",)
+    list_per_page = 50
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
