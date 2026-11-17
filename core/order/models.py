@@ -181,6 +181,32 @@ class UserAddressModel(models.Model):
         return f"{self.user} - {self.city}"
 
 
+class OrderQuerySet(models.QuerySet):
+    @staticmethod
+    def _reject_status_write():
+        raise ValidationError(
+            "Order status can only be changed through OrderStateMachine."
+        )
+
+    def update(self, **kwargs):
+        if "status" in kwargs:
+            self._reject_status_write()
+        return super().update(**kwargs)
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        if "status" in fields:
+            self._reject_status_write()
+        return super().bulk_update(
+            objs,
+            fields,
+            batch_size=batch_size,
+        )
+
+
+class OrderManager(models.Manager.from_queryset(OrderQuerySet)):
+    pass
+
+
 class OrderModel(models.Model):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -317,6 +343,7 @@ class OrderModel(models.Model):
     created_date = models.DateTimeField(auto_now_add=True)
     expire_at = models.DateTimeField(db_index=True,help_text="Order expiration time for unpaid orders")
     
+    objects = OrderManager()
     
     class Meta:
         ordering = [
@@ -388,6 +415,46 @@ class OrderModel(models.Model):
                 name="order_paid_date_consistent",
             ),
         ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            update_fields = kwargs.get("update_fields")
+
+            status_is_being_persisted = (
+                update_fields is None or "status" in update_fields
+            )
+
+            if status_is_being_persisted:
+                persisted_status = (
+                    type(self)
+                    ._base_manager
+                    .filter(pk=self.pk)
+                    .values_list("status", flat=True)
+                    .first()
+                )
+
+                if (
+                    persisted_status is not None
+                    and persisted_status != self.status
+                ):
+                    from order.services.state_machine import (
+                        _ORDER_STATUS_PERSISTENCE_TOKEN,
+                    )
+
+                    authorization = getattr(
+                        self,
+                        "_status_persistence_authorization",
+                        None,
+                    )
+
+                    if authorization is not _ORDER_STATUS_PERSISTENCE_TOKEN:
+                        raise ValidationError(
+                            "Order status can only be changed through "
+                            "OrderStateMachine."
+                        )
+
+        return super().save(*args, **kwargs)
+
     # ----- Aging Helpers -----
     def age(self):
         return timezone.now() - self.created_date

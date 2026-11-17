@@ -605,10 +605,15 @@ class TestRefundAuthorization:
     ):
         from django.utils import timezone
 
+        from tests.fixtures.orders import _save_order_state_fixture
+
         foreign_order = order_factory()
         foreign_order.status = OrderStatusType.paid
         foreign_order.paid_date = timezone.now()
-        foreign_order.save(update_fields=("status", "paid_date"))
+        _save_order_state_fixture(
+            foreign_order,
+            update_fields=("status", "paid_date"),
+        )
 
         with pytest.raises(
             PaymentInvariantViolation,

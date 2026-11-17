@@ -22,6 +22,25 @@ from tests.factories.order import (
 )
 from tests.factories.shop import CouponFactory
 
+# ===================================
+# HELPER
+# ===================================
+
+def _save_order_state_fixture(order, *, update_fields):
+    from order.services.state_machine import (
+        _ORDER_STATUS_PERSISTENCE_TOKEN,
+    )
+
+    order._status_persistence_authorization = (
+        _ORDER_STATUS_PERSISTENCE_TOKEN
+    )
+
+    try:
+        order.save(update_fields=update_fields)
+    finally:
+        if hasattr(order, "_status_persistence_authorization"):
+            delattr(order, "_status_persistence_authorization")
+
 
 # ===================================
 # BASIC ORDERS
@@ -173,11 +192,9 @@ def paid_order(order):
     order.status = OrderStatusType.paid
     order.paid_date = timezone.now()
 
-    order.save(
-        update_fields=[
-            "status",
-            "paid_date",
-        ],
+    _save_order_state_fixture(
+        order,
+        update_fields=("status", "paid_date"),
     )
 
     return order
@@ -192,11 +209,9 @@ def processing_order(order):
     order.status = OrderStatusType.processing
     order.paid_date = timezone.now()
 
-    order.save(
-        update_fields=[
-            "status",
-            "paid_date",
-        ],
+    _save_order_state_fixture(
+        order,
+        update_fields=("status", "paid_date"),
     )
 
     return order
@@ -206,10 +221,9 @@ def processing_order(order):
 def shipped_order(processing_order):
     processing_order.status = OrderStatusType.shipped
 
-    processing_order.save(
-        update_fields=[
-            "status",
-        ],
+    _save_order_state_fixture(
+        processing_order,
+        update_fields=("status",),
     )
 
     return processing_order
@@ -220,11 +234,9 @@ def delivered_order(shipped_order):
     shipped_order.status = OrderStatusType.delivered
     shipped_order.completed_date = timezone.now()
 
-    shipped_order.save(
-        update_fields=[
-            "status",
-            "completed_date",
-        ],
+    _save_order_state_fixture(
+        shipped_order,
+        update_fields=("status", "completed_date"),
     )
 
     return shipped_order
@@ -234,10 +246,9 @@ def delivered_order(shipped_order):
 def failed_order(order):
     order.status = OrderStatusType.failed
 
-    order.save(
-        update_fields=[
-            "status",
-        ],
+    _save_order_state_fixture(
+        order,
+        update_fields=("status",),
     )
 
     return order
@@ -248,11 +259,9 @@ def cancelled_order(order):
     order.status = OrderStatusType.cancelled
     order.cancelled_date = timezone.now()
 
-    order.save(
-        update_fields=[
-            "status",
-            "cancelled_date",
-        ],
+    _save_order_state_fixture(
+        order,
+        update_fields=("status", "cancelled_date"),
     )
 
     return order
@@ -290,10 +299,9 @@ def refunded_order(paid_order):
 
     paid_order.status = OrderStatusType.refunded
 
-    paid_order.save(
-        update_fields=[
-            "status",
-        ],
+    _save_order_state_fixture(
+        paid_order,
+        update_fields=("status",),
     )
 
     return paid_order
@@ -441,12 +449,11 @@ def paid_order_with_two_products(order_with_two_products):
     order = order_with_two_products
     order.status = OrderStatusType.paid
     order.paid_date = timezone.now()
-    order.save(
-        update_fields=[
-            "status",
-            "paid_date",
-        ],
+    _save_order_state_fixture(
+        order,
+        update_fields=("status", "paid_date"),
     )
+
     return order
 
 @pytest.fixture

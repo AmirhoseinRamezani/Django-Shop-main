@@ -17,6 +17,8 @@ from order.services.coupon import CouponService
 _PAYMENT_FINALIZATION_TOKEN = object()
 _REFUND_FINALIZATION_TOKEN = object()
 
+_ORDER_STATUS_PERSISTENCE_TOKEN = object()
+
 class OrderStateMachine:
 
     TRANSITIONS = {
@@ -166,9 +168,15 @@ class OrderStateMachine:
             order.cancelled_date = timezone.now()
             update_fields.append("cancelled_date")
 
-        order.save(
-            update_fields=update_fields,
+        order._status_persistence_authorization = (
+            _ORDER_STATUS_PERSISTENCE_TOKEN
         )
+
+        try:
+            order.save(update_fields=update_fields)
+        finally:
+            if hasattr(order, "_status_persistence_authorization"):
+                delattr(order, "_status_persistence_authorization")
 
         record_order_event(
             order=order,

@@ -22,4 +22,4 @@ def test_transition_query_count(
             to_status=OrderStatusType.processing,
         )
 
-    assert len(ctx) <= 6
+    assert len(ctx) <= 7
