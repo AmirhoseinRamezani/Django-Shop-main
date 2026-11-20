@@ -2,12 +2,14 @@ from decimal import Decimal
 
 import pytest
 from django.db import IntegrityError, transaction
+from django.db.models.deletion import ProtectedError
 
 from payment.managers import _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN
 from payment.enums import PaymentGateway, PaymentStatusType
 from payment.repositories.payment_repository import PaymentRepository
 from tests.factories.order import OrderFactory
 from tests.factories.payment import PaymentFactory
+from tests.factories.shop import CouponFactory
 
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -159,3 +161,99 @@ def test_order_snapshot_can_be_corrected_before_first_payment():
         status=PaymentStatusType.PENDING,
     )
     assert payment.amount == order.payable_price
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        ("coupon_code", "REPLACED-CODE"),
+        ("coupon_discount_percent", 99),
+        ("coupon_id", "replacement_coupon"),
+        ("coupon_id", None),
+    ),
+)
+def test_order_coupon_snapshot_is_immutable_after_payment(
+    field,
+    replacement,
+):
+    order = OrderFactory(with_coupon=True)
+    PaymentFactory(order=order, failed=True)
+    replacement_coupon = CouponFactory()
+
+    replacement_value = (
+        replacement_coupon.pk
+        if replacement == "replacement_coupon"
+        else replacement
+    )
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        type(order).objects.filter(pk=order.pk).update(
+            **{field: replacement_value}
+        )
+
+    order.refresh_from_db()
+    assert order.coupon_id is not None
+    assert order.coupon_code == order.coupon.code
+    assert order.coupon_discount_percent == order.coupon.discount_percent
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        ("coupon_code", "REPLACED-CODE"),
+        ("coupon_discount_percent", 99),
+        ("coupon_id", "replacement_coupon"),
+        ("coupon_id", None),
+    ),
+)
+def test_order_instance_save_cannot_rewrite_coupon_snapshot_after_payment(
+    field,
+    replacement,
+):
+    order = OrderFactory(with_coupon=True)
+    PaymentFactory(order=order, failed=True)
+    replacement_coupon = CouponFactory()
+
+    replacement_value = (
+        replacement_coupon.pk
+        if replacement == "replacement_coupon"
+        else replacement
+    )
+    setattr(order, field, replacement_value)
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        order.save(update_fields=(field,))
+
+    order.refresh_from_db()
+    assert order.coupon_id is not None
+    assert order.coupon_code == order.coupon.code
+    assert order.coupon_discount_percent == order.coupon.discount_percent
+
+
+
+def test_coupon_cannot_be_deleted_while_an_order_references_its_snapshot():
+    order = OrderFactory(with_coupon=True)
+    PaymentFactory(order=order, failed=True)
+
+    with pytest.raises(ProtectedError):
+        order.coupon.delete()
+
+    order.refresh_from_db()
+    assert order.coupon_id is not None
+
+
+def test_order_coupon_snapshot_remains_editable_before_first_payment():
+    order = OrderFactory(with_coupon=True)
+    replacement_coupon = CouponFactory()
+
+    updated = type(order).objects.filter(pk=order.pk).update(
+        coupon_id=replacement_coupon.pk,
+        coupon_code=replacement_coupon.code,
+        coupon_discount_percent=replacement_coupon.discount_percent,
+    )
+
+    assert updated == 1
+    order.refresh_from_db()
+    assert order.coupon_id == replacement_coupon.pk
+    assert order.coupon_code == replacement_coupon.code
+    assert order.coupon_discount_percent == replacement_coupon.discount_percent

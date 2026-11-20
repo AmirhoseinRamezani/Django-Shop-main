@@ -256,7 +256,7 @@ class OrderModel(models.Model):
         CouponModel,
         null=True,
         blank=True,
-        on_delete=models.SET_NULL,
+        on_delete=models.PROTECT,
         related_name="orders",
     )
 
