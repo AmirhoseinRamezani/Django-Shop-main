@@ -8,6 +8,7 @@ from django.db.models import Max, QuerySet
 from django.utils import timezone
 
 from payment.enums import PaymentAttemptStatus
+from payment.managers import _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN
 from payment.exceptions import (
     PaymentAttemptIdentityConflictError,
     PaymentAttemptInvalidTransitionError,
@@ -1278,7 +1279,8 @@ class PaymentAttemptRepository(
         if set(fields).intersection(lifecycle_fields):
             guards.update({field: persisted[field] for field in lifecycle_fields})
 
-        rows_affected = cls.model.objects.filter(**guards).update(
+        rows_affected = cls.model.objects.filter(**guards)._repository_update(
+            _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN,
             **{field: getattr(attempt, field) for field in fields}
         )
         if rows_affected != 1:
@@ -1477,7 +1479,8 @@ class PaymentAttemptRepository(
                 pk=attempt_id,
                 status=PaymentAttemptStatus.PENDING,
             )
-            .update(
+            ._repository_update(
+                _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN,
                 **update_kwargs,
             )
         )

@@ -7,6 +7,7 @@ from typing import Any, ClassVar
 from django.db.models import QuerySet, Sum
 
 from payment.enums import RefundStatus
+from payment.managers import _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN
 from payment.exceptions import (
     PaymentConcurrencyError,
     PaymentGatewayIdentityConflictError,
@@ -948,7 +949,8 @@ class RefundRepository(BaseRepository[Refund]):
         if set(fields).intersection(lifecycle_fields):
             guards.update({field: persisted[field] for field in lifecycle_fields})
 
-        rows_affected = cls.model.objects.filter(**guards).update(
+        rows_affected = cls.model.objects.filter(**guards)._repository_update(
+            _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN,
             **{field: getattr(refund, field) for field in fields}
         )
         if rows_affected != 1:

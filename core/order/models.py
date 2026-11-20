@@ -202,7 +202,10 @@ class OrderQuerySet(models.QuerySet):
             batch_size=batch_size,
         )
 
-
+    def bulk_create(self, objs, *args, **kwargs):
+        raise ValidationError(
+            "Orders must be created through the canonical order service."
+        )
 class OrderManager(models.Manager.from_queryset(OrderQuerySet)):
     pass
 
@@ -417,6 +420,14 @@ class OrderModel(models.Model):
         ]
 
     def save(self, *args, **kwargs):
+
+        if self._state.adding and (
+            kwargs.get("force_update") or kwargs.get("update_fields") is not None
+        ):
+            raise ValidationError(
+                "An Order cannot be updated before its initial persistence."
+            )
+
         if not self._state.adding:
             update_fields = kwargs.get("update_fields")
 

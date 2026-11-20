@@ -7,6 +7,7 @@ from django.utils import timezone
 from order.models import OrderStatusType
 from order.services.inventory import InventoryService
 from order.services.state_machine import OrderStateMachine
+from payment.managers import _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN
 from payment.enums import PaymentAttemptStatus, PaymentStatusType, RefundStatus
 from payment.exceptions import (
     PaymentAttemptIdentityConflictError,
@@ -53,7 +54,8 @@ def test_attempt_cas_rejects_a_racing_lifecycle_write(payment, monkeypatch):
     original_clean = attempt.clean
 
     def concurrent_write_then_validate():
-        PaymentAttemptRepository.model.objects.filter(pk=attempt.pk).update(
+        PaymentAttemptRepository.model.objects.filter(pk=attempt.pk)._repository_update(
+            _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN,
             status=PaymentAttemptStatus.TIMEOUT,
             finished_at=timezone.now(),
             failure_reason="concurrent result",
@@ -101,7 +103,8 @@ def test_refund_cas_rejects_a_racing_lifecycle_write(monkeypatch):
     original_clean = refund.clean
 
     def concurrent_write_then_validate():
-        RefundRepository.model.objects.filter(pk=refund.pk).update(
+        RefundRepository.model.objects.filter(pk=refund.pk)._repository_update(
+            _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN,
             status=RefundStatus.SUCCESS,
             finished_at=timezone.now(),
             failure_reason="",
@@ -174,3 +177,117 @@ def test_pending_order_can_be_cancelled_through_model_method():
     cancelled.refresh_from_db()
     assert cancelled.status == OrderStatusType.cancelled
     assert cancelled.cancelled_date is not None
+
+
+def test_payment_core_queryset_writes_require_repository(payment):
+    with pytest.raises(ValidationError):
+        PaymentRepository.model.objects.filter(pk=payment.pk).update(
+            status=PaymentStatusType.FAILED,
+        )
+
+    payment_copy = PaymentRepository.get(payment.pk)
+    payment_copy.status = PaymentStatusType.FAILED
+    with pytest.raises(ValidationError):
+        payment_copy.save(update_fields=("status",))
+
+
+def test_payment_attempt_queryset_and_instance_writes_require_repository(payment):
+    attempt = PaymentAttemptFactory(payment=payment)
+
+    with pytest.raises(ValidationError):
+        PaymentAttemptRepository.model.objects.filter(pk=attempt.pk).update(
+            status=PaymentAttemptStatus.FAILED,
+        )
+
+    attempt.status = PaymentAttemptStatus.FAILED
+    with pytest.raises(ValidationError):
+        attempt.save(update_fields=("status",))
+
+
+def test_refund_queryset_and_instance_writes_require_repository():
+    payment = PaymentFactory(success=True, consumed=True)
+    refund = RefundFactory(payment=payment)
+
+    with pytest.raises(ValidationError):
+        RefundRepository.model.objects.filter(pk=refund.pk).update(
+            status=RefundStatus.FAILED,
+        )
+
+    refund.status = RefundStatus.FAILED
+    with pytest.raises(ValidationError):
+        refund.save(update_fields=("status",))
+
+
+def test_payment_core_bulk_writes_are_rejected(payment):
+    payment_copy = PaymentRepository.get(payment.pk)
+    payment_copy.status = PaymentStatusType.FAILED
+
+    with pytest.raises(ValidationError):
+        PaymentRepository.model.objects.bulk_update(
+            [payment_copy],
+            fields=("status",),
+        )
+
+    with pytest.raises(ValidationError):
+        PaymentRepository.model.objects.bulk_create([])
+
+    attempt = PaymentAttemptFactory(payment=payment)
+    with pytest.raises(ValidationError):
+        PaymentAttemptRepository.model.objects.bulk_update(
+            [attempt],
+            fields=("status",),
+        )
+    with pytest.raises(ValidationError):
+        PaymentAttemptRepository.model.objects.bulk_create([])
+
+    refund = RefundFactory(payment=PaymentFactory(success=True, consumed=True))
+    with pytest.raises(ValidationError):
+        RefundRepository.model.objects.bulk_update(
+            [refund],
+            fields=("status",),
+        )
+    with pytest.raises(ValidationError):
+        RefundRepository.model.objects.bulk_create([])
+
+    with pytest.raises(ValidationError):
+        PaymentRepository.model._base_manager.filter(pk=payment.pk).update(
+            status=PaymentStatusType.FAILED,
+        )
+    with pytest.raises(ValidationError):
+        PaymentAttemptRepository.model._base_manager.filter(pk=attempt.pk).update(
+            status=PaymentAttemptStatus.FAILED,
+        )
+    with pytest.raises(ValidationError):
+        RefundRepository.model._base_manager.filter(pk=refund.pk).update(
+            status=RefundStatus.FAILED,
+        )
+
+
+def test_force_update_cannot_reclassify_persisted_financial_records(payment):
+    payment_copy = PaymentRepository.get(payment.pk)
+    payment_copy._state.adding = True
+    with pytest.raises(ValidationError):
+        payment_copy.save(force_update=True)
+
+    attempt = PaymentAttemptFactory(payment=payment)
+    attempt._state.adding = True
+    with pytest.raises(ValidationError):
+        attempt.save(force_update=True)
+
+    refund = RefundFactory(
+        payment=PaymentFactory(success=True, consumed=True),
+    )
+    refund._state.adding = True
+    with pytest.raises(ValidationError):
+        refund.save(force_update=True)
+
+
+def test_attempt_retry_fk_queryset_update_is_rejected_outside_delete_collector(
+    payment,
+):
+    attempt = PaymentAttemptFactory(payment=payment)
+
+    with pytest.raises(ValidationError):
+        PaymentAttemptRepository.model.objects.filter(pk=attempt.pk).update(
+            retry_of=None,
+        )

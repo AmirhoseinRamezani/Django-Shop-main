@@ -20,6 +20,7 @@ from payment.exceptions import (
     PaymentRefundAmountInvalidError,
 )
 from payment.models.payment import PaymentModel
+from payment.managers import RefundManager
 
 
 class Refund(models.Model):
@@ -61,6 +62,8 @@ class Refund(models.Model):
     V2 concerns such as Money, FX, fractional currencies, multi-currency
     and crypto assets are intentionally outside this model.
     """
+
+    objects = RefundManager()
 
     # ================================
     # Aggregate relationship
@@ -233,6 +236,8 @@ class Refund(models.Model):
     # ================================
 
     class Meta:
+        base_manager_name = "objects"
+        default_manager_name = "objects"
         verbose_name = _("Refund")
         verbose_name_plural = _("Refunds")
 
@@ -873,6 +878,18 @@ class Refund(models.Model):
     # ================================
     # Validation
     # ================================
+    def save(self, *args, **kwargs):
+        if self._state.adding and (
+            kwargs.get("force_update") or kwargs.get("update_fields") is not None
+        ):
+            raise ValidationError(
+                "A Refund cannot be updated before its initial persistence."
+            )
+        if not self._state.adding:
+            raise ValidationError(
+                "Persisting an existing Refund must use RefundRepository."
+            )
+        return super().save(*args, **kwargs)
 
     def clean(self) -> None:
         super().clean()

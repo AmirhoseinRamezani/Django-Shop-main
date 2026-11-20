@@ -3,6 +3,7 @@ from decimal import Decimal
 import pytest
 from django.db import IntegrityError, transaction
 
+from payment.managers import _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN
 from payment.enums import PaymentGateway, PaymentStatusType
 from payment.repositories.payment_repository import PaymentRepository
 from tests.factories.order import OrderFactory
@@ -32,7 +33,8 @@ def test_payment_financial_identity_cannot_be_rewritten_by_queryset_update():
     payment = PaymentFactory(order=order)
 
     with pytest.raises(IntegrityError), transaction.atomic():
-        type(payment).objects.filter(pk=payment.pk).update(
+        type(payment).objects.filter(pk=payment.pk)._repository_update(
+            _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN,
             amount=payment.amount + Decimal("1"),
         )
 
@@ -46,10 +48,14 @@ def test_payment_currency_and_order_identity_cannot_be_rewritten():
     payment = PaymentFactory(order=order)
 
     with pytest.raises(IntegrityError), transaction.atomic():
-        type(payment).objects.filter(pk=payment.pk).update(currency="USD")
+        type(payment).objects.filter(pk=payment.pk)._repository_update(
+            _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN,
+            currency="USD",
+        )
 
     with pytest.raises(IntegrityError), transaction.atomic():
-        type(payment).objects.filter(pk=payment.pk).update(
+        type(payment).objects.filter(pk=payment.pk)._repository_update(
+            _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN,
             order_id=other_order.pk,
         )
 

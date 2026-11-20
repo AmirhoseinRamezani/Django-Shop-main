@@ -3,6 +3,13 @@ import factory
 from django.utils import timezone
 
 from payment.models import GatewayLog, PaymentAttempt, PaymentModel, Refund
+
+from payment.repositories.payment_attempt_repository import (
+    PaymentAttemptRepository,
+)
+from payment.repositories.refund_repository import (
+    RefundRepository,
+)
 from payment.enums import (
     Currency,
     PaymentGateway,
@@ -118,18 +125,19 @@ class PaymentAttemptFactory(BaseFactory):
             retry_of = kwargs.get("retry_of")
             attempt_number = kwargs.get("attempt_number", 1)
 
-            # A retry cannot coexist with a pending predecessor because the
-            # database deliberately enforces one pending attempt per Payment.
-            # This is fixture normalization only: production retry workflows
-            # must terminalize the predecessor explicitly before creating the
-            # next attempt.
             if retry_of is not None and attempt_number > 1 and retry_of.is_pending:
                 retry_of.mark_failed(reason="Previous attempt superseded by retry")
-                retry_of.save(update_fields=(
-                    "status",
-                    "failure_reason",
-                    "finished_at",
-                ))
+                PaymentAttemptRepository.save(
+                    retry_of,
+                    update_fields=(
+                        "status",
+                        "failure_reason",
+                        "finished_at",
+                        "response_code",
+                        "gateway_message",
+                        "latency_ms",
+                    ),
+                )
 
             return super()._create(
                 model_class,
@@ -149,11 +157,17 @@ class PaymentAttemptFactory(BaseFactory):
         retry_of = kwargs.get("retry_of")
         if retry_of is not None and retry_of.is_pending:
             retry_of.mark_failed(reason="Previous attempt superseded by retry")
-            retry_of.save(update_fields=(
-                "status",
-                "failure_reason",
-                "finished_at",
-            ))
+            PaymentAttemptRepository.save(
+                retry_of,
+                update_fields=(
+                    "status",
+                    "failure_reason",
+                    "finished_at",
+                    "response_code",
+                    "gateway_message",
+                    "latency_ms",
+                ),
+            )
         
         obj = super()._create(
             model_class,
@@ -203,7 +217,24 @@ class PaymentAttemptFactory(BaseFactory):
             else None
         )
 
-        obj.save()
+        # Persist the terminal state through the canonical repository. Direct
+        # PaymentAttempt.save() is forbidden after the write-boundary patch
+        # (TARGET-J02); the factory must use the repository, exactly like
+        # production code.
+        PaymentAttemptRepository.save(
+            obj,
+            update_fields=(
+                "status",
+                "authority_id",
+                "gateway_reference",
+                "gateway_transaction_id",
+                "response_code",
+                "gateway_message",
+                "failure_reason",
+                "finished_at",
+                "latency_ms",
+            ),
+        )
 
         if explicit_failure_reason is not None:
             obj.failure_reason = explicit_failure_reason
@@ -310,5 +341,21 @@ class RefundFactory(BaseFactory):
                 f"Unsupported RefundFactory terminal status: {requested_status}"
             )
 
-        obj.save()
+        # Persist the terminal state through the canonical repository. Direct
+        # Refund.save() is forbidden after the write-boundary patch
+        # (TARGET-J02); the factory must use the repository, exactly like
+        # production code.
+        RefundRepository.save(
+            obj,
+            update_fields=(
+                "status",
+                "gateway_reference",
+                "gateway_transaction_id",
+                "response_code",
+                "gateway_message",
+                "failure_reason",
+                "finished_at",
+                "latency_ms",
+            ),
+        )
         return obj

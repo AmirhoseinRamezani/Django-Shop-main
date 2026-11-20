@@ -74,6 +74,8 @@ class PaymentModel(models.Model):
     objects = PaymentManager()
 
     class Meta:
+        base_manager_name = "objects"
+        default_manager_name = "objects"
         verbose_name = _("Payment")
         verbose_name_plural = _("Payments")
         ordering = ("-created_date", "-id")
@@ -117,6 +119,12 @@ class PaymentModel(models.Model):
         Initial creation remains supported. Updates to existing Payment
         aggregates must use PaymentRepository, which owns CAS/version changes.
         """
+        if self._state.adding and (
+            kwargs.get("force_update") or kwargs.get("update_fields") is not None
+        ):
+            raise ValidationError(
+                "A Payment cannot be updated before its initial persistence."
+            )
 
         if not self._state.adding:
             raise ValidationError(

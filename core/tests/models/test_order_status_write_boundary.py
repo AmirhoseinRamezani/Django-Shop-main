@@ -81,4 +81,23 @@ def test_canonical_state_machine_transition_still_works(
     )
 
     order.refresh_from_db()
+
     assert order.status == OrderStatusType.cancelled
+
+def test_bulk_create_cannot_bypass_order_creation_boundary(pending_order):
+    with pytest.raises(
+        ValidationError,
+        match="canonical order service",
+    ):
+        OrderModel.objects.bulk_create([pending_order])
+
+
+def test_force_update_cannot_bypass_order_status_boundary(pending_order):
+    pending_order._state.adding = True
+    pending_order.status = OrderStatusType.failed
+
+    with pytest.raises(
+        ValidationError,
+        match="cannot be updated before its initial persistence",
+    ):
+        pending_order.save(force_update=True)

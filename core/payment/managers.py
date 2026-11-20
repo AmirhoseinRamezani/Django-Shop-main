@@ -38,6 +38,9 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
+
+from django.core.exceptions import ValidationError
 from django.db import models
 
 from payment.enums import (
@@ -48,11 +51,66 @@ from payment.enums import (
     RefundStatus,
 )
 
+# Private identity capability for repository-owned writes.
+_PAYMENT_CORE_REPOSITORY_WRITE_TOKEN = object()
+
+# Django's deletion Collector performs a narrow SET_NULL update when a
+# PaymentAttempt referenced by another attempt is deleted. Keep that internal
+# referential-integrity operation available without reopening ordinary writes.
+_PAYMENT_CORE_COLLECTOR_DELETE = ContextVar(
+    "payment_core_collector_delete",
+    default=False,
+)
+
+
+class RepositoryWriteProtectedQuerySet:
+    """Block direct bulk writes to repository-owned financial aggregates."""
+
+    @staticmethod
+    def _reject_direct_write() -> None:
+        raise ValidationError(
+            "Payment Core records must be mutated through their repository."
+        )
+
+    def update(self, **kwargs):
+        if (
+            _PAYMENT_CORE_COLLECTOR_DELETE.get()
+            and kwargs == {"retry_of": None}
+        ):
+            return super().update(**kwargs)
+        self._reject_direct_write()
+
+    def delete(self):
+        authorization = _PAYMENT_CORE_COLLECTOR_DELETE.set(True)
+        try:
+            return super().delete()
+        finally:
+            _PAYMENT_CORE_COLLECTOR_DELETE.reset(authorization)
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        self._reject_direct_write()
+
+    def bulk_create(
+        self,
+        objs,
+        batch_size=None,
+        ignore_conflicts=False,
+        update_conflicts=False,
+        update_fields=None,
+        unique_fields=None,
+    ):
+        self._reject_direct_write()
+
+    def _repository_update(self, authorization, **kwargs):
+        if authorization is not _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN:
+            self._reject_direct_write()
+        return super().update(**kwargs)
+
 # ================================
 # Payment QuerySet
 # ================================
 
-class PaymentQuerySet(models.QuerySet):
+class PaymentQuerySet(RepositoryWriteProtectedQuerySet, models.QuerySet):
     """
     Query composition API for PaymentModel.
     This class contains persistence-level predicates only.
@@ -318,7 +376,7 @@ class PaymentManager(
 # PaymentAttempt QuerySet
 # ================================
 
-class PaymentAttemptQuerySet(models.QuerySet):
+class PaymentAttemptQuerySet(RepositoryWriteProtectedQuerySet, models.QuerySet):
     """
     Persistence/query API for PaymentAttempt.
     PaymentAttempt is a child entity of Payment.
@@ -554,7 +612,7 @@ class PaymentAttemptManager(
 # ================================
 
 
-class RefundQuerySet(models.QuerySet):
+class RefundQuerySet(RepositoryWriteProtectedQuerySet, models.QuerySet):
     """
     Query composition API for Refund.
     Refund business rules belong to RefundPolicy / RefundService.

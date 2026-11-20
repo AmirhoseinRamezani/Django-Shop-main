@@ -12,6 +12,7 @@ from django.utils import timezone
 from events.models.outbox import OutboxEvent
 from order.events.order_event import OrderEventType
 from order.models import OrderStatusType
+from payment.managers import _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN
 from payment.enums import PaymentGateway, PaymentStatusType, RefundStatus
 from payment.exceptions import PaymentInvariantViolation, PaymentRefundAmountInvalidError
 from payment.models import Refund
@@ -392,7 +393,8 @@ def test_c10_concurrent_recovery_workers_finalize_one_refund_once():
         idempotency_key="matrix-c10-concurrent-recovery",
         status=RefundStatus.PENDING,
     )
-    Refund.objects.filter(pk=pending.pk).update(
+    Refund.objects.filter(pk=pending.pk)._repository_update(
+        _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN,
         requested_at=timezone.now() - timedelta(hours=2),
     )
     inquiry = GatewayRefundInquiryResult(

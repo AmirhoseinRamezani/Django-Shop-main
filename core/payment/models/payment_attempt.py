@@ -259,11 +259,28 @@ class PaymentAttempt(models.Model):
 
     objects = PaymentAttemptManager()
 
+    def save(self, *args, **kwargs):
+        if self._state.adding and (
+            kwargs.get("force_update") or kwargs.get("update_fields") is not None
+        ):
+            raise ValidationError(
+                "A PaymentAttempt cannot be updated before its initial persistence."
+            )
+        if not self._state.adding:
+            raise ValidationError(
+                "Persisting an existing PaymentAttempt must use "
+                "PaymentAttemptRepository."
+            )
+        return super().save(*args, **kwargs)
+
+
     # ------------------------------------
     # Meta
     # ------------------------------------
 
     class Meta:
+        base_manager_name = "objects"
+        default_manager_name = "objects"
         verbose_name = _("Payment Attempt")
         verbose_name_plural = _("Payment Attempts")
 

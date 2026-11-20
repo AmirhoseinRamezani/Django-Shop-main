@@ -8,6 +8,7 @@ from django.db.models import F, QuerySet
 from django.utils import timezone
 
 from payment.enums import PaymentStatusType
+from payment.managers import _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN
 from payment.exceptions import PaymentStaleVersionError
 from payment.models import PaymentModel
 from payment.repositories.base import BaseRepository
@@ -684,7 +685,8 @@ class PaymentRepository(
                 pk=payment.pk,
                 version=expected_version,
             )
-            .update(
+            ._repository_update(
+                _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN,
                 **update_kwargs,
             )
         )
@@ -812,7 +814,8 @@ class PaymentRepository(
                 status=PaymentStatusType.SUCCESS,
                 is_consumed=False,
             )
-            .update(
+            ._repository_update(
+                _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN,
                 is_consumed=True,
                 version=F("version") + 1,
                 updated_date=timezone.now(),

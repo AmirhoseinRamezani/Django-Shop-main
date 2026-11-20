@@ -49,16 +49,22 @@ def _make_success_attempt(
     attempts can disable cleanup.
     """
 
+    previous_attempt = None
     if clear_existing:
         payment.attempts.all().delete()
+    else:
+        previous_attempt = payment.attempts.order_by(
+            "attempt_number",
+            "id",
+        ).last()
 
-    attempt_number = PaymentAttemptRepository.next_attempt_number(
-        payment,
-    )
+    attempt_number = PaymentAttemptRepository.next_attempt_number(payment)
 
     return PaymentAttemptFactory(
         payment=payment,
         attempt_number=attempt_number,
+        retry_count=attempt_number,
+        retry_of=previous_attempt,
         status=PaymentAttemptStatus.SUCCESS,
         authority_id=authority_id,
         gateway_reference=gateway_reference,
@@ -945,8 +951,6 @@ class TestMultiplePayments:
             attempt_number=1,
             status=PaymentAttemptStatus.FAILED,
             authority_id="AUTH-FAILED",
-            gateway_reference="REF-FAILED",
-            gateway_transaction_id="TXN-FAILED",
         )
 
         with pytest.raises(
@@ -1300,8 +1304,6 @@ class TestPaymentAttemptIntegrity:
             attempt_number=1,
             status=PaymentAttemptStatus.FAILED,
             authority_id="AUTH-FAILED",
-            gateway_reference="REF-FAILED",
-            gateway_transaction_id="TXN-FAILED",
         )
 
         with pytest.raises(

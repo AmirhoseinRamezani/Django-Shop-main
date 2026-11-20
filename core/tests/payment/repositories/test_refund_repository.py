@@ -3,6 +3,7 @@ from decimal import Decimal
 import pytest
 from django.db import IntegrityError, transaction
 
+from payment.managers import _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN
 from payment.enums import RefundStatus
 from payment.repositories.refund_repository import RefundRepository
 from tests.factories.payment import PaymentFactory, RefundFactory
@@ -108,7 +109,9 @@ class TestRefundRepository:
         )
 
         cutoff = timezone.now() - timedelta(minutes=10)
-        RefundRepository.model.objects.filter(pk=stale.pk).update(
+
+        RefundRepository.model.objects.filter(pk=stale.pk)._repository_update(
+            _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN,
             requested_at=cutoff - timedelta(seconds=1),
         )
 

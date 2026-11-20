@@ -6,6 +6,7 @@ import pytest
 from django.utils import timezone
 from django.core.exceptions import PermissionDenied
 
+from payment.managers import _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN
 from payment.enums import PaymentAttemptStatus, PaymentGateway, PaymentStatusType, RefundStatus
 from order.models import OrderStatusType
 from payment.exceptions import (
@@ -332,7 +333,8 @@ class TestRefundService:
         )
 
         cutoff = timezone.now() - timedelta(minutes=10)
-        Refund.objects.filter(pk=pending.pk).update(
+        Refund.objects.filter(pk=pending.pk)._repository_update(
+            _PAYMENT_CORE_REPOSITORY_WRITE_TOKEN,
             requested_at=cutoff - timedelta(seconds=1),
         )
 
